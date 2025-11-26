@@ -1,14 +1,19 @@
-# Phase 8: Subsystem Separation - 4-Layer Architecture Migration
+# Phase 8: Subsystem Separation - 4-Layer Architecture
 
 ## Overview
 
-**Goal**: Refactor the current 7-layer architecture into a cleaner 4-layer design by extracting three high-level subsystems from the God Object Renderer.
+**Goal**: Refactor the current 7-layer architecture into a cleaner **4-layer design** by extracting two high-level managers (ResourceManager, SceneManager) while keeping rendering components directly owned by Renderer.
 
 **Motivation**: [ARCHITECTURE_ANALYSIS.md](ARCHITECTURE_ANALYSIS.md) revealed that the current Renderer class fails 5 out of 6 quality metrics due to:
 - Low cohesion (8 mixed responsibilities)
 - High coupling (knows Vulkan implementation details)
 - Poor testability (requires GPU for testing)
 - Maintainability Index = 45 (below industry standard of 65)
+
+**Key Design Decision**:
+-  **No RenderingSystem wrapper**: Avoid unnecessary indirection - Renderer directly owns Swapchain/Pipeline/Command/Sync
+-  **2 high-level managers**: ResourceManager (asset loading), SceneManager (scene graph)
+-  **Direct orchestration**: Renderer has clear visibility of rendering flow
 
 **Target Metrics**:
 - Cohesion: 6/10 → 9/10 (+50%)
@@ -30,7 +35,7 @@ Renderer (300 lines, 9 dependencies, 8 responsibilities)
 ├── CommandManager management
 ├── SyncManager management
 ├── Resource loading (textures, meshes)          ← Wrong layer!
-├── Descriptor management                        ← Should be in Pipeline
+├── Descriptor management                        ← Acceptable here
 └── Frame rendering coordination
 ```
 
@@ -45,161 +50,125 @@ Renderer (300 lines, 9 dependencies, 8 responsibilities)
 ### After: 4-Layer Architecture
 
 ```
-Renderer (80 lines, 3 dependencies, 1 responsibility)
-├── RenderingSystem (Rendering coordination)
-│   ├── VulkanSwapchain
-│   ├── VulkanPipeline
-│   ├── CommandManager
-│   └── SyncManager
-├── SceneManager (Scene graph management)
-│   ├── Meshes
-│   ├── Camera
-│   └── Materials
-└── ResourceManager (Asset loading)
-    ├── Textures
-    ├── Buffers
-    └── Caching
+Renderer (80 lines, 7 dependencies, clear responsibilities)
+├── VulkanDevice (Core device context)
+├── VulkanSwapchain (directly owned)          ← No wrapper
+├── VulkanPipeline (directly owned)           ← No wrapper
+├── CommandManager (directly owned)           ← No wrapper
+├── SyncManager (directly owned)              ← No wrapper
+├── ResourceManager (Asset loading)           ← Manager
+│   ├── Texture loading & caching
+│   └── Staging buffer management
+├── SceneManager (Scene graph)                ← Manager
+│   ├── Mesh loading
+│   └── Scene organization
+└── Descriptor & Uniform management           ← Renderer's job
 ```
 
 **Benefits**:
 1. **Cohesion**: Each class has single responsibility (LCOM4 = 1)
-2. **Coupling**: Renderer only knows high-level interfaces
-3. **Testability**: All subsystems mockable via interfaces
-4. **Extensibility**: Add features by creating new classes, not modifying existing
+2. **Coupling**: ResourceManager/SceneManager isolated, but Renderer keeps rendering control
+3. **Testability**: Managers mockable, rendering components testable independently
+4. **Extensibility**: Add features through managers, not by wrapping existing components
+5. **Simplicity**: No unnecessary RenderingSystem indirection
 
 ---
 
-## Step 1: Create RenderingSystem
+## Implementation Steps
+
+### Note on Architecture Decision
+
+Unlike the initial plan, we **do NOT create a RenderingSystem wrapper**. Instead:
+- Renderer directly owns VulkanSwapchain, VulkanPipeline, CommandManager, SyncManager
+- This provides better visibility and control over the rendering flow
+- Avoids unnecessary indirection and complexity
+- Focus is on extracting **ResourceManager** and **SceneManager**
+
+---
+
+## Step 1: Create ResourceManager
 
 ### 1.1 Define Interface
 
-Create `src/rendering/RenderingSystem.hpp`:
+Create `src/resources/ResourceManager.hpp`:
 
 ```cpp
 #pragma once
 
 #include "src/core/VulkanDevice.hpp"
-#include "src/rendering/VulkanSwapchain.hpp"
-#include "src/rendering/VulkanPipeline.hpp"
+#include "src/resources/VulkanImage.hpp"
+#include "src/resources/VulkanBuffer.hpp"
 #include "src/rendering/CommandManager.hpp"
-#include "src/rendering/SyncManager.hpp"
-#include "src/scene/Mesh.hpp"
 
-#include <GLFW/glfw3.h>
 #include <memory>
+#include <string>
+#include <unordered_map>
 
 /**
- * @brief Encapsulates all low-level Vulkan rendering subsystems
+ * @brief Manages loading and caching of GPU resources
  *
  * Responsibilities:
- * - Frame synchronization (acquire/present)
- * - Command buffer recording
- * - Pipeline binding
- * - Swapchain recreation
+ * - Texture loading from disk
+ * - Staging buffer management
+ * - Image format conversion
+ * - Resource caching (avoid duplicate loads)
  *
  * Hides from Renderer:
- * - Semaphore details
- * - Fence management
- * - Queue submission
- * - Image indices
+ * - stb_image details
+ * - Staging buffer creation
+ * - Layout transitions
  */
-class RenderingSystem {
+class ResourceManager {
 public:
-    RenderingSystem(
-        VulkanDevice& device,
-        GLFWwindow* window,
-        const std::string& shaderPath);
-
-    ~RenderingSystem() = default;
+    ResourceManager(VulkanDevice& device, CommandManager& commandManager);
+    ~ResourceManager() = default;
 
     // Disable copy and move
-    RenderingSystem(const RenderingSystem&) = delete;
-    RenderingSystem& operator=(const RenderingSystem&) = delete;
-    RenderingSystem(RenderingSystem&&) = delete;
-    RenderingSystem& operator=(RenderingSystem&&) = delete;
+    ResourceManager(const ResourceManager&) = delete;
+    ResourceManager& operator=(const ResourceManager&) = delete;
+    ResourceManager(ResourceManager&&) = delete;
+    ResourceManager& operator=(ResourceManager&&) = delete;
 
     /**
-     * @brief Acquire next frame and wait for fence
-     * @return true if frame acquired successfully, false if swapchain needs recreation
+     * @brief Load texture from file (with caching)
+     * @param path Path to image file
+     * @return Pointer to loaded texture (owned by ResourceManager)
      */
-    bool beginFrame();
+    VulkanImage* loadTexture(const std::string& path);
 
     /**
-     * @brief Record rendering commands for current frame
-     * @param renderCallback User-provided rendering function
+     * @brief Get texture by path (if already loaded)
+     * @return Pointer to texture or nullptr if not loaded
      */
-    void recordCommands(std::function<void(const vk::raii::CommandBuffer&)> renderCallback);
+    VulkanImage* getTexture(const std::string& path);
 
     /**
-     * @brief Submit commands and present frame
-     * @return true if presented successfully, false if swapchain needs recreation
+     * @brief Clear all cached resources
      */
-    bool endFrame();
-
-    /**
-     * @brief Wait for device to finish all operations
-     */
-    void waitIdle();
-
-    /**
-     * @brief Recreate swapchain (for window resize)
-     */
-    void recreateSwapchain();
-
-    /**
-     * @brief Get current swapchain extent
-     */
-    vk::Extent2D getExtent() const { return swapchain->getExtent(); }
-
-    /**
-     * @brief Get swapchain image count
-     */
-    uint32_t getImageCount() const { return swapchain->getImageCount(); }
-
-    /**
-     * @brief Get current frame index (for uniform buffer updates)
-     */
-    uint32_t getCurrentFrame() const { return currentFrame; }
-
-    // Accessors for pipeline/swapchain (needed for descriptor creation)
-    VulkanPipeline& getPipeline() { return *pipeline; }
-    VulkanSwapchain& getSwapchain() { return *swapchain; }
+    void clearCache();
 
 private:
     VulkanDevice& device;
-    GLFWwindow* window;
-    std::string shaderPath;
+    CommandManager& commandManager;
 
-    // Rendering subsystems (encapsulated)
-    std::unique_ptr<VulkanSwapchain> swapchain;
-    std::unique_ptr<VulkanPipeline> pipeline;
-    std::unique_ptr<CommandManager> commandManager;
-    std::unique_ptr<SyncManager> syncManager;
+    // Resource cache
+    std::unordered_map<std::string, std::unique_ptr<VulkanImage>> textureCache;
 
-    // Frame state (hidden from Renderer)
-    uint32_t currentFrame = 0;
-    uint32_t currentImageIndex = 0;
-    static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
-
-    // Helper for depth format
-    vk::Format findDepthFormat();
+    // Helper for uploading texture data
+    std::unique_ptr<VulkanImage> uploadTexture(
+        unsigned char* pixels,
+        int width,
+        int height,
+        int channels);
 };
 ```
 
 **Key Design Decisions**:
 
-1. **Encapsulation**: Renderer no longer knows about:
-   - `currentFrame` / `currentImageIndex` (internal state)
-   - Semaphores / Fences (synchronization primitives)
-   - Queue submission details
-
-2. **Callback Pattern**: `recordCommands()` takes a lambda
-   - Renderer provides "what to render"
-   - RenderingSystem handles "how to render"
-
-3. **Return Values**: `beginFrame()` and `endFrame()` return bool
-   - `false` = swapchain needs recreation
-   - Renderer doesn't need to know about VkResult codes
+1. **Caching**: Avoid reloading same textures multiple times
+2. **Encapsulation**: All file I/O and staging buffer logic hidden
+3. **Ownership**: ResourceManager owns all loaded textures
+4. **Simplicity**: No complex RenderingSystem wrapper needed
 
 ---
 

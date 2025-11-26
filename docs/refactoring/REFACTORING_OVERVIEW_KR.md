@@ -119,7 +119,7 @@
 
 ---
 
-### [Phase 8: 서브시스템 분리](PHASE8_SUBSYSTEM_SEPARATION.md) ⭐ 신규
+### [Phase 8: 서브시스템 분리](PHASE8_SUBSYSTEM_SEPARATION.md) ⭐ 4-Layer 설계
 **목표**: God Object Renderer를 4-layer 아키텍처로 변환
 
 **문제**: [아키텍처 분석](ARCHITECTURE_ANALYSIS.md)에서 Renderer가 6개 품질 메트릭 중 5개 실패:
@@ -128,18 +128,22 @@
 - 테스트성: 3/10 (테스트에 GPU 필요)
 - 유지보수성 지수: 45 (업계 표준 65 미만)
 
+**핵심 설계 결정**:
+- ❌ **RenderingSystem 없음**: 불필요한 간접 참조 회피
+- ✅ **2대 매니저**: ResourceManager, SceneManager만 독립
+- ✅ **직접 조율**: Renderer가 Swapchain/Pipeline/Command/Sync 직접 소유
+
 **생성된 파일**:
-- `src/rendering/RenderingSystem.hpp/.cpp` - 프레임 렌더링 서브시스템
-- `src/resources/ResourceManager.hpp/.cpp` - 에셋 로딩 서브시스템
-- `src/scene/SceneManager.hpp/.cpp` - 씬 그래프 서브시스템
+- `src/resources/ResourceManager.hpp/.cpp` - 에셋 로딩 & 캐싱 (신규)
+- `src/scene/SceneManager.hpp/.cpp` - 씬 그래프 관리 (신규)
 
 **리팩토링**:
-- `src/rendering/Renderer.hpp/.cpp` - 이제 3개 서브시스템만 조정
+- `src/rendering/Renderer.hpp/.cpp` - 2개 매니저 + 4개 컴포넌트 직접 소유
 
 **영향**:
-- Renderer.cpp: 300줄 → 80줄 (**-73% 감소**)
-- 의존성: 9개 → 3개 (**-67% 감소**)
-- 책임: 8개 → 1개 (조정만)
+- Renderer.cpp: 300줄 → ~80줄 (**-73% 감소**)
+- 의존성: 9개 → 7개 (**명확한 책임 분리**)
+- 책임: 8개 → 3개 (조정, 디스크립터, 렌더링)
 - 응집도 (LCOM4): 4 → 1 (**+75% 개선**)
 - 테스트성: 3/10 → 9/10 (**+200% 개선**)
 - 유지보수성 지수: 45 → 78 (**+73% 개선**)
@@ -216,7 +220,7 @@ main.cpp (1400+ 줄)
 └─────────────────────────────────────┘
 ```
 
-### Phase 8 이후 - 프로덕션 수준 4-Layer 아키텍처 ⭐
+### Phase 8 이후 - 프로덕션 4-Layer 아키텍처 ⭐
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    Application Layer                    │
@@ -230,41 +234,44 @@ main.cpp (1400+ 줄)
 ┌────────────────────▼────────────────────────────────────┐
 │                    Renderer Layer                       │
 │  ┌──────────────────────────────────────────────────┐   │
-│  │            Renderer (80 lines)                   │   │
-│  │  - 3개 서브시스템 조정                               │   │
-│  │  - 디스크립터 관리                                   │   │
-│  │  - 유니폼 버퍼                                      │   │
+│  │            Renderer (Coordinator, ~80 lines)     │   │
+│  │  - Swapchain, Pipeline, CommandMgr, SyncMgr     │   │  ← 직접 소유
+│  │  - ResourceManager, SceneManager 조정             │   │
+│  │  - 디스크립터 & 유니폼 버퍼 관리                      │   │
 │  └──────────────────────────────────────────────────┘   │
-└───┬─────────────────┬─────────────────┬────────────────┘
-    │                 │                 │
-┌───▼────────────┐ ┌──▼────────────┐ ┌─▼──────────────┐
-│ Rendering      │ │    Scene      │ │   Resource     │  ← Subsystem Layer
-│   System       │ │   Manager     │ │   Manager      │
-│                │ │               │ │                │
-│ - Swapchain    │ │ - Meshes      │ │ - Textures     │
-│ - Pipeline     │ │ - Camera      │ │ - Buffers      │
-│ - Commands     │ │ - Materials   │ │ - Caching      │
-│ - Sync         │ │               │ │ - Loading      │
-└───┬────────────┘ └──┬────────────┘ └─┬──────────────┘
-    │                 │                 │
-    └─────────────────┴─────────────────┘
-                      │
-┌─────────────────────▼─────────────────────────────────┐
+└───┬─────────────────┬─────────────────────────────────┘
+    │                 │
+┌───▼────────────┐ ┌──▼────────────┐  ← Manager Layer
+│   Resource     │ │    Scene      │
+│   Manager      │ │   Manager     │
+│                │ │               │
+│ - Textures     │ │ - Meshes      │
+│ - Caching      │ │ - Camera      │
+│ - Staging      │ │ - Materials   │
+│ - Loading      │ │               │
+└───┬────────────┘ └──┬────────────┘
+    │                 │
+    └─────────────────┘
+                │
+┌───────────────▼───────────────────────────────────────┐
 │                   Core Layer                          │  ← Core Layer
 │  - VulkanDevice (디바이스 컨텍스트)                       │
 │  - VulkanBuffer (RAII 래퍼)                           │
 │  - VulkanImage (RAII 래퍼)                            │
+│  - VulkanSwapchain, VulkanPipeline (Rendering 컴포넌트) │
+│  - CommandManager, SyncManager (Rendering 유틸리티)     │
 │  - PlatformConfig (크로스 플랫폼)                        │
 └───────────────────────────────────────────────────────┘
 ```
 
-**Phase 8의 주요 개선사항**:
-1. ✅ **Renderer** 단순화: 300 → 80줄, 서브시스템 조정만 담당
-2. ✅ **RenderingSystem** 캡슐화: Swapchain, Pipeline, Commands, Sync
-3. ✅ **ResourceManager** 처리: 에셋 로딩, 캐싱, staging 버퍼
-4. ✅ **SceneManager** 관리: 메시, 씬 그래프, 향후 카메라/라이트
-5. ✅ **테스트성**: 각 서브시스템을 인터페이스를 통해 모킹 가능
-6. ✅ **확장성**: 기존 코드 수정 없이 기능 추가
+**Phase 8의 핵심 설계 결정 (4-Layer 설계)**:
+1. ✅ **Renderer 단순화**: 300 → ~80줄, 명확한 조율 책임
+2. ✅ **RenderingSystem 제거**: 불필요한 간접 참조 제거, Renderer가 직접 컴포넌트 소유
+3. ✅ **ResourceManager**: 에셋 로딩, 캐싱, staging 버퍼 (독립 매니저)
+4. ✅ **SceneManager**: 메시, 씬 그래프, 향후 카메라/라이트 (독립 매니저)
+5. ✅ **테스트성**: 매니저들만 인터페이스로 Mock, Rendering 컴포넌트는 직접 테스트
+6. ✅ **확장성**: 매니저를 통한 기능 추가, 렌더링 흐름은 명확하게 유지
+7. ✅ **실용성**: 이론적 완벽함보다 실제 구현의 단순함 우선
 
 ### 프로젝트 구조
 ```
