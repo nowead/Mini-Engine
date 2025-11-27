@@ -323,16 +323,16 @@ src/utils/FileUtils.hpp
 ```bash
 cmake --build build
 ```
-✅ Build successful with no warnings
+Build successful with no warnings
 
 ### Runtime
 ```bash
 ./build/vulkanGLFW
 ```
-✅ Application runs correctly with extracted utilities
-✅ Shader loading works with FileUtils::readFile
-✅ Vertex format correctly interpreted
-✅ No performance regression
+Application runs correctly with extracted utilities
+Shader loading works with FileUtils::readFile
+Vertex format correctly interpreted
+No performance regression
 
 ---
 

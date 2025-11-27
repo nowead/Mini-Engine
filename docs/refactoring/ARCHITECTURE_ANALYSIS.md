@@ -57,7 +57,7 @@ public:
 
 ## Architecture Quality Metrics Analysis
 
-### 1. Cohesion (응집도) - FAILED ❌
+### 1. Cohesion (응집도) - FAILED ***
 
 **Definition**: How closely related and focused are the responsibilities within a class?
 
@@ -65,15 +65,15 @@ public:
 
 | Responsibility | Evidence | SRP Violation? |
 |----------------|----------|----------------|
-| **Vulkan device lifecycle** | `device = std::make_unique<VulkanDevice>(...)` | ✅ Acceptable |
-| **Swapchain management** | `swapchain->recreate()`, `handleFramebufferResize()` | ✅ Acceptable |
-| **Pipeline management** | `pipeline = std::make_unique<VulkanPipeline>(...)` | ✅ Acceptable |
-| **Command recording** | `recordCommandBuffer(imageIndex)` | ✅ Acceptable |
-| **Synchronization** | `syncManager->waitForFence(...)` | ✅ Acceptable |
-| **Resource loading** | `loadModel()`, `loadTexture()` | ❌ **Resource management** |
-| **Texture upload** | 30-line `loadTexture()` with staging buffer | ❌ **Resource management** |
-| **Descriptor management** | `createDescriptorPool()`, `updateDescriptorSets()` | ⚠️ Borderline |
-| **Rendering coordination** | `drawFrame()` 60-line orchestration | ✅ Acceptable |
+| **Vulkan device lifecycle** | `device = std::make_unique<VulkanDevice>(...)` | *** Acceptable |
+| **Swapchain management** | `swapchain->recreate()`, `handleFramebufferResize()` | *** Acceptable |
+| **Pipeline management** | `pipeline = std::make_unique<VulkanPipeline>(...)` | *** Acceptable |
+| **Command recording** | `recordCommandBuffer(imageIndex)` | *** Acceptable |
+| **Synchronization** | `syncManager->waitForFence(...)` | *** Acceptable |
+| **Resource loading** | `loadModel()`, `loadTexture()` | *** **Resource management** |
+| **Texture upload** | 30-line `loadTexture()` with staging buffer | *** **Resource management** |
+| **Descriptor management** | `createDescriptorPool()`, `updateDescriptorSets()` | ** Borderline |
+| **Rendering coordination** | `drawFrame()` 60-line orchestration | *** Acceptable |
 
 **Analysis**:
 - Renderer handles **8 different responsibilities**
@@ -102,7 +102,7 @@ Each group accesses DIFFERENT member variables
 
 ---
 
-### 2. Coupling (결합도) - FAILED ❌
+### 2. Coupling (결합도) - FAILED ***
 
 **Definition**: How dependent is a class on implementation details of other classes?
 
@@ -162,7 +162,7 @@ void Renderer::drawFrame() {
 
 ---
 
-### 3. Extensibility (확장성) - FAILED ❌
+### 3. Extensibility (확장성) - FAILED ***
 
 **Test**: How many files need modification to add a new feature?
 
@@ -225,7 +225,7 @@ auto cubemap = resourceManager->loadCubemap(path);
 
 ---
 
-### 4. Testability (테스트 가능성) - FAILED ❌
+### 4. Testability (테스트 가능성) - FAILED ***
 
 **Test**: Can we unit test rendering logic without a GPU?
 
@@ -249,11 +249,11 @@ TEST(RendererTest, DrawFrame) {
 ```
 
 **Issues**:
-1. ❌ Concrete dependencies (cannot inject mocks)
-2. ❌ Requires GPU hardware
-3. ❌ Requires GLFW window system
-4. ❌ No interfaces to mock
-5. ❌ Integration test only, not unit test
+1. *** Concrete dependencies (cannot inject mocks)
+2. *** Requires GPU hardware
+3. *** Requires GLFW window system
+4. *** No interfaces to mock
+5. *** Integration test only, not unit test
 
 **Testability Score**: **3/10** (Integration tests only)
 
@@ -292,7 +292,7 @@ TEST(RendererTest, DrawFrame) {
 
     renderer.drawFrame();
 
-    EXPECT_EQ(mockPtr->renderCallCount, 1);  // ✅ Verifiable!
+    EXPECT_EQ(mockPtr->renderCallCount, 1);  // *** Verifiable!
 }
 ```
 
@@ -300,7 +300,7 @@ TEST(RendererTest, DrawFrame) {
 
 ---
 
-### 5. Complexity (복잡도) - BORDERLINE ⚠️
+### 5. Complexity (복잡도) - BORDERLINE **
 
 #### Cyclomatic Complexity
 
@@ -410,11 +410,11 @@ MI ≈ 45
 ```
 
 **Interpretation**:
-- MI > 85: Highly maintainable ✅
-- MI 65-85: Moderately maintainable ⚠️
-- MI < 65: Difficult to maintain ❌
+- MI > 85: Highly maintainable ***
+- MI 65-85: Moderately maintainable **
+- MI < 65: Difficult to maintain ***
 
-**Current MI = 45** → **Difficult to maintain** ❌
+**Current MI = 45** → **Difficult to maintain** ***
 
 **Maintainability Score**: **4/10** (Below industry standard)
 
@@ -424,13 +424,13 @@ MI ≈ 45
 
 | Metric | Current (7-Layer) | Target (4-Layer) | Status |
 |--------|-------------------|------------------|--------|
-| **1. Cohesion** | 6/10 | 9/10 | ❌ Failed |
-| **2. Coupling** | 4/10 | 8/10 | ❌ Failed |
-| **3. Extensibility** | 4.5/10 | 9/10 | ❌ Failed |
-| **4. Testability** | 3/10 | 9/10 | ❌ Failed |
-| **5. Complexity** | 6/10 | 7/10 | ⚠️ Borderline |
-| **6. Maintainability** | 4/10 | 8/10 | ❌ Failed |
-| **TOTAL** | **27.5/60** | **50/60** | ❌ **45.8% FAILED** |
+| **1. Cohesion** | 6/10 | 9/10 | *** Failed |
+| **2. Coupling** | 4/10 | 8/10 | *** Failed |
+| **3. Extensibility** | 4.5/10 | 9/10 | *** Failed |
+| **4. Testability** | 3/10 | 9/10 | *** Failed |
+| **5. Complexity** | 6/10 | 7/10 | ** Borderline |
+| **6. Maintainability** | 4/10 | 8/10 | *** Failed |
+| **TOTAL** | **27.5/60** | **50/60** | *** **45.8% FAILED** |
 
 **Conclusion**: The current 7-layer architecture **fails 5 out of 6 quality metrics**.
 
@@ -448,10 +448,10 @@ MI ≈ 45
 Current reality:
 ┌─────────────────────────────────────────┐
 │             Renderer                    │
-│  - Rendering subsystem management  ✅   │
-│  - Resource loading               ❌   │  ← Wrong layer!
-│  - Descriptor management          ⚠️   │  ← Should be in Pipeline
-│  - Vulkan API calls               ❌   │  ← Too low-level
+│  - Rendering subsystem management  ***   │
+│  - Resource loading               ***   │  ← Wrong layer!
+│  - Descriptor management          **   │  ← Should be in Pipeline
+│  - Vulkan API calls               ***   │  ← Too low-level
 └─────────────────────────────────────────┘
 ```
 
@@ -476,13 +476,13 @@ class Renderer {
 ```
 
 **Classic God Object symptoms**:
-- ✅ Too many dependencies (9)
-- ✅ Too many methods (13)
-- ✅ Too many responsibilities (8)
-- ✅ Difficult to test (requires GPU)
-- ✅ High coupling (accesses internals of 5+ classes)
+**- Too many dependencies (9)
+**- Too many methods (13)
+**- Too many responsibilities (8)
+**- Difficult to test (requires GPU)
+**- High coupling (accesses internals of 5+ classes)
 
-**Diagnosis**: **Renderer is a God Object** ❌
+**Diagnosis**: **Renderer is a God Object** ***
 
 ---
 
@@ -615,11 +615,11 @@ public:
 ```
 
 **Benefits**:
-- ✅ 3 dependencies (vs 9)
-- ✅ Single responsibility: Coordination
-- ✅ No low-level Vulkan API calls
-- ✅ Easily testable with mocks
-- ✅ Each method < 5 lines
+**- 3 dependencies (vs 9)
+**- Single responsibility: Coordination
+**- No low-level Vulkan API calls
+**- Easily testable with mocks
+**- Each method < 5 lines
 
 ---
 
@@ -656,10 +656,10 @@ public:
 ```
 
 **Benefits**:
-- ✅ Encapsulates all rendering details
-- ✅ Renderer doesn't know about Semaphores, Queues, etc.
-- ✅ Single responsibility: Frame rendering
-- ✅ Easy to add multi-pass (shadow, post-processing)
+**- Encapsulates all rendering details
+**- Renderer doesn't know about Semaphores, Queues, etc.
+**- Single responsibility: Frame rendering
+**- Easy to add multi-pass (shadow, post-processing)
 
 ---
 
@@ -700,10 +700,10 @@ private:
 ```
 
 **Benefits**:
-- ✅ Resource caching (don't reload same texture)
-- ✅ All loading logic in one place
-- ✅ Renderer doesn't know about staging buffers
-- ✅ Easy to add async loading
+**- Resource caching (don't reload same texture)
+**- All loading logic in one place
+**- Renderer doesn't know about staging buffers
+**- Easy to add async loading
 
 ---
 
@@ -736,19 +736,19 @@ public:
 
 | Metric | Current | After 4-Layer | Improvement |
 |--------|---------|---------------|-------------|
-| **Cohesion** | 6/10 | 9/10 | +50% ✅ |
-| **Coupling** | 4/10 | 8/10 | +100% ✅ |
-| **Extensibility** | 4.5/10 | 9/10 | +100% ✅ |
-| **Testability** | 3/10 | 9/10 | +200% ✅ |
-| **Complexity** | 6/10 | 7/10 | +16% ✅ |
-| **Maintainability** | 4/10 | 8/10 | +100% ✅ |
-| **TOTAL** | 27.5/60 | 50/60 | **+82%** ✅ |
+| **Cohesion** | 6/10 | 9/10 | +50% *** |
+| **Coupling** | 4/10 | 8/10 | +100% *** |
+| **Extensibility** | 4.5/10 | 9/10 | +100% *** |
+| **Testability** | 3/10 | 9/10 | +200% *** |
+| **Complexity** | 6/10 | 7/10 | +16% *** |
+| **Maintainability** | 4/10 | 8/10 | +100% *** |
+| **TOTAL** | 27.5/60 | 50/60 | **+82%** *** |
 
 ### Code Changes
 
 | Component | Current LOC | After 4-Layer | Change |
 |-----------|-------------|---------------|--------|
-| Renderer.cpp | 300 | 80 | **-73%** ✅ |
+| Renderer.cpp | 300 | 80 | **-73%** *** |
 | RenderingSystem.cpp | 0 | 150 | +150 (new) |
 | ResourceManager.cpp | 0 | 120 | +120 (new) |
 | SceneManager.cpp | 0 | 80 | +80 (new) |
@@ -762,19 +762,19 @@ public:
 
 The current 7-layer architecture **appears clean** (18-line main.cpp) but **fails fundamental quality metrics**:
 
-- ❌ Low cohesion (mixed responsibilities)
-- ❌ High coupling (knows too many details)
-- ❌ Poor extensibility (modify core for new features)
-- ❌ Difficult to test (requires GPU)
-- ❌ Low maintainability (MI = 45)
+**- Low cohesion (mixed responsibilities)
+**- High coupling (knows too many details)
+**- Poor extensibility (modify core for new features)
+**- Difficult to test (requires GPU)
+**- Low maintainability (MI = 45)
 
 **The "7 layers" are an illusion** - Renderer still acts as a God Object.
 
 **The 4-layer architecture** addresses these issues by:
-- ✅ True separation of concerns (Rendering, Scene, Resources)
-- ✅ Interface-based design (testable with mocks)
-- ✅ Each class has single responsibility
-- ✅ Low coupling through abstraction
+**- True separation of concerns (Rendering, Scene, Resources)
+**- Interface-based design (testable with mocks)
+**- Each class has single responsibility
+**- Low coupling through abstraction
 
 **Next step**: [PHASE8_SUBSYSTEM_SEPARATION.md](PHASE8_SUBSYSTEM_SEPARATION.md) - Implement the 4-layer migration.
 

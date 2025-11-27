@@ -369,19 +369,19 @@ src/loaders/OBJLoader.hpp
 ```bash
 cmake --build build
 ```
-✅ Build successful with no warnings
-✅ OBJLoader compiled separately
-✅ Mesh class integrated correctly
+Build successful with no warnings
+OBJLoader compiled separately
+Mesh class integrated correctly
 
 ### Runtime
 ```bash
 ./build/vulkanGLFW
 ```
-✅ Application runs without errors
-✅ OBJ file loads correctly
-✅ Mesh renders properly
-✅ Vertex deduplication working
-✅ No validation errors
+Application runs without errors
+OBJ file loads correctly
+Mesh renders properly
+Vertex deduplication working
+No validation errors
 
 ---
 

@@ -622,19 +622,19 @@ src/resources/VulkanImage.hpp
 ```bash
 cmake --build build
 ```
-✅ Build successful with no warnings
+Build successful with no warnings
 
 ### Runtime
 ```bash
 ./build/vulkanGLFW
 ```
-✅ Application runs correctly
-✅ Vertex and index buffers work
-✅ Uniform buffers update correctly
-✅ Depth buffer renders properly
-✅ Texture loading and sampling work
-✅ No memory leaks detected
-✅ No validation errors
+Application runs correctly
+Vertex and index buffers work
+Uniform buffers update correctly
+Depth buffer renders properly
+Texture loading and sampling work
+No memory leaks detected
+No validation errors
 
 ---
 

@@ -400,18 +400,18 @@ src/core/VulkanDevice.hpp
 ```bash
 cmake --build build
 ```
-✅ Build successful with no warnings
-✅ All references correctly updated
+Build successful with no warnings
+All references correctly updated
 
 ### Runtime
 ```bash
 ./build/vulkanGLFW
 ```
-✅ Application runs correctly with VulkanDevice
-✅ Instance and device created successfully
-✅ Validation layers working
-✅ Queue selection correct for graphics and present
-✅ No initialization order bugs
+Application runs correctly with VulkanDevice
+Instance and device created successfully
+Validation layers working
+Queue selection correct for graphics and present
+No initialization order bugs
 
 ---
 
