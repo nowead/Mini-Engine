@@ -354,7 +354,65 @@ Error compiling shader.slang: unknown type 'XXX'
 
 ---
 
+### Slang 경고: 추가 기능 사용 (warning 41012)
+
+**경고:**
+```
+warning 41012: entry point uses additional capabilities
+that are not part of the specified profile 'spirv_1_3'
+```
+
+**원인:**
+`Sampler2D` 같은 암시적 리소스 타입 사용 시 Slang이 자동으로 확장 기능(SPV_KHR_non_semantic_info)을 추가함.
+
+**해결:**
+CMakeLists.txt에서 경고 무시 플래그 추가:
+```cmake
+# slangc 컴파일 명령에 -Wno-41012 추가
+${SLANGC_EXECUTABLE} ${SHADER_SOURCES} ... -Wno-41012 -o slang.spv
+```
+
+**참고:**
+
+- 경고는 정보성이며 기능은 정상 작동함
+- 대안: 명시적 바인딩 사용 (`[[vk::binding(1, 0)]] Sampler2D texture`)하면 경고 해결 가능
+- 단순한 프로젝트에서는 경고 무시가 더 간단함
+
+---
+
 ## 플랫폼별 문제
+
+### Linux: lavapipe 소프트웨어 렌더러 경고
+
+**경고:**
+```
+WARNING: lavapipe is not a conformant vulkan implementation, testing use only.
+```
+
+**원인:**
+GPU 드라이버 미설치로 Vulkan이 소프트웨어 렌더러(lavapipe)를 사용함.
+
+**해결:**
+GPU별 Vulkan 드라이버 설치:
+
+```bash
+# NVIDIA
+sudo apt install nvidia-driver-535  # 또는 최신 버전
+
+# AMD/Intel
+sudo apt install mesa-vulkan-drivers
+
+# 확인
+vulkaninfo --summary  # GPU가 표시되어야 함 (lavapipe 아님)
+```
+
+**참고:**
+
+- lavapipe은 매우 느린 테스트용 렌더러
+- WSL2는 GPU 패스스루 설정 필요
+- 개발/테스트 목적이면 무시 가능
+
+---
 
 ### macOS: Validation Layer를 찾을 수 없음
 

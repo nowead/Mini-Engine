@@ -354,7 +354,66 @@ Error compiling shader.slang: unknown type 'XXX'
 
 ---
 
+### Slang Warning: Additional Capabilities (warning 41012)
+
+**Warning:**
+```
+warning 41012: entry point uses additional capabilities
+that are not part of the specified profile 'spirv_1_3'
+```
+
+**Cause:**
+Implicit resource types like `Sampler2D` cause Slang to auto-add extension capabilities (SPV_KHR_non_semantic_info).
+
+**Solution:**
+Suppress warning in CMakeLists.txt:
+
+```cmake
+# Add -Wno-41012 to slangc compilation command
+${SLANGC_EXECUTABLE} ${SHADER_SOURCES} ... -Wno-41012 -o slang.spv
+```
+
+**Notes:**
+
+- Warning is informational - functionality works correctly
+- Alternative: Use explicit bindings (`[[vk::binding(1, 0)]] Sampler2D texture`) to eliminate warning
+- For simple projects, suppressing the warning is more straightforward
+
+---
+
 ## Platform-Specific Issues
+
+### Linux: lavapipe Software Renderer Warning
+
+**Warning:**
+```
+WARNING: lavapipe is not a conformant vulkan implementation, testing use only.
+```
+
+**Cause:**
+Missing GPU drivers - Vulkan is using software renderer (lavapipe).
+
+**Solution:**
+Install Vulkan drivers for your GPU:
+
+```bash
+# NVIDIA
+sudo apt install nvidia-driver-535  # or latest version
+
+# AMD/Intel
+sudo apt install mesa-vulkan-drivers
+
+# Verify
+vulkaninfo --summary  # Should show GPU (not lavapipe)
+```
+
+**Notes:**
+
+- lavapipe is very slow (testing only)
+- WSL2 requires GPU passthrough configuration
+- Can be ignored for development/testing
+
+---
 
 ### macOS: Validation Layer Not Found
 

@@ -135,7 +135,7 @@ function (add_slang_shader_target TARGET)
       # Linux: LD_LIBRARY_PATH 설정, SPIR-V 1.3 for Vulkan 1.1 compatibility
       add_custom_command (
               OUTPUT  ${SHADERS_DIR}/slang.spv
-              COMMAND ${CMAKE_COMMAND} -E env "LD_LIBRARY_PATH=${SLANG_LIB_PATH}:$ENV{LD_LIBRARY_PATH}" ${SLANGC_EXECUTABLE} ${SHADER_SOURCES} -target spirv -profile spirv_1_3 -emit-spirv-directly -fvk-use-entrypoint-name ${ENTRY_POINTS} -o slang.spv
+              COMMAND ${CMAKE_COMMAND} -E env "LD_LIBRARY_PATH=${SLANG_LIB_PATH}:$ENV{LD_LIBRARY_PATH}" ${SLANGC_EXECUTABLE} ${SHADER_SOURCES} -target spirv -profile spirv_1_3 -emit-spirv-directly -fvk-use-entrypoint-name ${ENTRY_POINTS} -Wno-41012 -o slang.spv
               WORKING_DIRECTORY ${SHADERS_DIR}
               DEPENDS ${SHADERS_DIR} ${SHADER_SOURCES}
               COMMENT "Slang 셰이더 컴파일 중..."
@@ -145,7 +145,7 @@ function (add_slang_shader_target TARGET)
       # macOS: DYLD_LIBRARY_PATH 설정
       add_custom_command (
               OUTPUT  ${SHADERS_DIR}/slang.spv
-              COMMAND ${CMAKE_COMMAND} -E env "DYLD_LIBRARY_PATH=${SLANG_LIB_PATH}:$ENV{DYLD_LIBRARY_PATH}" ${SLANGC_EXECUTABLE} ${SHADER_SOURCES} -target spirv -profile spirv_1_4 -emit-spirv-directly -fvk-use-entrypoint-name ${ENTRY_POINTS} -o slang.spv
+              COMMAND ${CMAKE_COMMAND} -E env "DYLD_LIBRARY_PATH=${SLANG_LIB_PATH}:$ENV{DYLD_LIBRARY_PATH}" ${SLANGC_EXECUTABLE} ${SHADER_SOURCES} -target spirv -profile spirv_1_4 -emit-spirv-directly -fvk-use-entrypoint-name ${ENTRY_POINTS} -Wno-41012 -o slang.spv
               WORKING_DIRECTORY ${SHADERS_DIR}
               DEPENDS ${SHADERS_DIR} ${SHADER_SOURCES}
               COMMENT "Slang 셰이더 컴파일 중..."
@@ -155,7 +155,7 @@ function (add_slang_shader_target TARGET)
       # Windows 또는 기타: 환경 변수 없이 실행
       add_custom_command (
               OUTPUT  ${SHADERS_DIR}/slang.spv
-              COMMAND ${SLANGC_EXECUTABLE} ${SHADER_SOURCES} -target spirv -profile spirv_1_4 -emit-spirv-directly -fvk-use-entrypoint-name ${ENTRY_POINTS} -o slang.spv
+              COMMAND ${SLANGC_EXECUTABLE} ${SHADER_SOURCES} -target spirv -profile spirv_1_4 -emit-spirv-directly -fvk-use-entrypoint-name ${ENTRY_POINTS} -Wno-41012 -o slang.spv
               WORKING_DIRECTORY ${SHADERS_DIR}
               DEPENDS ${SHADERS_DIR} ${SHADER_SOURCES}
               COMMENT "Slang 셰이더 컴파일 중..."
@@ -166,7 +166,7 @@ function (add_slang_shader_target TARGET)
     # VULKAN_SDK가 설정되지 않은 경우
     add_custom_command (
             OUTPUT  ${SHADERS_DIR}/slang.spv
-            COMMAND ${SLANGC_EXECUTABLE} ${SHADER_SOURCES} -target spirv -profile spirv_1_4 -emit-spirv-directly -fvk-use-entrypoint-name ${ENTRY_POINTS} -o slang.spv
+            COMMAND ${SLANGC_EXECUTABLE} ${SHADER_SOURCES} -target spirv -profile spirv_1_4 -emit-spirv-directly -fvk-use-entrypoint-name ${ENTRY_POINTS} -Wno-41012 -o slang.spv
             WORKING_DIRECTORY ${SHADERS_DIR}
             DEPENDS ${SHADERS_DIR} ${SHADER_SOURCES}
             COMMENT "Slang 셰이더 컴파일 중..."
