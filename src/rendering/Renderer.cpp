@@ -1,8 +1,5 @@
 #include "Renderer.hpp"
 
-#define STB_IMAGE_IMPLEMENTATION
-#include <stb_image.h>
-
 #include <stdexcept>
 
 Renderer::Renderer(GLFWwindow* window,
@@ -11,15 +8,13 @@ Renderer::Renderer(GLFWwindow* window,
     : window(window),
       startTime(std::chrono::high_resolution_clock::now()) {
 
-    // Create Vulkan device
+    // Create core device
     device = std::make_unique<VulkanDevice>(validationLayers, enableValidation);
     device->createSurface(window);
     device->createLogicalDevice();
 
-    // Create swapchain
+    // Create rendering components
     swapchain = std::make_unique<VulkanSwapchain>(*device, window);
-
-    // Create depth resources
     createDepthResources();
 
     // Platform-specific pipeline creation
@@ -38,68 +33,29 @@ Renderer::Renderer(GLFWwindow* window,
         *device, *swapchain, "shaders/slang.spv", findDepthFormat());
 #endif
 
-    // Create command manager
+    // Create command and sync managers
     commandManager = std::make_unique<CommandManager>(
         *device, device->getGraphicsQueueFamily(), MAX_FRAMES_IN_FLIGHT);
-
-    // Create uniform buffers
-    createUniformBuffers();
-
-    // Create descriptor pool and sets
-    createDescriptorPool();
-    createDescriptorSets();
-
-    // Create sync manager
     syncManager = std::make_unique<SyncManager>(
         *device, MAX_FRAMES_IN_FLIGHT, swapchain->getImageCount());
+
+    // Create high-level managers (ORDER MATTERS for RAII)
+    resourceManager = std::make_unique<ResourceManager>(*device, *commandManager);
+    sceneManager = std::make_unique<SceneManager>(*device, *commandManager);
+
+    // Create uniform buffers and descriptors
+    createUniformBuffers();
+    createDescriptorPool();
+    createDescriptorSets();
 }
 
 void Renderer::loadModel(const std::string& modelPath) {
-    mesh = std::make_unique<Mesh>(*device, *commandManager);
-    mesh->loadFromOBJ(modelPath);
+    sceneManager->loadMesh(modelPath);  // Delegates to SceneManager
 }
 
 void Renderer::loadTexture(const std::string& texturePath) {
-    int texWidth, texHeight, texChannels;
-    stbi_uc* pixels = stbi_load(texturePath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
-    vk::DeviceSize imageSize = texWidth * texHeight * 4;
-
-    if (!pixels) {
-        throw std::runtime_error("failed to load texture image: " + texturePath);
-    }
-
-    // Create staging buffer
-    VulkanBuffer stagingBuffer(*device, imageSize,
-        vk::BufferUsageFlagBits::eTransferSrc,
-        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-
-    stagingBuffer.map();
-    stagingBuffer.copyData(pixels, imageSize);
-    stagingBuffer.unmap();
-
-    stbi_image_free(pixels);
-
-    // Create texture image
-    textureImage = std::make_unique<VulkanImage>(*device,
-        texWidth, texHeight,
-        vk::Format::eR8G8B8A8Srgb,
-        vk::ImageTiling::eOptimal,
-        vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
-        vk::MemoryPropertyFlagBits::eDeviceLocal,
-        vk::ImageAspectFlagBits::eColor);
-
-    // Transition and copy
-    auto commandBuffer = commandManager->beginSingleTimeCommands();
-    textureImage->transitionLayout(*commandBuffer, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
-    textureImage->copyFromBuffer(*commandBuffer, stagingBuffer);
-    textureImage->transitionLayout(*commandBuffer, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
-    commandManager->endSingleTimeCommands(*commandBuffer);
-
-    // Create sampler
-    textureImage->createSampler();
-
-    // Update descriptor sets with texture
-    updateDescriptorSets();
+    resourceManager->loadTexture(texturePath);  // Delegates to ResourceManager
+    updateDescriptorSets();  // Update descriptors with new texture
 }
 
 void Renderer::drawFrame() {
@@ -225,6 +181,8 @@ void Renderer::createDescriptorSets() {
 }
 
 void Renderer::updateDescriptorSets() {
+    // Get texture from ResourceManager (may return nullptr if not loaded)
+    VulkanImage* textureImage = resourceManager->getTexture("textures/viking_room.png");
     if (!textureImage) {
         return;  // Texture not loaded yet
     }
@@ -296,13 +254,15 @@ void Renderer::recordCommandBuffer(uint32_t imageIndex) {
     commandManager->getCommandBuffer(currentFrame).setScissor(
         0, vk::Rect2D(vk::Offset2D(0, 0), swapchain->getExtent()));
 
-    if (mesh && mesh->hasData()) {
-        mesh->bind(commandManager->getCommandBuffer(currentFrame));
+    // Draw primary mesh from SceneManager
+    Mesh* primaryMesh = sceneManager->getPrimaryMesh();
+    if (primaryMesh && primaryMesh->hasData()) {
+        primaryMesh->bind(commandManager->getCommandBuffer(currentFrame));
         commandManager->getCommandBuffer(currentFrame).bindDescriptorSets(
             vk::PipelineBindPoint::eGraphics,
             pipeline->getPipelineLayout(),
             0, *descriptorSets[currentFrame], nullptr);
-        mesh->draw(commandManager->getCommandBuffer(currentFrame));
+        primaryMesh->draw(commandManager->getCommandBuffer(currentFrame));
     }
 
     commandManager->getCommandBuffer(currentFrame).endRenderPass();
@@ -380,14 +340,15 @@ void Renderer::recordCommandBuffer(uint32_t imageIndex) {
     commandManager->getCommandBuffer(currentFrame).setScissor(
         0, vk::Rect2D(vk::Offset2D(0, 0), swapchain->getExtent()));
 
-    // Draw mesh
-    if (mesh && mesh->hasData()) {
-        mesh->bind(commandManager->getCommandBuffer(currentFrame));
+    // Draw primary mesh from SceneManager
+    Mesh* primaryMesh = sceneManager->getPrimaryMesh();
+    if (primaryMesh && primaryMesh->hasData()) {
+        primaryMesh->bind(commandManager->getCommandBuffer(currentFrame));
         commandManager->getCommandBuffer(currentFrame).bindDescriptorSets(
             vk::PipelineBindPoint::eGraphics,
             pipeline->getPipelineLayout(),
             0, *descriptorSets[currentFrame], nullptr);
-        mesh->draw(commandManager->getCommandBuffer(currentFrame));
+        primaryMesh->draw(commandManager->getCommandBuffer(currentFrame));
     }
 
     commandManager->getCommandBuffer(currentFrame).endRendering();

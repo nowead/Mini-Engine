@@ -7,7 +7,8 @@
 #include "src/rendering/SyncManager.hpp"
 #include "src/resources/VulkanImage.hpp"
 #include "src/resources/VulkanBuffer.hpp"
-#include "src/scene/Mesh.hpp"
+#include "src/resources/ResourceManager.hpp"
+#include "src/scene/SceneManager.hpp"
 #include "src/utils/VulkanCommon.hpp"
 #include "src/utils/Vertex.hpp"
 
@@ -18,14 +19,19 @@
 #include <chrono>
 
 /**
- * @brief High-level renderer managing all Vulkan subsystems and rendering logic
+ * @brief High-level renderer coordinating subsystems (4-layer architecture)
  *
  * Responsibilities:
- * - Own and manage all Vulkan subsystems (device, swapchain, pipeline, etc.)
- * - Manage rendering resources (textures, meshes, buffers)
- * - Handle frame rendering and presentation
- * - Coordinate swapchain recreation
- * - Manage descriptor sets
+ * - Coordinate rendering components (swapchain, pipeline, command, sync)
+ * - Coordinate ResourceManager and SceneManager
+ * - Descriptor set management (shared across subsystems)
+ * - Uniform buffer management
+ * - Frame rendering orchestration
+ *
+ * Does NOT:
+ * - Know about file I/O (encapsulated in ResourceManager)
+ * - Know about OBJ parsing (encapsulated in SceneManager)
+ * - Handle low-level staging buffers (delegated to ResourceManager)
  */
 class Renderer {
 public:
@@ -78,19 +84,21 @@ private:
     // Window reference
     GLFWwindow* window;
 
-    // Core subsystems
+    // Core device
     std::unique_ptr<VulkanDevice> device;
+
+    // Rendering components (directly owned)
     std::unique_ptr<VulkanSwapchain> swapchain;
     std::unique_ptr<VulkanPipeline> pipeline;
     std::unique_ptr<CommandManager> commandManager;
     std::unique_ptr<SyncManager> syncManager;
 
-    // Resources
-    std::unique_ptr<VulkanImage> depthImage;
-    std::unique_ptr<VulkanImage> textureImage;
-    std::unique_ptr<Mesh> mesh;
+    // High-level managers
+    std::unique_ptr<ResourceManager> resourceManager;
+    std::unique_ptr<SceneManager> sceneManager;
 
-    // Uniform buffers (per frame in flight)
+    // Shared resources managed by Renderer
+    std::unique_ptr<VulkanImage> depthImage;
     std::vector<std::unique_ptr<VulkanBuffer>> uniformBuffers;
 
     // Descriptor management

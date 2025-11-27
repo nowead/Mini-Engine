@@ -34,6 +34,8 @@ add_executable(vulkanGLFW
     src/resources/VulkanBuffer.hpp
     src/resources/VulkanImage.cpp
     src/resources/VulkanImage.hpp
+    src/resources/ResourceManager.cpp
+    src/resources/ResourceManager.hpp
     # Rendering classes
     src/rendering/Renderer.cpp
     src/rendering/Renderer.hpp
@@ -48,6 +50,8 @@ add_executable(vulkanGLFW
     # Scene classes
     src/scene/Mesh.cpp
     src/scene/Mesh.hpp
+    src/scene/SceneManager.cpp
+    src/scene/SceneManager.hpp
     # Loader classes
     src/loaders/OBJLoader.cpp
     src/loaders/OBJLoader.hpp
@@ -90,7 +94,10 @@ target_link_libraries(VulkanCppModule
         Vulkan::Vulkan
 )
 
-set_target_properties(VulkanCppModule PROPERTIES CXX_STANDARD 20)
+set_target_properties(VulkanCppModule PROPERTIES
+    CXX_STANDARD 20
+    CXX_SCAN_FOR_MODULES ON
+)
 
 target_sources(VulkanCppModule
         PUBLIC
