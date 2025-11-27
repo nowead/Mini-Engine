@@ -59,7 +59,7 @@ COLOR_BLUE := \033[0;34m
 COLOR_YELLOW := \033[0;33m
 COLOR_RESET := \033[0m
 
-.PHONY: all configure build run clean rebuild help info
+.PHONY: all configure build run clean re help info
 
 # Default target
 all: build
@@ -111,7 +111,7 @@ clean:
 	@echo "$(COLOR_GREEN)Clean complete!$(COLOR_RESET)"
 
 # Rebuild from scratch
-rebuild: clean build
+re: clean build
 
 # Clean only CMake cache (keep compiled objects)
 clean-cmake:
@@ -139,7 +139,7 @@ help:
 	@echo "  $(COLOR_GREEN)make run$(COLOR_RESET)               - Build and run the application"
 	@echo "  $(COLOR_GREEN)make run-only$(COLOR_RESET)          - Run without building"
 	@echo "  $(COLOR_GREEN)make clean$(COLOR_RESET)             - Remove all build artifacts"
-	@echo "  $(COLOR_GREEN)make rebuild$(COLOR_RESET)           - Clean and rebuild from scratch"
+	@echo "  $(COLOR_GREEN)make re$(COLOR_RESET)           - Clean and rebuild from scratch"
 	@echo "  $(COLOR_GREEN)make clean-cmake$(COLOR_RESET)       - Clean only CMake cache"
 	@echo "  $(COLOR_GREEN)make reconfigure$(COLOR_RESET)       - Reconfigure without full clean"
 	@echo "  $(COLOR_GREEN)make install-deps$(COLOR_RESET)      - Install dependencies via vcpkg"
