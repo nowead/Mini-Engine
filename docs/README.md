@@ -26,7 +26,7 @@ This directory contains detailed technical documentation covering the engine's a
 
 #### Refactoring Journey
 
-The engine was built through a systematic 7-phase refactoring process, transforming a 1400+ line monolithic `main.cpp` into a clean, modular architecture with just 18 lines.
+The engine was built through a systematic 8-phase refactoring process, transforming a monolithic `main.cpp` into a clean, modular 4-layer architecture with an 18-line entry point.
 
 **[Refactoring Overview](refactoring/REFACTORING_OVERVIEW.md)**
 - Overall architecture evolution
@@ -39,19 +39,19 @@ The engine was built through a systematic 7-phase refactoring process, transform
 1. **[Phase 1: Utility Layer](refactoring/PHASE1_UTILITY_LAYER.md)**
    - Extracted common utilities and types
    - Created VulkanCommon.hpp, Vertex.hpp, FileUtils.hpp
-   - ~80 lines removed from main.cpp
+   - Common utilities separated
 
 2. **[Phase 2: Device Management](refactoring/PHASE2_DEVICE_MANAGEMENT.md)**
    - Encapsulated Vulkan device initialization
    - Created VulkanDevice class
    - Instance, physical device, logical device, queue management
-   - ~250 lines removed from main.cpp
+   - Device management encapsulated
 
 3. **[Phase 3: Resource Management](refactoring/PHASE3_RESOURCE_MANAGEMENT.md)**
    - Implemented RAII resource wrappers
    - Created VulkanBuffer class (vertex, index, uniform, staging)
    - Created VulkanImage class (textures, depth, automatic views)
-   - ~400 lines removed from main.cpp
+   - RAII resource wrappers implemented
 
 4. **[Phase 4: Rendering Layer](refactoring/PHASE4_RENDERING_LAYER.md)**
    - Modularized rendering subsystems
@@ -59,25 +59,25 @@ The engine was built through a systematic 7-phase refactoring process, transform
    - Created CommandManager (command pool/buffers)
    - Created VulkanSwapchain (swapchain lifecycle)
    - Created VulkanPipeline (graphics pipeline)
-   - ~210 lines removed from main.cpp
+   - Rendering subsystems modularized
 
 5. **[Phase 5: Scene Layer](refactoring/PHASE5_SCENE_LAYER.md)**
    - Abstracted mesh and geometry handling
    - Created Mesh class (geometry + GPU buffers)
    - Created OBJLoader (file loading with deduplication)
-   - ~96 lines removed from main.cpp
+   - Mesh and geometry handling abstracted
 
 6. **[Phase 6: Renderer Integration](refactoring/PHASE6_RENDERER_INTEGRATION.md)**
    - Unified all subsystems into high-level Renderer
    - Created Renderer class (owns all rendering components)
    - Simple 5-method public interface
-   - ~374 lines removed from main.cpp (80% reduction)
+   - All rendering subsystems unified
 
 7. **[Phase 7: Application Layer](refactoring/PHASE7_APPLICATION_LAYER.md)**
    - Finalized application entry point
    - Created Application class (window + main loop)
    - RAII initialization and cleanup
-   - main.cpp reduced to **18 lines** (99% reduction from original)
+   - main.cpp simplified to pure entry point (18 lines)
 
 ---
 
@@ -169,24 +169,25 @@ Quick navigation to key sections:
 
 | Metric | Before | After | Improvement |
 |--------|--------|-------|-------------|
-| main.cpp lines | ~1400 | 18 | **-99%** |
-| Files | 1 | 28+ | Modular architecture |
-| Classes | 0 | 11 | Reusable components |
-| Helper functions | 20+ | 0 | **-100%** (encapsulated) |
-| RAII coverage | 0% | 100% | Zero leaks |
+| main.cpp | Monolithic | Pure entry point (18 lines) | Layered architecture |
+| Files | 1 | 34+ | Modular architecture |
+| Classes | 0 | 14 | Reusable components |
+| Helper functions | 20+ | 0 | Encapsulated in classes |
+| RAII coverage | None | Complete | Zero leaks |
 
 ### Phase Breakdown
 
-| Phase | Lines Removed | Classes | Key Achievement |
-|-------|---------------|---------|-----------------|
-| 1 | ~80 | 0 (utils) | Foundation |
-| 2 | ~250 | 1 | Device management |
-| 3 | ~400 | 2 | RAII resources |
-| 4 | ~210 | 4 | Rendering modularization |
-| 5 | ~96 | 2 | Scene abstraction |
-| 6 | ~374 | 1 | Renderer integration |
-| 7 | ~75 | 1 | Application finalization |
-| **Total** | **~1485** | **11** | **18-line main()** |
+| Phase | Work Completed | Classes | Key Achievement |
+|-------|----------------|---------|-----------------|
+| 1 | Utility separation | 0 (utils) | Foundation |
+| 2 | Device encapsulation | 1 | Device management |
+| 3 | Resource abstraction | 2 | RAII resources |
+| 4 | Rendering separation | 4 | Rendering modularization |
+| 5 | Scene layer extraction | 2 | Scene abstraction |
+| 6 | Subsystem integration | 1 | Renderer integration |
+| 7 | Entry point finalization | 1 | Application finalization |
+| 8 | Manager separation | 2 | EP01 architecture |
+| **Total** | **Layered structure** | **14** | **4-layer architecture** |
 
 ---
 

@@ -11,7 +11,7 @@
 **프로젝트 목표**: Vulkan Tutorial을 학습하며 만든 렌더러를 **확장 가능한 엔진 아키텍처**로 발전시키기
 
 **핵심 성과**:
-- 7계층 객체지향 아키텍처 (RAII, Dependency Injection, Facade 패턴 적용)
+- 4계층 객체지향 아키텍처 + Foundation (RAII, Dependency Injection, Facade 패턴 적용)
 - 단일 렌더링 기법이 아닌 **다중 렌더링 기법을 지원하는 플랫폼** 설계
 - 체계적인 리팩토링 과정 문서화
 
@@ -65,25 +65,37 @@ Each refactoring phase is documented in [docs/refactoring/](docs/refactoring/)
 
 ### Object-Oriented Layered Design
 
-The engine uses a **7-layer architecture** with strict separation of concerns:
+The engine uses a **pragmatic 4-layer architecture** + Foundation components with strict separation of concerns:
 
 ```
-Application  →  Renderer  →  Rendering  →  Scene  →  Resource  →  Core  →  Utility
+Layer 1: Application (Window management, main loop)
+    ↓
+Layer 2: Rendering Orchestration (Renderer - coordinates all subsystems)
+    ↓
+Layer 3: Rendering Components & Layer 4: Subsystems
+    (VulkanSwapchain, VulkanPipeline,    (ResourceManager, SceneManager)
+     CommandManager, SyncManager)
+    ↓
+Foundation: Core & Resources
+    (VulkanDevice, VulkanBuffer, VulkanImage, Mesh)
+    ↓
+Utilities: Header-only (Vertex, VulkanCommon, PlatformConfig)
 ```
 
 **Design Principles**:
 - **Dependency Rule**: Each layer depends only on layers below (never above)
 - **Single Responsibility**: Each class has one clear purpose
-- **Abstraction**: Platform-specific details hidden behind interfaces
+- **RAII**: All Vulkan resources automatically managed with `vk::raii::*` wrappers
+- **Pragmatic Design**: Avoid over-engineering, only 2 true "managers" (Resource, Scene)
 
 **Key Patterns**:
-- **RAII** (VulkanBuffer, VulkanImage): Automatic resource management, zero memory leaks
+- **RAII** (VulkanBuffer, VulkanImage): Automatic resource management, zero memory leaks guaranteed
 - **Dependency Injection**: Components receive dependencies via constructor
-- **Facade** (Renderer): Simple interface to complex subsystems
+- **Facade** (Renderer): Simple interface to complex subsystems (5 public methods)
 
 **Extensibility**:
-- New rendering techniques (e.g., ray tracing) can be added without modifying core layers
-- Platform abstraction allows easy porting to new systems
+- New rendering techniques (e.g., FDF wireframe, ray tracing) can be added without modifying core layers
+- Platform abstraction (Linux: Vulkan 1.1, macOS/Windows: Vulkan 1.3 with dynamic rendering)
 - Clear interfaces enable unit testing and mocking
 
 See [docs/refactoring/](docs/refactoring/) for the evolution from monolithic code to this architecture.
@@ -124,11 +136,11 @@ For detailed build instructions and troubleshooting, see [docs/BUILD_GUIDE.md](d
 - **[Documentation Hub](docs/README.md)** - Start here for navigation
 - **[Build Guide](docs/BUILD_GUIDE.md)** - Detailed build instructions for all platforms
 - **[Troubleshooting](docs/TROUBLESHOOTING.md)** - Common issues and solutions
-- **[Refactoring Journey](docs/refactoring/)** - 7-phase architecture evolution (Phase 1-7)
+- **[Refactoring Journey](docs/refactoring/)** - 8-phase architecture evolution (Phase 1-8)
 - **[Cross-Platform Support](docs/CROSS_PLATFORM_RENDERING.md)** - Platform compatibility guide
 
 ### Architecture Highlights
-- **7 layers** with strict dependency hierarchy
+- **4 layers** + Foundation components with strict dependency hierarchy
 - **11 reusable components** with clear responsibilities
 - **Design patterns**: RAII, Dependency Injection, Facade
 - **Full documentation**: Design decisions and evolution process recorded

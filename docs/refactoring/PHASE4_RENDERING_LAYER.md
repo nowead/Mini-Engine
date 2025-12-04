@@ -422,7 +422,7 @@ commandManager->endSingleTimeCommands(*commandBuffer);
 
 ### Class Structure
 
-#### Header: `src/rendering/CommandManager.hpp`
+#### Header: `src/core/CommandManager.hpp` (moved to core in Phase 8)
 ```cpp
 class CommandManager {
 public:
@@ -535,14 +535,16 @@ commandManager->endSingleTimeCommands(*commandBuffer);
 
 ### Files Created
 
-#### 1. `src/rendering/CommandManager.hpp` (Created)
+#### 1. `src/core/CommandManager.hpp` (Created, later moved to core/ in Phase 8)
 - Class declaration with command pool and buffer management API
 - Documentation for queue family and frame count parameters
+- **Note**: Originally created in `src/rendering/` but moved to `src/core/` in Phase 8 for better architecture
 
-#### 2. `src/rendering/CommandManager.cpp` (Created)
+#### 2. `src/core/CommandManager.cpp` (Created, later moved to core/ in Phase 8)
 - Constructor with automatic pool and buffer creation
 - Getter implementations for frame-indexed access
 - Single-time command utilities
+- **Note**: Originally created in `src/rendering/` but moved to `src/core/` in Phase 8 for better architecture
 
 ### Files Modified
 
@@ -575,13 +577,13 @@ commandManager->endSingleTimeCommands(*commandBuffer);
 - Line 457: index buffer copy
 
 #### 4. `CMakeLists.txt`
-Added CommandManager to build:
+Added CommandManager to build (later moved to core section in Phase 8):
 ```cmake
 # Rendering classes
 src/rendering/SyncManager.cpp
 src/rendering/SyncManager.hpp
-src/rendering/CommandManager.cpp
-src/rendering/CommandManager.hpp
+src/rendering/CommandManager.cpp  # Moved to core/ in Phase 8
+src/rendering/CommandManager.hpp  # Moved to core/ in Phase 8
 ```
 
 ## Code Metrics

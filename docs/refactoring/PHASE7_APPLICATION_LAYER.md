@@ -303,7 +303,7 @@ int main() {
 }
 ```
 
-**Reduction**: 93 → 18 lines (**81% reduction**)
+**Result**: main.cpp simplified to pure entry point
 
 ---
 
@@ -334,9 +334,9 @@ src/Application.hpp
 ### Lines of Code
 
 #### main.cpp
-- **Before Phase 7**: ~93 lines
-- **After Phase 7**: 18 lines
-- **Reduction**: 75 lines (81% reduction)
+- **Before Phase 7**: Application logic mixed with entry point
+- **After Phase 7**: Pure entry point
+- **Change**: Application logic moved to Application class
 
 #### New Files
 - Application.hpp: ~79 lines
@@ -413,7 +413,7 @@ Phase 7 completes the architectural vision established in the refactoring plan:
 
 ### Comparison: Full Journey
 
-**Original main.cpp** (~1400 lines):
+**Original main.cpp** :
 - Everything in one file
 - No separation of concerns
 - Difficult to understand
@@ -588,11 +588,10 @@ Phase 7 successfully completed the final architectural goal of the refactoring p
    - Proper callback delegation
    - Professional structure
 
-2. **main.cpp Minimalism**: Reduced to **18 lines**
-   - From original ~1400 lines to 18 lines
-   - **99% reduction** from original
-   - Pure entry point - no application logic
-   - Industry-standard simplicity
+2. **main.cpp Simplicity**: Pure entry point
+   - All application logic moved to Application class
+   - Clean separation of concerns
+   - Industry-standard structure
 
 3. **Complete Architecture**: 7-layer stack
    - Entry Point → Application → Renderer → Scene → Rendering → Resource → Core
@@ -618,11 +617,10 @@ Phase 7 successfully completed the final architectural goal of the refactoring p
 **- Phase 7: Application Layer
 
 **Total Impact**:
-- Original: ~1400 lines in main.cpp
-- Final: **18 lines** in main.cpp
-- **Reduction**: 99% (**1382 lines removed**)
+- main.cpp: Simplified to pure entry point
 - **Created**: 11 reusable classes in 28+ files
-- **Architecture**: 7 distinct, well-defined layers
+- **Architecture**: Layered structure with clear separation of concerns
+- **Result**: Extensible, maintainable codebase
 
 ### Final main.cpp
 

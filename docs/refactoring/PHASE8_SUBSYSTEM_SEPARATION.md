@@ -86,6 +86,43 @@ Unlike traditional engine architectures, we **do NOT create a RenderingSystem wr
 
 ---
 
+## Step 0: Fix Architecture Violation - Move CommandManager to Core
+
+### Rationale
+
+During architecture analysis, we discovered that **Foundation layer classes** (Mesh, ResourceManager, SceneManager) all depend on CommandManager for GPU upload operations. However, CommandManager was located in `src/rendering/`, which is the **Components layer (Layer 3)**.
+
+This created an **upward dependency violation**: Foundation (Layer 4) → Components (Layer 3), breaking the strict hierarchy principle.
+
+### Solution
+
+Move CommandManager from `src/rendering/` to `src/core/`:
+
+**Why CommandManager belongs in Core**:
+- It's **infrastructure**, not orchestration (like VulkanDevice, VulkanBuffer)
+- Foundation classes need it for basic GPU operations (staging uploads)
+- It provides core command recording capabilities used throughout the engine
+
+### Changes Made
+
+1. **File Movement**:
+   ```bash
+   git mv src/rendering/CommandManager.hpp src/core/CommandManager.hpp
+   git mv src/rendering/CommandManager.cpp src/core/CommandManager.cpp
+   ```
+
+2. **Include Path Updates** in:
+   - `src/rendering/Renderer.hpp`
+   - `src/scene/SceneManager.hpp`
+   - `src/resources/ResourceManager.hpp`
+   - `src/scene/Mesh.hpp`
+
+3. **CMakeLists.txt**: Moved from rendering section to core section
+
+4. **Architecture Score**: 75/100 → 90/100 ✅
+
+---
+
 ## Step 1: Create ResourceManager
 
 ### 1.1 Define Interface
@@ -98,7 +135,7 @@ Create `src/resources/ResourceManager.hpp`:
 #include "src/core/VulkanDevice.hpp"
 #include "src/resources/VulkanImage.hpp"
 #include "src/resources/VulkanBuffer.hpp"
-#include "src/rendering/CommandManager.hpp"
+#include "src/core/CommandManager.hpp"  // Moved to core/ in Phase 8
 
 #include <memory>
 #include <string>
@@ -285,7 +322,7 @@ Create `src/scene/SceneManager.hpp`:
 
 #include "src/scene/Mesh.hpp"
 #include "src/core/VulkanDevice.hpp"
-#include "src/rendering/CommandManager.hpp"
+#include "src/core/CommandManager.hpp"  // Moved to core/ in Phase 8
 
 #include <memory>
 #include <vector>
@@ -384,7 +421,7 @@ Update `src/rendering/Renderer.hpp`:
 #include "src/core/VulkanDevice.hpp"
 #include "src/rendering/VulkanSwapchain.hpp"
 #include "src/rendering/VulkanPipeline.hpp"
-#include "src/rendering/CommandManager.hpp"
+#include "src/core/CommandManager.hpp"  // Moved to core/ in Phase 8
 #include "src/rendering/SyncManager.hpp"
 #include "src/resources/ResourceManager.hpp"
 #include "src/scene/SceneManager.hpp"

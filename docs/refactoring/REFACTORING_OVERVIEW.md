@@ -4,10 +4,10 @@ This document provides an overview of the complete refactoring journey from a mo
 
 ## Project Summary
 
-**Original**: ~1400 lines of monolithic code in main.cpp
-**Final**: 18 lines in main.cpp + 11 reusable classes across 28+ files
-**Reduction**: **99%** (1485 lines removed from main.cpp)
-**Architecture**: Professional 7-layer design with perfect separation of concerns
+**Starting Point**: Monolithic structure with all logic concentrated in main.cpp
+**Result**: 14 reusable classes distributed across 34 files
+**Architecture**: 4-layer design with clear separation of concerns
+**Key Achievement**: Layered structure providing extensibility and maintainability
 
 ---
 
@@ -22,7 +22,7 @@ This document provides an overview of the complete refactoring journey from a mo
 - `src/utils/FileUtils.hpp` - File I/O utilities
 
 **Impact**:
-- ~80 lines removed from main.cpp
+- Common utilities separated
 - Foundation for modular architecture
 - Header-only utility pattern established
 
@@ -35,9 +35,9 @@ This document provides an overview of the complete refactoring journey from a mo
 - `src/core/VulkanDevice.hpp/.cpp` - Device management class
 
 **Impact**:
-- ~250 lines removed from main.cpp
-- 8 member variables → 1
-- 9 functions removed
+- Device management encapsulated in class
+- 8 member variables -> 1
+- 9 functions moved to class
 - Explicit initialization sequence preventing bugs
 
 ---
@@ -50,11 +50,11 @@ This document provides an overview of the complete refactoring journey from a mo
 - `src/resources/VulkanImage.hpp/.cpp` - Image abstraction
 
 **Impact**:
-- ~400 lines removed from main.cpp
-- 15+ member variables → 5
-- 6 helper functions eliminated
-- 50% code reduction per buffer
-- 65% code reduction per image
+- Resource management code moved to classes
+- 15+ member variables -> 5
+- 6 helper functions moved to classes
+- RAII pattern for automatic cleanup
+- Simplified buffer and image usage
 
 ---
 
@@ -63,12 +63,12 @@ This document provides an overview of the complete refactoring journey from a mo
 
 **Created**:
 - `src/rendering/SyncManager.hpp/.cpp` - Synchronization primitives
-- `src/rendering/CommandManager.hpp/.cpp` - Command management
+- `src/core/CommandManager.hpp/.cpp` - Command management (moved to core in Phase 8)
 - `src/rendering/VulkanSwapchain.hpp/.cpp` - Swapchain management
 - `src/rendering/VulkanPipeline.hpp/.cpp` - Graphics pipeline
 
 **Impact**:
-- ~210 lines removed from main.cpp
+- Rendering infrastructure code moved to classes
 - Clean separation of rendering concerns
 - Modular rendering architecture
 - Foundation for advanced features
@@ -83,7 +83,7 @@ This document provides an overview of the complete refactoring journey from a mo
 - `src/loaders/OBJLoader.hpp/.cpp` - OBJ file loader with deduplication
 
 **Impact**:
-- ~96 lines removed from main.cpp
+- Scene management code moved to classes
 - Clean bind/draw interface
 - Vertex deduplication for performance
 - Foundation for material system
@@ -97,7 +97,7 @@ This document provides an overview of the complete refactoring journey from a mo
 - `src/rendering/Renderer.hpp/.cpp` - Complete rendering system
 
 **Impact**:
-- ~374 lines removed from main.cpp (80% reduction)
+- Rendering subsystem code moved to Renderer class
 - All Vulkan subsystems encapsulated
 - Simple 5-method public interface
 - Complete rendering pipeline coordination
@@ -111,16 +111,16 @@ This document provides an overview of the complete refactoring journey from a mo
 - `src/Application.hpp/.cpp` - Window and main loop management
 
 **Impact**:
-- ~75 lines removed from main.cpp (81% reduction)
-- main.cpp reduced to **18 lines** (99% from original)
+- Window and main loop logic separated
+- main.cpp simplified to pure entry point
 - RAII initialization and cleanup
 - Centralized configuration
 - **Initial architecture complete**
 
 ---
 
-### [Phase 8: Subsystem Separation](PHASE8_SUBSYSTEM_SEPARATION.md) - EP01 4-Layer Design
-**Goal**: Transform God Object Renderer into EP01 4-layer architecture
+### [Phase 8: Subsystem Separation](PHASE8_SUBSYSTEM_SEPARATION.md)
+**Goal**: Transform God Object Renderer into 4-layer architecture
 
 **Problem**: [Architecture Analysis](ARCHITECTURE_ANALYSIS.md) revealed Renderer failed 5/6 quality metrics:
 - Cohesion: 6/10 (mixed responsibilities)
@@ -140,14 +140,7 @@ This document provides an overview of the complete refactoring journey from a mo
 **Refactored**:
 - `src/rendering/Renderer.hpp/.cpp` - Uses 2 managers + directly owns 4 rendering components
 
-**Impact**:
-- Renderer.cpp: 482 lines → ~300-400 lines (structure improvement, EP01 goal)
-- Dependencies: 9 → 6 (**clear responsibility separation**)
-- Responsibilities: 8 → 3 (rendering coordination, descriptor management, uniform updates)
-- Cohesion (LCOM4): 4 → 1 (**+75% improvement**)
-- Testability: 3/10 → 8/10 (**+166% improvement**)
-- Maintainability Index: 45 → ~70-75 (**+55-67% improvement**)
-- **EP01-based pragmatic architecture achieved**
+
 
 ---
 
@@ -155,229 +148,212 @@ This document provides an overview of the complete refactoring journey from a mo
 
 ### Before Refactoring
 ```
-main.cpp (1400+ lines)
-└── HelloTriangleApplication (monolithic)
-    ├── Window management
-    ├── Utility functions
-    ├── Device management
-    ├── Resource management
-    ├── Swapchain management
-    ├── Pipeline management
-    ├── Command management
-    ├── Synchronization
-    ├── Descriptor management
-    ├── Mesh loading
-    └── Rendering loop
+main.cpp
++-- HelloTriangleApplication (monolithic)
+    +-- Window management
+    +-- Utility functions
+    +-- Device management
+    +-- Resource management
+    +-- Swapchain management
+    +-- Pipeline management
+    +-- Command management
+    +-- Synchronization
+    +-- Descriptor management
+    +-- Mesh loading
+    +-- Rendering loop
 ```
 
 ### After Refactoring (Phase 1-7) - Initial Architecture
 ```
 ┌─────────────────────────────────────┐
-│     main.cpp (18 lines)             │  ← Entry point
-│  - Exception handling               │
-│  - Application instantiation        │
-└─────────────────────────────────────┘
+|     main.cpp + Application          |  ← Entry point
+|  - Exception handling               |
+|  - Application instantiation        |
++--───────────────────────────────────┘
                   ↓
 ┌─────────────────────────────────────┐
-│     Application Layer               │  ← Window & main loop
-│  - GLFW window creation             │
-│  - Event loop                       │
-│  - Renderer lifecycle               │
-│  - Configuration                    │
-└─────────────────────────────────────┘
+|     Application Layer               |  ← Window & main loop
+|  - GLFW window creation             |
+|  - Event loop                       |
+|  - Renderer lifecycle               |
+|  - Configuration                    |
++--───────────────────────────────────┘
                   ↓
 ┌─────────────────────────────────────┐
-│        Renderer Layer               │  ← High-level rendering
-│  - Owns all subsystems              │
-│  - Coordinates rendering            │
-│  - Manages resources                │ ← PROBLEM: Too many responsibilities
-│  - Descriptor management            │
-└─────────────────────────────────────┘
+|        Renderer Layer               |  ← High-level rendering
+|  - Owns all subsystems              |
+|  - Coordinates rendering            |
+|  - Manages resources                | ← PROBLEM: Too many responsibilities
+|  - Descriptor management            |
++--───────────────────────────────────┘
                   ↓
 ┌─────────────────────────────────────┐
-│          Scene Layer                │  ← Geometry & assets
-│  - Mesh (geometry + buffers)        │
-│  - OBJLoader (file loading)         │
-└─────────────────────────────────────┘
+|          Scene Layer                |  ← Geometry & assets
+|  - Mesh (geometry + buffers)        |
+|  - OBJLoader (file loading)         |
++--───────────────────────────────────┘
                   ↓
 ┌─────────────────────────────────────┐
-│        Rendering Layer              │  ← Rendering subsystems
-│  - VulkanPipeline                   │
-│  - VulkanSwapchain                  │
-│  - CommandManager                   │
-│  - SyncManager                      │
-└─────────────────────────────────────┘
+|        Rendering Layer              |  ← Rendering subsystems
+|  - VulkanPipeline                   |
+|  - VulkanSwapchain                  |
+|  - CommandManager                   |
+|  - SyncManager                      |
++--───────────────────────────────────┘
                   ↓
 ┌─────────────────────────────────────┐
-│        Resource Layer               │  ← RAII resource wrappers
-│  - VulkanBuffer                     │
-│  - VulkanImage                      │
-└─────────────────────────────────────┘
+|        Resource Layer               |  ← RAII resource wrappers
+|  - VulkanBuffer                     |
+|  - VulkanImage                      |
++--───────────────────────────────────┘
                   ↓
 ┌─────────────────────────────────────┐
-│          Core Layer                 │  ← Vulkan device context
-│  - VulkanDevice                     │
-└─────────────────────────────────────┘
+|          Core Layer                 |  ← Vulkan device context
+|  - VulkanDevice                     |
++--───────────────────────────────────┘
 ```
 
-### After Phase 8 - EP01 4-Layer Architecture
+### After Phase 8 - 4-Layer Architecture
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    Application Layer                    │
-│  ┌───────────────────────────────────────────────────┐  │
-│  │       main.cpp (18 lines) + Application           │  │
-│  │  - Window management (GLFW)                       │  │
-│  │  - Event loop                                     │  │
-│  └───────────────────────────────────────────────────┘  │
-└────────────────────┬────────────────────────────────────┘
-                     │ delegates to
-┌────────────────────▼────────────────────────────────────┐
-│                  Renderer Layer                         │
-│  ┌──────────────────────────────────────────────────┐   │
-│  │   Renderer (Coordinator, ~300-400 lines, EP01)   │   │
-│  │                                                  │   │
-│  │  Direct Ownership (rendering components):       │   │
-│  │  - VulkanSwapchain                              │   │  ← EP01: Direct ownership
-│  │  - VulkanPipeline                               │   │
-│  │  - CommandManager                               │   │
-│  │  - SyncManager                                  │   │
-│  │                                                  │   │
-│  │  Manager Usage:                                  │   │
-│  │  - ResourceManager coordination                 │   │  ← EP01: 2 managers
-│  │  - SceneManager coordination                    │   │
-│  │                                                  │   │
-│  │  + Descriptor sets & uniform buffer management  │   │
-│  └──────────────────────────────────────────────────┘   │
-└───┬─────────────────┬─────────────────────────────────┘
-    │                 │
-┌───▼────────────┐ ┌──▼────────────┐  ← 2 Independent Managers
-│ ResourceMgr    │ │  SceneMgr     │
-│                │ │               │
-│ - loadTexture  │ │ - loadMesh    │
-│ - getTexture   │ │ - getMeshes   │
-│ - Caching      │ │ - Scene graph │
-│ - Staging buf  │ │ (future exp)  │
-└───┬────────────┘ └──┬────────────┘
-    │                 │
-    └─────────────────┘
-                │
-┌───────────────▼───────────────────────────────────────┐
-│                   Core Layer                          │  ← Core Layer
-│  - VulkanDevice (device context)                      │
-│  - VulkanBuffer (RAII wrapper)                        │
-│  - VulkanImage (RAII wrapper)                         │
-│  - VulkanSwapchain (Renderer directly owns)           │
-│  - VulkanPipeline (Renderer directly owns)            │
-│  - CommandManager (Renderer directly owns)            │
-│  - SyncManager (Renderer directly owns)               │
-└───────────────────────────────────────────────────────┘
+|                    Application Layer                    |
+|  ┌───────────────────────────────────────────────────┐  |
+|  |       main.cpp + Application                      |  |
+|  |  - Window management (GLFW)                       |  |
+|  |  - Event loop                                     |  |
+|  +--─────────────────────────────────────────────────┘  |
++--──────────────────┬────────────────────────────────────┘
+                     | delegates to
+┌────────────────────v────────────────────────────────────┐
+|                  Renderer Layer                         |
+|  ┌──────────────────────────────────────────────────┐   |
+|  |     Renderer (Coordinator, ~300-400 lines)       |   |
+|  |                                                  |   |
+|  |  Direct Ownership (rendering components):       |   |
+|  |  - VulkanSwapchain                              |   |  ← Direct ownership
+|  |  - VulkanPipeline                               |   |
+|  |  - SyncManager                                  |   |
+|  |                                                  |   |
+|  |  Manager Usage:                                  |   |
+|  |  - ResourceManager coordination                 |   |  ← 2 managers
+|  |  - SceneManager coordination                    |   |
+|  |  - CommandManager (from Core)                   |   |
+|  |                                                  |   |
+|  |  + Descriptor sets & uniform buffer management  |   |
+|  +--────────────────────────────────────────────────┘   |
++--─┬─────────────────┬─────────────────────────────────┘
+    |                 |
+┌───v────────────┐ ┌──v────────────┐  ← 2 Independent Managers
+| ResourceMgr    | |  SceneMgr     |
+|                | |               |
+| - loadTexture  | | - loadMesh    |
+| - getTexture   | | - getMeshes   |
+| - Caching      | | - Scene graph |
+| - Staging buf  | | (future exp)  |
++--─┬────────────┘ +--┬────────────┘
+    |                 |
+    +--───────────────┘
+                |
+┌───────────────v───────────────────────────────────────┐
+|                   Core Layer                          |  ← Core Layer
+|  - VulkanDevice (device context)                      |
+|  - VulkanBuffer (RAII wrapper)                        |
+|  - VulkanImage (RAII wrapper)                         |
+|  - CommandManager (infrastructure, used by all)       |
+|  - VulkanSwapchain (Renderer directly owns)           |
+|  - VulkanPipeline (Renderer directly owns)            |
+|  - SyncManager (Renderer directly owns)               |
++--─────────────────────────────────────────────────────┘
 ```
-
-**Key Design Decisions in Phase 8 (EP01 Section 3.3)**:
-1. **Renderer structure improvement**: 482 → ~300-400 lines, clear coordination responsibility (EP01 goal)
-2. **No RenderingSystem**: Remove unnecessary indirection, Renderer directly owns rendering components
-3. **ResourceManager**: Asset loading, caching, staging buffers (independent manager)
-4. **SceneManager**: Mesh management, scene graph, future camera/lights (independent manager)
-5. **Testability**: Managers mockable via interfaces, rendering components tested directly
-6. **Extensibility**: Add features through managers, keep rendering flow clear
-7. **Pragmatism**: Prioritize simplicity and clarity over theoretical perfection (EP01 philosophy)
 
 ### Project Structure
 ```
 vulkan-fdf/
-├── src/
-│   ├── main.cpp (18 lines)           ← Entry point
-│   │
-│   ├── Application.hpp/.cpp          ← Application layer
-│   │
-│   ├── utils/                        ← Utility layer (Phase 1)
-│   │   ├── VulkanCommon.hpp
-│   │   ├── Vertex.hpp
-│   │   └── FileUtils.hpp
-│   │
-│   ├── core/                         ← Core layer (Phase 2)
-│   │   ├── VulkanDevice.hpp
-│   │   └── VulkanDevice.cpp
-│   │
-│   ├── resources/                    ← Resource layer (Phase 3, 8)
-│   │   ├── VulkanBuffer.hpp/.cpp     (Phase 3)
-│   │   ├── VulkanImage.hpp/.cpp      (Phase 3)
-│   │   └── ResourceManager.hpp/.cpp  (Phase 8) - Independent manager
-│   │
-│   ├── rendering/                    ← Rendering layers (Phase 4,6,8)
-│   │   ├── Renderer.hpp/.cpp         (Phase 6, refactored Phase 8)
-│   │   ├── SyncManager.hpp/.cpp      (Phase 4, Renderer directly owns)
-│   │   ├── CommandManager.hpp/.cpp   (Phase 4, Renderer directly owns)
-│   │   ├── VulkanSwapchain.hpp/.cpp  (Phase 4, Renderer directly owns)
-│   │   └── VulkanPipeline.hpp/.cpp   (Phase 4, Renderer directly owns)
-│   │
-│   ├── scene/                        ← Scene layer (Phase 5, 8)
-│   │   ├── Mesh.hpp/.cpp             (Phase 5)
-│   │   └── SceneManager.hpp/.cpp     (Phase 8) - Independent manager
-│   │
-│   └── loaders/                      ← Loaders (Phase 5)
-│       ├── OBJLoader.hpp
-│       └── OBJLoader.cpp
-│
-├── docs/                             ← Comprehensive documentation
-│   ├── README.md
-│   ├── REFACTORING_OVERVIEW.md (this file)
-│   ├── REFACTORING_PLAN.md
-│   ├── ARCHITECTURE_ANALYSIS.md      (Phase 8 analysis) ⭐
-│   ├── PHASE1_UTILITY_LAYER.md
-│   ├── PHASE2_DEVICE_MANAGEMENT.md
-│   ├── PHASE3_RESOURCE_MANAGEMENT.md
-│   ├── PHASE4_RENDERING_LAYER.md
-│   ├── PHASE5_SCENE_LAYER.md
-│   ├── PHASE6_RENDERER_INTEGRATION.md
-│   ├── PHASE7_APPLICATION_LAYER.md
-│   └── PHASE8_SUBSYSTEM_SEPARATION.md  ⭐
-│
-├── shaders/
-├── models/
-├── textures/
-└── CMakeLists.txt
++-- src/
+|   +-- main.cpp (18 lines)           ← Entry point
+|   |
+|   +-- Application.hpp/.cpp          ← Application layer
+|   |
+|   +-- utils/                        ← Utility layer (Phase 1)
+|   |   +-- VulkanCommon.hpp
+|   |   +-- Vertex.hpp
+|   |   +-- FileUtils.hpp
+|   |
+|   +-- core/                         ← Core layer (Phase 2, 4)
+|   |   +-- VulkanDevice.hpp/.cpp    (Phase 2)
+|   |   +-- CommandManager.hpp/.cpp  (Phase 4, moved to core in Phase 8)
+|   |
+|   +-- resources/                    ← Resource layer (Phase 3, 8)
+|   |   +-- VulkanBuffer.hpp/.cpp     (Phase 3)
+|   |   +-- VulkanImage.hpp/.cpp      (Phase 3)
+|   |   +-- ResourceManager.hpp/.cpp  (Phase 8) - Independent manager
+|   |
+|   +-- rendering/                    ← Rendering layers (Phase 4,6,8)
+|   |   +-- Renderer.hpp/.cpp         (Phase 6, refactored Phase 8)
+|   |   +-- SyncManager.hpp/.cpp      (Phase 4, Renderer directly owns)
+|   |   +-- VulkanSwapchain.hpp/.cpp  (Phase 4, Renderer directly owns)
+|   |   +-- VulkanPipeline.hpp/.cpp   (Phase 4, Renderer directly owns)
+|   |
+|   +-- scene/                        ← Scene layer (Phase 5, 8)
+|   |   +-- Mesh.hpp/.cpp             (Phase 5)
+|   |   +-- SceneManager.hpp/.cpp     (Phase 8) - Independent manager
+|   |
+|   +-- loaders/                      ← Loaders (Phase 5)
+|       +-- OBJLoader.hpp
+|       +-- OBJLoader.cpp
+|
++-- docs/                             ← Comprehensive documentation
+|   +-- README.md
+|   +-- REFACTORING_OVERVIEW.md (this file)
+|   +-- REFACTORING_OVERVIEW_KR.md
+|   +-- ARCHITECTURE_ANALYSIS.md      (Phase 8 analysis)
+|   +-- PHASE1_UTILITY_LAYER.md
+|   +-- PHASE2_DEVICE_MANAGEMENT.md
+|   +-- PHASE3_RESOURCE_MANAGEMENT.md
+|   +-- PHASE4_RENDERING_LAYER.md
+|   +-- PHASE5_SCENE_LAYER.md
+|   +-- PHASE6_RENDERER_INTEGRATION.md
+|   +-- PHASE7_APPLICATION_LAYER.md  
+|
++-- shaders/
++-- models/
++-- textures/
++-- CMakeLists.txt
 ```
 
 ---
 
 ## Overall Impact
 
-### Code Metrics
+### Structural Changes
 
-| Metric | Before | After All Phases | Change |
-|--------|--------|------------------|--------|
-| main.cpp Lines | ~1400 | **18** | **-99%** |
-| Total Files | 1 | 28+ | +2700% |
-| Reusable Classes | 0 | 11 | - |
-| Helper Functions in main.cpp | 20+ | 0 | -100% |
-| Member Variables in main.cpp | 30+ | 0 | -100% |
+| Metric | Before Refactoring | After Refactoring |
+|--------|-------------------|-------------------|
+| main.cpp | All logic concentrated | Pure entry point |
+| Total Files | 1 | 34+ |
+| Reusable Classes | 0 | 14 |
+| Helper Functions in main.cpp | 20+ | 0 |
+| Member Variables in main.cpp | 30+ | 0 |
 
-### Lines Removed from main.cpp by Phase
+### Structuring Work by Phase
 
-| Phase | Lines Removed | Cumulative | % of Original |
-|-------|---------------|------------|---------------|
-| Phase 1 | ~80 | ~80 | 6% |
-| Phase 2 | ~250 | ~330 | 24% |
-| Phase 3 | ~400 | ~730 | 52% |
-| Phase 4 | ~210 | ~940 | 67% |
-| Phase 5 | ~96 | ~1036 | 74% |
-| Phase 6 | ~374 | ~1410 | 95% |
-| Phase 7 | ~75 | **~1485** | **99%** |
+- **Phase 1**: Common utility separation (utility headers)
+- **Phase 2**: Device management encapsulation (VulkanDevice)
+- **Phase 3**: Resource management abstraction (VulkanBuffer, VulkanImage)
+- **Phase 4**: Rendering infrastructure separation (rendering classes)
+- **Phase 5**: Scene layer extraction (Mesh, OBJLoader)
+- **Phase 6**: Rendering system integration (Renderer)
+- **Phase 7**: Application layer completion (Application)
+- **Phase 8**: Subsystem separation (ResourceManager, SceneManager)
 
-### Lines Added in Reusable Classes
+### Final Codebase Composition
 
-- **Phase 1**: ~135 lines (utility headers)
-- **Phase 2**: ~265 lines (VulkanDevice)
-- **Phase 3**: ~400 lines (VulkanBuffer + VulkanImage)
-- **Phase 4**: ~650 lines (rendering classes)
-- **Phase 5**: ~276 lines (Mesh + OBJLoader)
-- **Phase 6**: ~567 lines (Renderer)
-- **Phase 7**: ~136 lines (Application)
-- **Phase 8**: ~170 lines (ResourceManager + SceneManager, no RenderingSystem)
-- **Total**: ~2599 lines in modular, reusable, well-documented classes
+- **Total ~2,800 lines**: Modular, reusable, well-documented classes
+- **14 classes**: Independent components with clear responsibilities
+- **34+ files**: Systematic directory structure
+- **4-layer architecture**: Clear separation of concerns
 
-### Final main.cpp (18 lines)
+### Final main.cpp
 
 ```cpp
 #include "Application.hpp"
@@ -407,7 +383,7 @@ int main() {
 ## Key Benefits
 
 ### 1. Code Quality
-- **Modularity**: Perfect separation into 7 distinct layers
+- **Modularity**: Clear separation into 4 layers + Foundation components
 - **Reusability**: All classes usable across Vulkan projects
 - **Maintainability**: Isolated components, trivial to debug and extend
 - **Testability**: Each class independently testable
@@ -428,8 +404,8 @@ int main() {
 - **Command Buffer Reuse**: Minimized allocation overhead
 
 ### 4. Development Experience
-- **Extreme Simplicity**: 18-line main.cpp vs 1400-line original
-- **Clear Interfaces**: Self-documenting APIs
+- **Clear Structure**: Pure entry point + layered architecture
+- **Self-Documenting Interfaces**: Clear API design
 - **Easy Extensions**: Add features without touching core
 - **Pattern Consistency**: Uniform design across all classes
 - **Comprehensive Docs**: Every phase fully documented
@@ -504,10 +480,10 @@ cmake --build build
 ```
 
 All phases tested with:
-- ✅ Successful compilation with no warnings
-- ✅ C++20 standard compliance
-- ✅ All platforms (tested on macOS)
-- ✅ Clean CMake configuration
+- Successful compilation with no warnings
+- C++20 standard compliance
+- All platforms (tested on macOS)
+- Clean CMake configuration
 
 ### Runtime Testing
 ```bash
@@ -515,20 +491,20 @@ All phases tested with:
 ```
 
 All phases validated with:
-- ✅ Runtime execution without errors
-- ✅ Vulkan validation layers enabled
-- ✅ No memory leaks (verified)
-- ✅ Correct rendering output
-- ✅ Window resize handling
-- ✅ Clean shutdown
-- ✅ Exception safety verified
+- Runtime execution without errors
+- Vulkan validation layers enabled
+- No memory leaks (verified)
+- Correct rendering output
+- Window resize handling
+- Clean shutdown
+- Exception safety verified
 
 ### Performance Testing
-- ✅ 60+ FPS maintained
-- ✅ No frame drops
-- ✅ Efficient resource usage
-- ✅ Minimal CPU overhead
-- ✅ Optimal GPU utilization
+- 60+ FPS maintained
+- No frame drops
+- Efficient resource usage
+- Minimal CPU overhead
+- Optimal GPU utilization
 
 ---
 
@@ -580,12 +556,11 @@ Each phase has comprehensive documentation with:
    - Final architecture
    - 18-line main.cpp
 
-8. **[PHASE8_SUBSYSTEM_SEPARATION.md](PHASE8_SUBSYSTEM_SEPARATION.md)** - EP01-based
-   - No RenderingSystem (EP01 design principle)
+8. **[PHASE8_SUBSYSTEM_SEPARATION.md](PHASE8_SUBSYSTEM_SEPARATION.md)**
+   - No RenderingSystem (design principle)
    - ResourceManager (asset loading & caching, independent manager)
    - SceneManager (scene graph foundation, independent manager)
    - Renderer directly owns rendering components (clear flow visibility)
-   - Architecture quality metrics verification (~70-75% achieved)
 
 ---
 
@@ -633,17 +608,15 @@ refactor: Extract ResourceManager and SceneManager following EP01 4-layer archit
 
 ---
 
-## Project Goals - ALL ACHIEVED
+## Project Goals
 
-- **Modularity**: Clean EP01 4-layer architecture with 2 independent managers
+- **Modularity**: Clean 4-layer architecture with 2 independent managers
 - **Reusability**: All 14 classes reusable in other Vulkan projects
-- **Maintainability**: MI = ~70-75 (EP01 pragmatic goal achieved)
 - **Safety**: Full RAII, zero memory leaks, exception-safe
 - **Performance**: Zero overhead, optimized resource management
-- **Code Quality**: 99% reduction in main.cpp complexity
+- **Code Quality**: main.cpp complexity eliminated through layering
 - **Testability**: Managers mockable, rendering components directly testable
 - **Documentation**: Every phase comprehensively documented
-- **Portfolio Quality**: EP01-based pragmatic architecture
 
 ---
 
@@ -651,41 +624,26 @@ refactor: Extract ResourceManager and SceneManager following EP01 4-layer archit
 
 ### What We Accomplished
 
-**From**: A 1400-line monolithic tutorial-style Vulkan application
-**To**: An 18-line entry point with production-ready 4-layer architecture
+**Starting Point**: Monolithic tutorial-style Vulkan application
+**Result**: Production-ready engine with layered architecture
 
-**Numbers**:
-- 99% reduction in main.cpp (1485 lines removed)
-- 14 reusable classes created (Phase 8 added 3)
+**Structural Changes**:
+- main.cpp: Simplified to pure entry point
+- 14 reusable classes created
 - 34+ files with clear organization
-- 4 clean architectural layers
-- ~2800+ lines of well-structured, documented code
-- 100% of helper functions eliminated from main.cpp
-- 0 member variables remaining in main.cpp
+- 4-layer architecture established
 
-**Quality Metrics (Phase 8, EP01-based)**:
-- Cohesion (LCOM4): 4 → 1 (+75% improvement)
-- Coupling: 9 dependencies → 6 (-33% improvement, clear responsibility separation)
-- Testability: 3/10 → 8/10 (+166% improvement)
-- Maintainability Index: 45 → ~70-75 (+55-67% improvement)
-- Overall Architecture Quality: 46% → ~70-75% (+52-63% improvement, EP01 pragmatic goal achieved)
 
 ### Final Architecture
 
-The final architecture represents an **EP01-based pragmatic** Vulkan application structure:
+The final architecture represents a **pragmatic** Vulkan application structure:
 
-1. **Application Layer** (18-line main.cpp + Application) - Window & event loop
+1. **Application Layer** (main.cpp + Application) - Window & event loop
 2. **Renderer Layer** (~300-400 lines) - Rendering coordination & descriptor management
    - Rendering components directly owned (Swapchain, Pipeline, CommandManager, SyncManager)
    - Uses 2 managers (ResourceManager, SceneManager)
 3. **Manager Layer** (2 independent managers) - Resource, Scene management
 4. **Core Layer** - RAII wrappers (VulkanDevice, Buffer, Image) + rendering components
-
-**EP01 Design Principles**:
-- No RenderingSystem (remove unnecessary indirection)
-- Renderer directly orchestrates rendering flow (clear visibility)
-- Only 2 independent managers (ResourceManager, SceneManager)
-- Pragmatism first (simplicity and clarity over theoretical perfection)
 
 ---
 
@@ -693,29 +651,10 @@ The final architecture represents an **EP01-based pragmatic** Vulkan application
 
 This refactoring project successfully transformed a tutorial-style monolithic Vulkan application into a **production-ready, professionally-architected engine** with true separation of concerns.
 
-**Phase 1-7** reduced main.cpp from 1400 lines to 18 lines, but left Renderer as a God Object.
+**Phase 1-7** established the layered architecture with a pure entry point, but left Renderer as a God Object.
 
-**Phase 8** completed the transformation following EP01 design principles:
-- **No RenderingSystem**: Remove unnecessary indirection (EP01 core principle)
+**Phase 8** completed the transformation following additional architectural design principles:
+- **No RenderingSystem**: Remove unnecessary indirection
 - **ResourceManager extraction**: Asset loading, caching, staging buffer management (independent manager)
 - **SceneManager extraction**: Mesh, scene graph management (independent manager)
 - **Renderer direct ownership**: Swapchain/Pipeline/CommandManager/SyncManager directly owned
-- Improving architecture quality from 46% to ~70-75% (EP01 pragmatic goal)
-
-The final architecture is an **EP01-based pragmatic design** and serves as an excellent **portfolio piece** demonstrating:
-- Deep understanding of Vulkan API
-- Software architecture skills (cohesion, coupling, testability)
-- RAII and modern C++ mastery
-- Documentation and communication abilities
-- Ability to refactor complex systems iteratively
-- Quantitative analysis using software metrics
-- **Pragmatic design**: Prioritizing simplicity and clarity over theoretical perfection (EP01 philosophy)
-
-**Status**: **EP01-BASED PRAGMATIC ARCHITECTURE** - All 8 phases complete, design validated by metrics.
-
----
-
-*Documentation Last Updated: 2025-01-27*
-*Project: vulkan-fdf*
-*Architecture: EP01-Based Pragmatic 4-Layer Vulkan Engine*
-*Final Status: 18-line main.cpp + ~70-75% architecture quality (EP01 goal achieved)*
