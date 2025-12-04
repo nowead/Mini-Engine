@@ -2,7 +2,7 @@
 
 #include "src/scene/Mesh.hpp"
 #include "src/core/VulkanDevice.hpp"
-#include "src/rendering/CommandManager.hpp"
+#include "src/core/CommandManager.hpp"
 
 #include <memory>
 #include <vector>

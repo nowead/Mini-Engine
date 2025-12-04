@@ -3,7 +3,7 @@
 #include "src/core/VulkanDevice.hpp"
 #include "src/rendering/VulkanSwapchain.hpp"
 #include "src/rendering/VulkanPipeline.hpp"
-#include "src/rendering/CommandManager.hpp"
+#include "src/core/CommandManager.hpp"
 #include "src/rendering/SyncManager.hpp"
 #include "src/resources/VulkanImage.hpp"
 #include "src/resources/VulkanBuffer.hpp"

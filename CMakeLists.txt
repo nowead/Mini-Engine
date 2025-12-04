@@ -29,6 +29,8 @@ add_executable(vulkanGLFW
     # Core classes
     src/core/VulkanDevice.cpp
     src/core/VulkanDevice.hpp
+    src/core/CommandManager.cpp
+    src/core/CommandManager.hpp
     # Resource classes
     src/resources/VulkanBuffer.cpp
     src/resources/VulkanBuffer.hpp
@@ -41,8 +43,6 @@ add_executable(vulkanGLFW
     src/rendering/Renderer.hpp
     src/rendering/SyncManager.cpp
     src/rendering/SyncManager.hpp
-    src/rendering/CommandManager.cpp
-    src/rendering/CommandManager.hpp
     src/rendering/VulkanSwapchain.cpp
     src/rendering/VulkanSwapchain.hpp
     src/rendering/VulkanPipeline.cpp

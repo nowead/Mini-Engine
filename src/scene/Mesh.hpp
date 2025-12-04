@@ -4,7 +4,7 @@
 #include "src/utils/Vertex.hpp"
 #include "src/core/VulkanDevice.hpp"
 #include "src/resources/VulkanBuffer.hpp"
-#include "src/rendering/CommandManager.hpp"
+#include "src/core/CommandManager.hpp"
 
 #include <vector>
 #include <string>
