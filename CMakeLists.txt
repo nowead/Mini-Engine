@@ -13,6 +13,7 @@ find_package(glm CONFIG REQUIRED)
 find_package(Vulkan REQUIRED)
 find_package(Stb REQUIRED)
 find_package(tinyobjloader REQUIRED)
+find_package(imgui CONFIG REQUIRED)
 
 message(STATUS "--- Vulkan Debug Info ---")
 message(STATUS "Vulkan_FOUND: ${Vulkan_FOUND}")
@@ -59,6 +60,9 @@ add_executable(vulkanGLFW
     src/loaders/OBJLoader.hpp
     src/loaders/FDFLoader.cpp
     src/loaders/FDFLoader.hpp
+    # UI classes
+    src/ui/ImGuiManager.cpp
+    src/ui/ImGuiManager.hpp
     # Utility headers (header-only)
     src/utils/VulkanCommon.hpp
     src/utils/Vertex.hpp
@@ -66,17 +70,24 @@ add_executable(vulkanGLFW
 )
 
 # Add include directories for the project
-target_include_directories(vulkanGLFW PRIVATE
+# IMPORTANT: Vulkan SDK BEFORE other includes to ensure ImGui uses correct headers
+target_include_directories(vulkanGLFW BEFORE PRIVATE
+    ${Vulkan_INCLUDE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 target_link_libraries(vulkanGLFW PRIVATE
-    glfw
     glm::glm
     Vulkan::Vulkan
     Stb::stb
     Vulkan::cppm
     tinyobjloader::tinyobjloader
+    imgui::imgui
+)
+
+# Force ImGui to NOT use volk - use standard Vulkan headers
+target_compile_definitions(vulkanGLFW PRIVATE
+    IMGUI_IMPL_VULKAN_NO_PROTOTYPES=0
 )
 
 find_package (Vulkan REQUIRED)
@@ -89,6 +100,11 @@ target_compile_definitions(VulkanCppModule PUBLIC
         VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
         VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1
 )
+
+# Suppress Vulkan C++ module warnings
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+    target_compile_options(VulkanCppModule PRIVATE -Wno-missing-declarations)
+endif()
 target_include_directories(VulkanCppModule
         PRIVATE
         "${Vulkan_INCLUDE_DIR}"

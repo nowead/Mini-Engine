@@ -2,6 +2,7 @@
 
 #include "src/rendering/Renderer.hpp"
 #include "src/scene/Camera.hpp"
+#include "src/ui/ImGuiManager.hpp"
 
 #include <GLFW/glfw3.h>
 #include <memory>
@@ -15,6 +16,7 @@
  * - GLFW window creation and management
  * - Main event loop
  * - Renderer lifecycle management
+ * - UI management (ImGui)
  * - Window resize callbacks
  */
 class Application {
@@ -50,6 +52,7 @@ private:
     static constexpr const char* MODEL_PATH = "models/test.fdf";
     static constexpr const char* TEXTURE_PATH = "textures/viking_room.png";
     static constexpr bool USE_FDF_MODE = true;  // Set to false for OBJ models
+    static constexpr bool ENABLE_IMGUI = true;  // Enable ImGui UI
 
     // Validation layers
     const std::vector<const char*> validationLayers = {
@@ -62,10 +65,11 @@ private:
     static constexpr bool enableValidationLayers = true;
 #endif
 
-    // Members
+    // Members (destruction order matters - reverse of declaration order)
     GLFWwindow* window = nullptr;
-    std::unique_ptr<Renderer> renderer;
-    std::unique_ptr<Camera> camera;
+    std::unique_ptr<Camera> camera;              // Destroyed first (no dependencies)
+    std::unique_ptr<Renderer> renderer;          // Destroyed second
+    std::unique_ptr<ImGuiManager> imguiManager;  // Destroyed third (depends on Renderer's Vulkan resources)
 
     // Mouse state
     bool firstMouse = true;
@@ -82,9 +86,6 @@ private:
 
     // Input handling
     void processInput();
-
-    // Cleanup
-    void cleanup();
 
     // Callbacks
     static void framebufferResizeCallback(GLFWwindow* window, int width, int height);

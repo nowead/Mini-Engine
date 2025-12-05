@@ -1,7 +1,6 @@
 struct VSInput {
     float3 inPosition;
     float3 inColor;
-    float2 inTexCoord;
 };
 
 struct UniformBuffer {

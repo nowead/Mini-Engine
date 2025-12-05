@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <stdexcept>
+#include <functional>
 
 Application::Application() {
     initWindow();
@@ -9,7 +10,16 @@ Application::Application() {
 }
 
 Application::~Application() {
-    cleanup();
+    // RAII cleanup: Members destroyed in reverse declaration order
+    // 1. ~ImGuiManager() - cleans up ImGui resources
+    // 2. ~Renderer() - calls waitIdle() and cleans up Vulkan resources
+    // 3. ~Camera() - no special cleanup needed
+
+    // Manual cleanup for raw pointers only
+    if (window) {
+        glfwDestroyWindow(window);
+    }
+    glfwTerminate();
 }
 
 void Application::run() {
@@ -44,6 +54,16 @@ void Application::initVulkan() {
     if (!USE_FDF_MODE) {
         renderer->loadTexture(TEXTURE_PATH);
     }
+
+    // Create ImGui manager if enabled
+    if (ENABLE_IMGUI) {
+        imguiManager = std::make_unique<ImGuiManager>(
+            window,
+            renderer->getDevice(),
+            renderer->getSwapchain(),
+            renderer->getCommandManager()
+        );
+    }
 }
 
 void Application::mainLoop() {
@@ -51,7 +71,26 @@ void Application::mainLoop() {
         glfwPollEvents();
         processInput();
         renderer->updateCamera(camera->getViewMatrix(), camera->getProjectionMatrix());
-        renderer->drawFrame();
+
+        // Render ImGui UI
+        if (ENABLE_IMGUI && imguiManager) {
+            imguiManager->newFrame();
+            imguiManager->renderUI(
+                *camera,
+                renderer->isFdfMode(),
+                [this]() { /* Mode toggle - would require renderer recreation */ },
+                [this](const std::string& path) {
+                    renderer->loadModel(path);
+                }
+            );
+
+            // Pass ImGui render callback to renderer
+            renderer->drawFrame([this](const vk::raii::CommandBuffer& commandBuffer, uint32_t imageIndex) {
+                imguiManager->render(commandBuffer, imageIndex);
+            });
+        } else {
+            renderer->drawFrame();
+        }
     }
     renderer->waitIdle();
 }
@@ -76,19 +115,6 @@ void Application::processInput() {
     if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
         camera->translate(moveSpeed, 0.0f);
     }
-}
-
-void Application::cleanup() {
-    // Renderer is automatically destroyed (unique_ptr)
-    // Clean up renderer before destroying window
-    renderer.reset();
-
-    if (window) {
-        glfwDestroyWindow(window);
-        window = nullptr;
-    }
-
-    glfwTerminate();
 }
 
 void Application::framebufferResizeCallback(GLFWwindow* window, int width, int height) {

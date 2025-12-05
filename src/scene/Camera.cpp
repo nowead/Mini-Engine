@@ -44,8 +44,8 @@ glm::mat4 Camera::getProjectionMatrix() const {
 }
 
 void Camera::rotate(float deltaX, float deltaY) {
-    yaw += deltaX * 0.005f;  // Rotation sensitivity
-    pitch += deltaY * 0.005f;
+    yaw -= deltaX * 0.005f;  // Rotation sensitivity (inverted)
+    pitch -= deltaY * 0.005f;  // Rotation sensitivity (inverted)
 
     // Clamp pitch to avoid gimbal lock
     pitch = std::clamp(pitch, glm::radians(-89.0f), glm::radians(89.0f));
@@ -59,8 +59,8 @@ void Camera::translate(float deltaX, float deltaY) {
     glm::vec3 right = glm::normalize(glm::cross(forward, up));
     glm::vec3 upVector = glm::normalize(glm::cross(right, forward));
 
-    // Translate both position and target to maintain view direction
-    glm::vec3 translation = right * deltaX * 0.01f + upVector * deltaY * 0.01f;
+    // Translate both position and target to maintain view direction (inverted)
+    glm::vec3 translation = right * -deltaX * 0.01f + upVector * -deltaY * 0.01f;
     position += translation;
     target += translation;
 }

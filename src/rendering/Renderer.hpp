@@ -47,7 +47,7 @@ public:
              bool enableValidation,
              bool useFdfMode = false);
 
-    ~Renderer() = default;
+    ~Renderer();
 
     // Disable copy and move
     Renderer(const Renderer&) = delete;
@@ -69,8 +69,9 @@ public:
 
     /**
      * @brief Draw a single frame
+     * @param imguiRenderCallback Optional callback for ImGui rendering (takes commandBuffer and imageIndex)
      */
-    void drawFrame();
+    void drawFrame(std::function<void(const vk::raii::CommandBuffer&, uint32_t)> imguiRenderCallback = nullptr);
 
     /**
      * @brief Wait for device to be idle (for cleanup)
@@ -88,6 +89,26 @@ public:
      * @param projection Projection matrix
      */
     void updateCamera(const glm::mat4& view, const glm::mat4& projection);
+
+    /**
+     * @brief Check if FDF mode is active
+     */
+    bool isFdfMode() const { return fdfMode; }
+
+    /**
+     * @brief Get Vulkan device (for external components like ImGui)
+     */
+    VulkanDevice& getDevice() { return *device; }
+
+    /**
+     * @brief Get swapchain (for external components like ImGui)
+     */
+    VulkanSwapchain& getSwapchain() { return *swapchain; }
+
+    /**
+     * @brief Get command manager (for external components like ImGui)
+     */
+    CommandManager& getCommandManager() { return *commandManager; }
 
 private:
     // Window reference

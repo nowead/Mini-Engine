@@ -62,6 +62,14 @@ Renderer::Renderer(GLFWwindow* window,
     }
 }
 
+Renderer::~Renderer() {
+    // RAII: Wait for device idle before destroying Vulkan resources
+    if (device) {
+        device->getDevice().waitIdle();
+    }
+    // All other resources cleaned up by RAII in reverse declaration order
+}
+
 void Renderer::loadModel(const std::string& modelPath) {
     sceneManager->loadMesh(modelPath);  // Delegates to SceneManager
 }
@@ -71,7 +79,7 @@ void Renderer::loadTexture(const std::string& texturePath) {
     updateDescriptorSets();  // Update descriptors with new texture
 }
 
-void Renderer::drawFrame() {
+void Renderer::drawFrame(std::function<void(const vk::raii::CommandBuffer&, uint32_t)> imguiRenderCallback) {
     // Wait for the current frame's fence
     syncManager->waitForFence(currentFrame);
 
@@ -95,6 +103,14 @@ void Renderer::drawFrame() {
     syncManager->resetFence(currentFrame);
     commandManager->getCommandBuffer(currentFrame).reset();
     recordCommandBuffer(imageIndex);
+
+    // Render ImGui if callback is provided
+    if (imguiRenderCallback) {
+        imguiRenderCallback(commandManager->getCommandBuffer(currentFrame), imageIndex);
+    }
+
+    // End command buffer recording
+    commandManager->getCommandBuffer(currentFrame).end();
 
     // Submit command buffer
     vk::PipelineStageFlags waitDestinationStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput);
@@ -405,7 +421,7 @@ void Renderer::recordCommandBuffer(uint32_t imageIndex) {
     );
 #endif
 
-    commandManager->getCommandBuffer(currentFrame).end();
+    // Note: end() is called in drawFrame after ImGui rendering
 }
 
 void Renderer::updateUniformBuffer(uint32_t currentImage) {
