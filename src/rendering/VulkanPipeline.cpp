@@ -8,12 +8,13 @@ VulkanPipeline::VulkanPipeline(
     const VulkanSwapchain& swapchain,
     const std::string& shaderPath,
     vk::Format depthFormat,
-    vk::RenderPass renderPass)
+    vk::RenderPass renderPass,
+    TopologyMode topology)
     : device(device) {
 
     createDescriptorSetLayout();
     createPipelineLayout();
-    createGraphicsPipeline(shaderPath, swapchain.getFormat(), depthFormat, renderPass);
+    createGraphicsPipeline(shaderPath, swapchain.getFormat(), depthFormat, renderPass, topology);
 }
 
 void VulkanPipeline::createDescriptorSetLayout() {
@@ -54,8 +55,9 @@ void VulkanPipeline::createGraphicsPipeline(
     const std::string& shaderPath,
     vk::Format colorFormat,
     vk::Format depthFormat,
-    vk::RenderPass renderPass) {
-    
+    vk::RenderPass renderPass,
+    TopologyMode topology) {
+
     vk::raii::ShaderModule shaderModule = createShaderModule(FileUtils::readFile(shaderPath));
 
     vk::PipelineShaderStageCreateInfo vertShaderStageInfo{
@@ -82,9 +84,13 @@ void VulkanPipeline::createGraphicsPipeline(
         .pVertexAttributeDescriptions = attributeDescriptions.data()
     };
 
-    // Input assembly
+    // Input assembly - select topology based on mode
+    vk::PrimitiveTopology vkTopology = topology == TopologyMode::LineList
+        ? vk::PrimitiveTopology::eLineList
+        : vk::PrimitiveTopology::eTriangleList;
+
     vk::PipelineInputAssemblyStateCreateInfo inputAssembly{
-        .topology = vk::PrimitiveTopology::eTriangleList,
+        .topology = vkTopology,
         .primitiveRestartEnable = vk::False
     };
 
@@ -94,12 +100,16 @@ void VulkanPipeline::createGraphicsPipeline(
         .scissorCount = 1
     };
 
-    // Rasterization
+    // Rasterization - disable culling for wireframe mode
+    vk::CullModeFlags cullMode = topology == TopologyMode::LineList
+        ? vk::CullModeFlagBits::eNone
+        : vk::CullModeFlagBits::eBack;
+
     vk::PipelineRasterizationStateCreateInfo rasterizer{
         .depthClampEnable = vk::False,
         .rasterizerDiscardEnable = vk::False,
         .polygonMode = vk::PolygonMode::eFill,
-        .cullMode = vk::CullModeFlagBits::eBack,
+        .cullMode = cullMode,
         .frontFace = vk::FrontFace::eCounterClockwise,
         .depthBiasEnable = vk::False,
         .lineWidth = 1.0f

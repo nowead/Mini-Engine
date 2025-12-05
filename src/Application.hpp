@@ -1,6 +1,7 @@
 #pragma once
 
 #include "src/rendering/Renderer.hpp"
+#include "src/scene/Camera.hpp"
 
 #include <GLFW/glfw3.h>
 #include <memory>
@@ -45,9 +46,10 @@ private:
     static constexpr uint32_t WINDOW_HEIGHT = 600;
     static constexpr const char* WINDOW_TITLE = "Vulkan";
 
-    // Asset paths
-    static constexpr const char* MODEL_PATH = "models/viking_room.obj";
+    // Asset paths - FDF mode
+    static constexpr const char* MODEL_PATH = "models/test.fdf";
     static constexpr const char* TEXTURE_PATH = "textures/viking_room.png";
+    static constexpr bool USE_FDF_MODE = true;  // Set to false for OBJ models
 
     // Validation layers
     const std::vector<const char*> validationLayers = {
@@ -63,6 +65,13 @@ private:
     // Members
     GLFWwindow* window = nullptr;
     std::unique_ptr<Renderer> renderer;
+    std::unique_ptr<Camera> camera;
+
+    // Mouse state
+    bool firstMouse = true;
+    bool mousePressed = false;
+    double lastMouseX = 0.0;
+    double lastMouseY = 0.0;
 
     // Initialization
     void initWindow();
@@ -71,9 +80,16 @@ private:
     // Main loop
     void mainLoop();
 
+    // Input handling
+    void processInput();
+
     // Cleanup
     void cleanup();
 
     // Callbacks
     static void framebufferResizeCallback(GLFWwindow* window, int width, int height);
+    static void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods);
+    static void cursorPosCallback(GLFWwindow* window, double xpos, double ypos);
+    static void scrollCallback(GLFWwindow* window, double xoffset, double yoffset);
+    static void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods);
 };

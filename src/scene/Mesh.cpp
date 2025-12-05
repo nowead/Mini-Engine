@@ -1,5 +1,6 @@
 #include "Mesh.hpp"
 #include "src/loaders/OBJLoader.hpp"
+#include "src/loaders/FDFLoader.hpp"
 
 Mesh::Mesh(VulkanDevice& device, CommandManager& commandManager)
     : device(device), commandManager(commandManager) {
@@ -18,6 +19,13 @@ Mesh::Mesh(VulkanDevice& device, CommandManager& commandManager,
 
 void Mesh::loadFromOBJ(const std::string& filename) {
     OBJLoader::load(filename, vertices, indices);
+    createBuffers();
+}
+
+void Mesh::loadFromFDF(const std::string& filename) {
+    auto fdfData = FDFLoader::load(filename);
+    vertices = std::move(fdfData.vertices);
+    indices = std::move(fdfData.indices);
     createBuffers();
 }
 

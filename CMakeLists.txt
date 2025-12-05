@@ -52,9 +52,13 @@ add_executable(vulkanGLFW
     src/scene/Mesh.hpp
     src/scene/SceneManager.cpp
     src/scene/SceneManager.hpp
+    src/scene/Camera.cpp
+    src/scene/Camera.hpp
     # Loader classes
     src/loaders/OBJLoader.cpp
     src/loaders/OBJLoader.hpp
+    src/loaders/FDFLoader.cpp
+    src/loaders/FDFLoader.hpp
     # Utility headers (header-only)
     src/utils/VulkanCommon.hpp
     src/utils/Vertex.hpp

@@ -55,6 +55,13 @@ public:
     void loadFromOBJ(const std::string& filename);
 
     /**
+     * @brief Load mesh from FDF file
+     * @param filename Path to FDF file
+     * @throws std::runtime_error if loading fails
+     */
+    void loadFromFDF(const std::string& filename);
+
+    /**
      * @brief Set mesh data and create GPU buffers
      * @param vertices Vertex data
      * @param indices Index data

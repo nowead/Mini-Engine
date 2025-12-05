@@ -4,9 +4,13 @@
 
 Renderer::Renderer(GLFWwindow* window,
                    const std::vector<const char*>& validationLayers,
-                   bool enableValidation)
+                   bool enableValidation,
+                   bool useFdfMode)
     : window(window),
-      startTime(std::chrono::high_resolution_clock::now()) {
+      startTime(std::chrono::high_resolution_clock::now()),
+      viewMatrix(glm::mat4(1.0f)),
+      projectionMatrix(glm::mat4(1.0f)),
+      fdfMode(useFdfMode) {
 
     // Create core device
     device = std::make_unique<VulkanDevice>(validationLayers, enableValidation);
@@ -17,6 +21,10 @@ Renderer::Renderer(GLFWwindow* window,
     swapchain = std::make_unique<VulkanSwapchain>(*device, window);
     createDepthResources();
 
+    // Select shader and topology based on mode
+    std::string shaderPath = fdfMode ? "shaders/fdf.spv" : "shaders/slang.spv";
+    TopologyMode topology = fdfMode ? TopologyMode::LineList : TopologyMode::TriangleList;
+
     // Platform-specific pipeline creation
 #ifdef __linux__
     // Linux: Create render pass and framebuffers for traditional rendering
@@ -26,11 +34,11 @@ Renderer::Renderer(GLFWwindow* window,
 
     // Create pipeline with render pass
     pipeline = std::make_unique<VulkanPipeline>(
-        *device, *swapchain, "shaders/slang.spv", findDepthFormat(), swapchain->getRenderPass());
+        *device, *swapchain, shaderPath, findDepthFormat(), swapchain->getRenderPass(), topology);
 #else
     // macOS/Windows: Create pipeline with dynamic rendering
     pipeline = std::make_unique<VulkanPipeline>(
-        *device, *swapchain, "shaders/slang.spv", findDepthFormat());
+        *device, *swapchain, shaderPath, findDepthFormat(), nullptr, topology);
 #endif
 
     // Create command and sync managers
@@ -47,6 +55,11 @@ Renderer::Renderer(GLFWwindow* window,
     createUniformBuffers();
     createDescriptorPool();
     createDescriptorSets();
+
+    // Initialize descriptors (FDF mode doesn't need texture)
+    if (fdfMode) {
+        updateDescriptorSets();
+    }
 }
 
 void Renderer::loadModel(const std::string& modelPath) {
@@ -127,6 +140,11 @@ void Renderer::handleFramebufferResize() {
     recreateSwapchain();
 }
 
+void Renderer::updateCamera(const glm::mat4& view, const glm::mat4& projection) {
+    viewMatrix = view;
+    projectionMatrix = projection;
+}
+
 void Renderer::createDepthResources() {
     vk::Format depthFormat = findDepthFormat();
 
@@ -181,42 +199,64 @@ void Renderer::createDescriptorSets() {
 }
 
 void Renderer::updateDescriptorSets() {
-    // Get texture from ResourceManager (may return nullptr if not loaded)
-    VulkanImage* textureImage = resourceManager->getTexture("textures/viking_room.png");
-    if (!textureImage) {
-        return;  // Texture not loaded yet
-    }
+    if (fdfMode) {
+        // FDF mode: Only update uniform buffer (no texture)
+        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+            vk::DescriptorBufferInfo bufferInfo{
+                .buffer = uniformBuffers[i]->getHandle(),
+                .offset = 0,
+                .range = sizeof(UniformBufferObject)
+            };
 
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        vk::DescriptorBufferInfo bufferInfo{
-            .buffer = uniformBuffers[i]->getHandle(),
-            .offset = 0,
-            .range = sizeof(UniformBufferObject)
-        };
-        vk::DescriptorImageInfo imageInfo{
-            .sampler = textureImage->getSampler(),
-            .imageView = textureImage->getImageView(),
-            .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal
-        };
-        std::array descriptorWrites{
-            vk::WriteDescriptorSet{
+            vk::WriteDescriptorSet descriptorWrite{
                 .dstSet = descriptorSets[i],
                 .dstBinding = 0,
                 .dstArrayElement = 0,
                 .descriptorCount = 1,
                 .descriptorType = vk::DescriptorType::eUniformBuffer,
                 .pBufferInfo = &bufferInfo
-            },
-            vk::WriteDescriptorSet{
-                .dstSet = descriptorSets[i],
-                .dstBinding = 1,
-                .dstArrayElement = 0,
-                .descriptorCount = 1,
-                .descriptorType = vk::DescriptorType::eCombinedImageSampler,
-                .pImageInfo = &imageInfo
-            }
-        };
-        device->getDevice().updateDescriptorSets(descriptorWrites, {});
+            };
+
+            device->getDevice().updateDescriptorSets(descriptorWrite, {});
+        }
+    } else {
+        // OBJ mode: Update both uniform buffer and texture
+        VulkanImage* textureImage = resourceManager->getTexture("textures/viking_room.png");
+        if (!textureImage) {
+            return;  // Texture not loaded yet
+        }
+
+        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+            vk::DescriptorBufferInfo bufferInfo{
+                .buffer = uniformBuffers[i]->getHandle(),
+                .offset = 0,
+                .range = sizeof(UniformBufferObject)
+            };
+            vk::DescriptorImageInfo imageInfo{
+                .sampler = textureImage->getSampler(),
+                .imageView = textureImage->getImageView(),
+                .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal
+            };
+            std::array descriptorWrites{
+                vk::WriteDescriptorSet{
+                    .dstSet = descriptorSets[i],
+                    .dstBinding = 0,
+                    .dstArrayElement = 0,
+                    .descriptorCount = 1,
+                    .descriptorType = vk::DescriptorType::eUniformBuffer,
+                    .pBufferInfo = &bufferInfo
+                },
+                vk::WriteDescriptorSet{
+                    .dstSet = descriptorSets[i],
+                    .dstBinding = 1,
+                    .dstArrayElement = 0,
+                    .descriptorCount = 1,
+                    .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+                    .pImageInfo = &imageInfo
+                }
+            };
+            device->getDevice().updateDescriptorSets(descriptorWrites, {});
+        }
     }
 }
 
@@ -369,17 +409,10 @@ void Renderer::recordCommandBuffer(uint32_t imageIndex) {
 }
 
 void Renderer::updateUniformBuffer(uint32_t currentImage) {
-    auto currentTime = std::chrono::high_resolution_clock::now();
-    float time = std::chrono::duration<float>(currentTime - startTime).count();
-
     UniformBufferObject ubo{};
-    ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-    ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-    ubo.proj = glm::perspective(
-        glm::radians(45.0f),
-        static_cast<float>(swapchain->getExtent().width) / static_cast<float>(swapchain->getExtent().height),
-        0.1f, 10.0f);
-    ubo.proj[1][1] *= -1;
+    ubo.model = glm::mat4(1.0f);  // Identity matrix (no model transformation)
+    ubo.view = viewMatrix;
+    ubo.proj = projectionMatrix;
 
     memcpy(uniformBuffers[currentImage]->getMappedData(), &ubo, sizeof(ubo));
 }

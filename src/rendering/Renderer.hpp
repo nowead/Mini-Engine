@@ -40,10 +40,12 @@ public:
      * @param window GLFW window for surface creation
      * @param validationLayers Validation layers to enable
      * @param enableValidation Whether to enable validation
+     * @param useFdfMode Use FDF wireframe mode (default: false)
      */
     Renderer(GLFWwindow* window,
              const std::vector<const char*>& validationLayers,
-             bool enableValidation);
+             bool enableValidation,
+             bool useFdfMode = false);
 
     ~Renderer() = default;
 
@@ -80,6 +82,13 @@ public:
      */
     void handleFramebufferResize();
 
+    /**
+     * @brief Update camera matrices
+     * @param view View matrix
+     * @param projection Projection matrix
+     */
+    void updateCamera(const glm::mat4& view, const glm::mat4& projection);
+
 private:
     // Window reference
     GLFWwindow* window;
@@ -111,6 +120,13 @@ private:
 
     // For uniform buffer animation
     std::chrono::time_point<std::chrono::high_resolution_clock> startTime;
+
+    // Camera matrices
+    glm::mat4 viewMatrix;
+    glm::mat4 projectionMatrix;
+
+    // Mode flag
+    bool fdfMode;
 
     // Private initialization methods
     void createDepthResources();

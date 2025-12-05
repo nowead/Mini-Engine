@@ -33,8 +33,8 @@ public:
     SceneManager& operator=(SceneManager&&) = delete;
 
     /**
-     * @brief Load mesh from OBJ file
-     * @param path Path to OBJ file
+     * @brief Load mesh from file (supports .obj and .fdf extensions)
+     * @param path Path to mesh file
      * @return Pointer to loaded mesh (owned by SceneManager)
      */
     Mesh* loadMesh(const std::string& path);

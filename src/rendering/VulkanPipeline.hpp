@@ -6,6 +6,14 @@
 #include <string>
 
 /**
+ * @brief Primitive topology mode for pipeline
+ */
+enum class TopologyMode {
+    TriangleList,
+    LineList
+};
+
+/**
  * @brief Manages Vulkan graphics pipeline and associated layouts
  *
  * Handles descriptor set layout, pipeline layout, and graphics pipeline creation
@@ -20,13 +28,15 @@ public:
      * @param shaderPath Path to compiled shader SPIR-V file
      * @param depthFormat Depth buffer format
      * @param renderPass Render pass (Linux only, ignored on other platforms)
+     * @param topology Primitive topology (default: TriangleList)
      */
     VulkanPipeline(
         VulkanDevice& device,
         const VulkanSwapchain& swapchain,
         const std::string& shaderPath,
         vk::Format depthFormat,
-        vk::RenderPass renderPass = nullptr);
+        vk::RenderPass renderPass = nullptr,
+        TopologyMode topology = TopologyMode::TriangleList);
 
     ~VulkanPipeline() = default;
 
@@ -57,7 +67,8 @@ private:
         const std::string& shaderPath,
         vk::Format colorFormat,
         vk::Format depthFormat,
-        vk::RenderPass renderPass);
+        vk::RenderPass renderPass,
+        TopologyMode topology);
 
     vk::raii::ShaderModule createShaderModule(const std::vector<char>& code);
 };
