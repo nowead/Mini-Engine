@@ -22,8 +22,8 @@ void Mesh::loadFromOBJ(const std::string& filename) {
     createBuffers();
 }
 
-void Mesh::loadFromFDF(const std::string& filename) {
-    auto fdfData = FDFLoader::load(filename);
+void Mesh::loadFromFDF(const std::string& filename, float zScale) {
+    auto fdfData = FDFLoader::load(filename, zScale);
     vertices = std::move(fdfData.vertices);
     indices = std::move(fdfData.indices);
     createBuffers();
@@ -100,4 +100,37 @@ void Mesh::draw(const vk::raii::CommandBuffer& commandBuffer) const {
     }
 
     commandBuffer.drawIndexed(static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
+}
+
+glm::vec3 Mesh::getBoundingBoxCenter() const {
+    if (vertices.empty()) {
+        return glm::vec3(0.0f, 0.0f, 0.0f);
+    }
+
+    glm::vec3 minBounds(std::numeric_limits<float>::max());
+    glm::vec3 maxBounds(std::numeric_limits<float>::lowest());
+
+    for (const auto& vertex : vertices) {
+        minBounds = glm::min(minBounds, vertex.pos);
+        maxBounds = glm::max(maxBounds, vertex.pos);
+    }
+
+    return (minBounds + maxBounds) * 0.5f;
+}
+
+float Mesh::getBoundingBoxRadius() const {
+    if (vertices.empty()) {
+        return 0.0f;
+    }
+
+    glm::vec3 minBounds(std::numeric_limits<float>::max());
+    glm::vec3 maxBounds(std::numeric_limits<float>::lowest());
+
+    for (const auto& vertex : vertices) {
+        minBounds = glm::min(minBounds, vertex.pos);
+        maxBounds = glm::max(maxBounds, vertex.pos);
+    }
+
+    // Return half of the diagonal (radius of bounding sphere)
+    return glm::length(maxBounds - minBounds) * 0.5f;
 }

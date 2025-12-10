@@ -110,11 +110,12 @@ void ImGuiManager::newFrame() {
     ImGui::NewFrame();
 }
 
-void ImGuiManager::renderUI(Camera& camera, bool isFdfMode,
+void ImGuiManager::renderUI(Camera& camera, bool isFdfMode, float zScale,
                             std::function<void()> onModeToggle,
                             std::function<void(const std::string&)> onFileLoad) {
-    // Main control window
-    ImGui::Begin("FdF Controls", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+    // Main control window - fixed to top-left corner
+    ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_Always);
+    ImGui::Begin("FdF Controls", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove);
 
     ImGui::Text("Vulkan FdF Wireframe Visualizer");
     ImGui::Separator();
@@ -150,6 +151,15 @@ void ImGuiManager::renderUI(Camera& camera, bool isFdfMode,
             camera.reset();
         }
 
+        // Display Z-scale
+        if (isFdfMode) {
+            ImGui::Separator();
+            ImGui::Text("Z-Axis Scale:");
+            ImGui::Text("  Scale: %.2f", zScale);
+            ImGui::TextDisabled("  (Q/E keys to adjust)");
+        }
+
+        ImGui::Separator();
         ImGui::Text("Speed Controls:");
         ImGui::SliderFloat("Move Speed", &moveSpeed, 0.1f, 5.0f);
         ImGui::SliderFloat("Rotate Speed", &rotateSpeed, 0.1f, 2.0f);
@@ -182,6 +192,7 @@ void ImGuiManager::renderUI(Camera& camera, bool isFdfMode,
         ImGui::BulletText("Left Mouse + Drag: Rotate camera");
         ImGui::BulletText("Mouse Wheel: Zoom in/out");
         ImGui::BulletText("W/A/S/D: Move camera");
+        ImGui::BulletText("Q/E: Adjust Z-axis scale (FDF mode)");
         ImGui::BulletText("P or I: Toggle projection");
         ImGui::BulletText("R: Reset camera");
         ImGui::BulletText("ESC: Exit");

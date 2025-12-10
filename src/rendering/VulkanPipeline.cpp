@@ -122,9 +122,11 @@ void VulkanPipeline::createGraphicsPipeline(
     };
 
     // Depth stencil
+    // For wireframe: disable depth write to see all lines through the mesh
+    vk::Bool32 depthWrite = topology == TopologyMode::LineList ? vk::False : vk::True;
     vk::PipelineDepthStencilStateCreateInfo depthStencil{
         .depthTestEnable = vk::True,
-        .depthWriteEnable = vk::True,
+        .depthWriteEnable = depthWrite,
         .depthCompareOp = vk::CompareOp::eLess,
         .depthBoundsTestEnable = vk::False,
         .stencilTestEnable = vk::False

@@ -96,6 +96,29 @@ public:
     bool isFdfMode() const { return fdfMode; }
 
     /**
+     * @brief Adjust Z-scale for FDF visualization
+     * @param delta Change in Z-scale (can be positive or negative)
+     */
+    void adjustZScale(float delta);
+
+    /**
+     * @brief Get current Z-scale value
+     */
+    float getZScale() const { return zScale; }
+
+    /**
+     * @brief Get mesh bounding box center (for camera targeting)
+     * @return Center of primary mesh's bounding box
+     */
+    glm::vec3 getMeshCenter() const;
+
+    /**
+     * @brief Get mesh bounding box radius (for camera far plane calculation)
+     * @return Radius of primary mesh's bounding sphere
+     */
+    float getMeshRadius() const;
+
+    /**
      * @brief Get Vulkan device (for external components like ImGui)
      */
     VulkanDevice& getDevice() { return *device; }
@@ -148,6 +171,10 @@ private:
 
     // Mode flag
     bool fdfMode;
+
+    // FDF Z-scale factor
+    float zScale = 1.0f;
+    std::string currentModelPath;
 
     // Private initialization methods
     void createDepthResources();

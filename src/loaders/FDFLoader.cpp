@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <cmath>
 
-FDFLoader::FDFData FDFLoader::load(const std::string& filename) {
+FDFLoader::FDFData FDFLoader::load(const std::string& filename, float zScale) {
     std::ifstream file(filename);
     if (!file.is_open()) {
         throw std::runtime_error("Failed to open FDF file: " + filename);
@@ -71,7 +71,7 @@ FDFLoader::FDFData FDFLoader::load(const std::string& filename) {
     // Calculate scaling factors for better visualization
     float scaleX = 1.0f;
     float scaleY = 1.0f;
-    float scaleZ = (data.maxHeight - data.minHeight) > 0.0f ? 1.0f / (data.maxHeight - data.minHeight) : 1.0f;
+    float scaleZ = ((data.maxHeight - data.minHeight) > 0.0f ? 1.0f / (data.maxHeight - data.minHeight) : 1.0f) * zScale;
 
     for (int y = 0; y < data.height; ++y) {
         for (int x = 0; x < data.width; ++x) {

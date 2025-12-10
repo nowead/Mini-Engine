@@ -57,9 +57,10 @@ public:
     /**
      * @brief Load mesh from FDF file
      * @param filename Path to FDF file
+     * @param zScale Scale factor for Z-axis (default 1.0)
      * @throws std::runtime_error if loading fails
      */
-    void loadFromFDF(const std::string& filename);
+    void loadFromFDF(const std::string& filename, float zScale = 1.0f);
 
     /**
      * @brief Set mesh data and create GPU buffers
@@ -94,6 +95,18 @@ public:
      * @brief Check if mesh has data
      */
     bool hasData() const { return !vertices.empty() && !indices.empty(); }
+
+    /**
+     * @brief Get bounding box center of the mesh
+     * @return Center point of the mesh's bounding box
+     */
+    glm::vec3 getBoundingBoxCenter() const;
+
+    /**
+     * @brief Get bounding box radius (half of diagonal)
+     * @return Radius from center to corner of bounding box
+     */
+    float getBoundingBoxRadius() const;
 
 private:
     VulkanDevice& device;

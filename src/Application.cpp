@@ -3,6 +3,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <functional>
+#include <chrono>
 
 Application::Application() {
     initWindow();
@@ -78,6 +79,7 @@ void Application::mainLoop() {
             imguiManager->renderUI(
                 *camera,
                 renderer->isFdfMode(),
+                renderer->getZScale(),
                 [this]() { /* Mode toggle - would require renderer recreation */ },
                 [this](const std::string& path) {
                     renderer->loadModel(path);
@@ -114,6 +116,23 @@ void Application::processInput() {
     }
     if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
         camera->translate(moveSpeed, 0.0f);
+    }
+
+    // Q/E for Z-scale adjustment (FDF mode only)
+    static auto lastZScaleAdjust = std::chrono::high_resolution_clock::now();
+    auto now = std::chrono::high_resolution_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastZScaleAdjust).count();
+
+    // Throttle Z-scale adjustments to avoid too frequent reloads (250ms cooldown)
+    if (elapsed > 250) {
+        if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) {
+            renderer->adjustZScale(-0.1f);
+            lastZScaleAdjust = now;
+        }
+        if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) {
+            renderer->adjustZScale(0.1f);
+            lastZScaleAdjust = now;
+        }
     }
 }
 

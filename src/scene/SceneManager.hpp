@@ -35,9 +35,10 @@ public:
     /**
      * @brief Load mesh from file (supports .obj and .fdf extensions)
      * @param path Path to mesh file
+     * @param zScale Scale factor for Z-axis in FDF files (default 1.0)
      * @return Pointer to loaded mesh (owned by SceneManager)
      */
-    Mesh* loadMesh(const std::string& path);
+    Mesh* loadMesh(const std::string& path, float zScale = 1.0f);
 
     /**
      * @brief Get primary mesh (for simple single-mesh scenes)

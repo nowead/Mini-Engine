@@ -4,7 +4,7 @@
 SceneManager::SceneManager(VulkanDevice& device, CommandManager& commandManager)
     : device(device), commandManager(commandManager) {}
 
-Mesh* SceneManager::loadMesh(const std::string& path) {
+Mesh* SceneManager::loadMesh(const std::string& path, float zScale) {
     auto mesh = std::make_unique<Mesh>(device, commandManager);
 
     // Determine file type by extension
@@ -17,7 +17,7 @@ Mesh* SceneManager::loadMesh(const std::string& path) {
     }
 
     if (extension == ".fdf") {
-        mesh->loadFromFDF(path);
+        mesh->loadFromFDF(path, zScale);
     } else if (extension == ".obj") {
         mesh->loadFromOBJ(path);
     } else {

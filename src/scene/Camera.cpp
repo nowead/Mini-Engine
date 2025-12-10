@@ -9,13 +9,13 @@ Camera::Camera(float aspectRatio, ProjectionMode mode)
       up(0.0f, 1.0f, 0.0f),
       yaw(glm::radians(45.0f)),
       pitch(glm::radians(-30.0f)),
-      distance(10.0f),
+      distance(30.0f),  // Larger initial distance for better view of maps
       projectionMode(mode),
       aspectRatio(aspectRatio),
       fov(glm::radians(45.0f)),
       nearPlane(0.1f),
-      farPlane(100.0f),
-      orthoSize(5.0f) {
+      farPlane(1000.0f),  // Larger far plane to render distant objects
+      orthoSize(10.0f) {  // Larger ortho size for isometric view
     updateCameraVectors();
 }
 
@@ -69,12 +69,12 @@ void Camera::zoom(float delta) {
     if (projectionMode == ProjectionMode::Perspective) {
         // Move camera closer/farther from target
         distance -= delta * 0.5f;
-        distance = std::clamp(distance, 1.0f, 50.0f);
+        distance = std::clamp(distance, 1.0f, 200.0f);  // Allow zooming out much further
         updateCameraVectors();
     } else {
         // Change orthographic size
         orthoSize -= delta * 0.1f;
-        orthoSize = std::clamp(orthoSize, 0.5f, 20.0f);
+        orthoSize = std::clamp(orthoSize, 1.0f, 100.0f);  // Allow much wider isometric view
     }
 }
 
@@ -100,8 +100,8 @@ void Camera::reset() {
     up = glm::vec3(0.0f, 1.0f, 0.0f);
     yaw = glm::radians(45.0f);
     pitch = glm::radians(-30.0f);
-    distance = 10.0f;
-    orthoSize = 5.0f;
+    distance = 30.0f;  // Match initial distance
+    orthoSize = 10.0f;  // Match initial ortho size
     updateCameraVectors();
 }
 

@@ -30,7 +30,7 @@ public:
     ImGuiManager& operator=(const ImGuiManager&) = delete;
 
     void newFrame();
-    void renderUI(Camera& camera, bool isFdfMode,
+    void renderUI(Camera& camera, bool isFdfMode, float zScale,
                   std::function<void()> onModeToggle,
                   std::function<void(const std::string&)> onFileLoad);
     void render(const vk::raii::CommandBuffer& commandBuffer, uint32_t imageIndex);

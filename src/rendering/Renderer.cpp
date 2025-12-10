@@ -71,7 +71,8 @@ Renderer::~Renderer() {
 }
 
 void Renderer::loadModel(const std::string& modelPath) {
-    sceneManager->loadMesh(modelPath);  // Delegates to SceneManager
+    currentModelPath = modelPath;
+    sceneManager->loadMesh(modelPath, zScale);  // Delegates to SceneManager
 }
 
 void Renderer::loadTexture(const std::string& texturePath) {
@@ -159,6 +160,38 @@ void Renderer::handleFramebufferResize() {
 void Renderer::updateCamera(const glm::mat4& view, const glm::mat4& projection) {
     viewMatrix = view;
     projectionMatrix = projection;
+}
+
+void Renderer::adjustZScale(float delta) {
+    if (!fdfMode || currentModelPath.empty()) {
+        return;  // Only works in FDF mode with a loaded model
+    }
+
+    zScale += delta;
+    zScale = std::max(0.1f, std::min(zScale, 50.0f));  // Clamp between 0.1 and 10.0
+
+    // Wait for device idle before reloading
+    device->getDevice().waitIdle();
+
+    // Clear existing meshes and reload with new Z-scale
+    sceneManager = std::make_unique<SceneManager>(*device, *commandManager);
+    sceneManager->loadMesh(currentModelPath, zScale);
+}
+
+glm::vec3 Renderer::getMeshCenter() const {
+    auto* mesh = sceneManager->getPrimaryMesh();
+    if (mesh) {
+        return mesh->getBoundingBoxCenter();
+    }
+    return glm::vec3(0.0f, 0.0f, 0.0f);
+}
+
+float Renderer::getMeshRadius() const {
+    auto* mesh = sceneManager->getPrimaryMesh();
+    if (mesh) {
+        return mesh->getBoundingBoxRadius();
+    }
+    return 0.0f;
 }
 
 void Renderer::createDepthResources() {

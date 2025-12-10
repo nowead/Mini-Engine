@@ -31,10 +31,11 @@ public:
     /**
      * @brief Load FDF file and generate wireframe mesh
      * @param filename Path to .fdf file
+     * @param zScale Scale factor for Z-axis (default 1.0)
      * @return FDFData containing vertices and line indices
      * @throws std::runtime_error if file parsing fails
      */
-    static FDFData load(const std::string& filename);
+    static FDFData load(const std::string& filename, float zScale = 1.0f);
 
 private:
     /**
