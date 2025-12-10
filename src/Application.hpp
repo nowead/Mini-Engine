@@ -49,7 +49,7 @@ private:
     static constexpr const char* WINDOW_TITLE = "Vulkan";
 
     // Asset paths - FDF mode
-    static constexpr const char* MODEL_PATH = "models/test.fdf";
+    static constexpr const char* MODEL_PATH = "models/mars.fdf";
     static constexpr const char* TEXTURE_PATH = "textures/viking_room.png";
     static constexpr bool USE_FDF_MODE = true;  // Set to false for OBJ models
     static constexpr bool ENABLE_IMGUI = true;  // Enable ImGui UI
