@@ -5,7 +5,7 @@
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
 ![Vulkan](https://img.shields.io/badge/Vulkan-1.3-red.svg)
 ![CMake](https://img.shields.io/badge/CMake-3.28+-green.svg)
-![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)
+![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS-lightgrey.svg)
 
 ---
 
