@@ -664,7 +664,7 @@ If none of these solutions work:
 1. **Check Documentation:**
    - [Build Guide](BUILD_GUIDE.md)
    - [Cross-Platform Guide](CROSS_PLATFORM_RENDERING.md)
-   - [Refactoring Docs](refactoring/)
+   - [Refactoring Docs](refactoring/monolith-to-layered/)
 
 2. **Open an Issue:**
    - Include OS, GPU, Vulkan SDK version

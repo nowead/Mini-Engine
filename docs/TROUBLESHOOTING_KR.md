@@ -663,7 +663,7 @@ static constexpr bool ENABLE_VALIDATION = true;
 1. **문서 확인:**
    - [빌드 가이드](BUILD_GUIDE.md)
    - [크로스 플랫폼 가이드](CROSS_PLATFORM_RENDERING.md)
-   - [리팩토링 문서](refactoring/)
+   - [리팩토링 문서](refactoring/monolith-to-layered/)
 
 2. **이슈 열기:**
    - OS, GPU, Vulkan SDK 버전 포함
