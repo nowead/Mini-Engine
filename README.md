@@ -9,7 +9,7 @@
 
 ---
 
-## Korean Summary (한국어 요약)
+## Korean Summary
 
 **프로젝트 목표**: Vulkan Tutorial을 학습하며 만든 렌더러를 확장 가능한 엔진 아키텍처로 발전
 
@@ -19,7 +19,6 @@
 - 체계적인 리팩토링 과정 문서화
 
 **현재 기능**: FDF Wireframe, OBJ Model Loading, ImGui UI, Camera Controls  
-**예정 기능**: Ray Tracing (VK_KHR_ray_tracing_pipeline)
 
 **상세 문서**: [docs/](docs/) 폴더 참고
 
