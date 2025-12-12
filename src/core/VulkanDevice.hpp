@@ -66,19 +66,10 @@ private:
 
 	// Helper functions
 	std::vector<const char*> getRequiredExtensions() const;
-#ifdef __linux__
-	// Linux: Use C API types for compatibility with llvmpipe
-	static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
-		VkDebugUtilsMessageSeverityFlagBitsEXT severity,
-		VkDebugUtilsMessageTypeFlagsEXT type,
-		const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
-		void* pUserData);
-#else
-	// macOS/Windows: Use C++ Vulkan-Hpp types
+	// Use C++ Vulkan-Hpp types for all platforms
 	static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
 		vk::DebugUtilsMessageSeverityFlagBitsEXT severity,
 		vk::DebugUtilsMessageTypeFlagsEXT type,
 		const vk::DebugUtilsMessengerCallbackDataEXT* pCallbackData,
 		void* pUserData);
-#endif
 };

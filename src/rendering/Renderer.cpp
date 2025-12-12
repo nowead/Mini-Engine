@@ -354,7 +354,8 @@ void Renderer::recordCommandBuffer(uint32_t imageIndex) {
         primaryMesh->draw(commandManager->getCommandBuffer(currentFrame));
     }
 
-    commandManager->getCommandBuffer(currentFrame).endRenderPass();
+    // Note: Render pass is NOT ended here on Linux - ImGui will render in the same pass
+    // endRenderPass() will be called after ImGui rendering
 #else
     // macOS/Windows: Use dynamic rendering (Vulkan 1.3)
     // Transition swapchain image to COLOR_ATTACHMENT_OPTIMAL

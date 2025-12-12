@@ -70,7 +70,7 @@ void ImGuiManager::initImGui(GLFWwindow* window) {
 
 #ifdef __linux__
     // Linux: Use render pass
-    initInfo.RenderPass = static_cast<VkRenderPass>(*swapchain.getRenderPass());
+    initInfo.RenderPass = (VkRenderPass)swapchain.getRenderPass();
     initInfo.UseDynamicRendering = false;
 #else
     // macOS/Windows: Use dynamic rendering (Vulkan 1.3)
@@ -225,6 +225,9 @@ void ImGuiManager::render(const vk::raii::CommandBuffer& commandBuffer, uint32_t
     // Linux: ImGui renders within the main render pass
     VkCommandBuffer vkCmdBuffer = static_cast<VkCommandBuffer>(*commandBuffer);
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), vkCmdBuffer);
+
+    // End the render pass after ImGui rendering (started in Renderer::recordCommandBuffer)
+    commandBuffer.endRenderPass();
 #else
     // macOS/Windows: Use dynamic rendering for ImGui
     vk::RenderingAttachmentInfo colorAttachment{

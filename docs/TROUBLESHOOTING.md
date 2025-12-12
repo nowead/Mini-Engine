@@ -105,58 +105,178 @@ clang++ --version
 
 **Error:**
 ```
-error: cannot initialize a member subobject of type 'PFN_DebugUtilsMessengerCallbackEXT'
+error: cannot initialize a member subobject of type 'vk::PFN_DebugUtilsMessengerCallbackEXT'
 with an rvalue of type 'VkBool32 (*)(VkDebugUtilsMessageSeverityFlagBitsEXT, ...)'
-type mismatch at 1st parameter ('DebugUtilsMessageSeverityFlagBitsEXT' vs 'VkDebugUtilsMessageSeverityFlagBitsEXT')
+type mismatch at 1st parameter ('vk::DebugUtilsMessageSeverityFlagBitsEXT' vs 'VkDebugUtilsMessageSeverityFlagBitsEXT')
 ```
 
 **Cause:**
-- Vulkan-Hpp on macOS expects C++ wrapper types (`vk::`)
-- Linux with llvmpipe requires C API types (`Vk`)
+- Vulkan-Hpp (C++ wrapper) requires C++ wrapper types (`vk::`) on all platforms
 
 **Solution:**
 
-Use platform-specific conditional compilation:
+Use C++ Vulkan-Hpp types for all platforms:
 
 **VulkanDevice.hpp:**
 ```cpp
-#ifdef __linux__
-    // Linux: Use C API types
-    static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
-        VkDebugUtilsMessageSeverityFlagBitsEXT severity,
-        VkDebugUtilsMessageTypeFlagsEXT type,
-        const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
-        void* pUserData);
-#else
-    // macOS/Windows: Use C++ Vulkan-Hpp types
-    static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
-        vk::DebugUtilsMessageSeverityFlagBitsEXT severity,
-        vk::DebugUtilsMessageTypeFlagsEXT type,
-        const vk::DebugUtilsMessengerCallbackDataEXT* pCallbackData,
-        void* pUserData);
-#endif
+// Use C++ Vulkan-Hpp types for all platforms
+static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
+    vk::DebugUtilsMessageSeverityFlagBitsEXT severity,
+    vk::DebugUtilsMessageTypeFlagsEXT type,
+    const vk::DebugUtilsMessengerCallbackDataEXT* pCallbackData,
+    void* pUserData);
 ```
 
 **VulkanDevice.cpp:**
 ```cpp
-#ifdef __linux__
-VKAPI_ATTR VkBool32 VKAPI_CALL VulkanDevice::debugCallback(...) {
-    if (severity & (VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT |
-                    VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)) {
-        std::cerr << "validation layer: " << pCallbackData->pMessage << std::endl;
-    }
-    return VK_FALSE;
-}
-#else
-VKAPI_ATTR VkBool32 VKAPI_CALL VulkanDevice::debugCallback(...) {
+// Use C++ Vulkan-Hpp types for all platforms
+VKAPI_ATTR VkBool32 VKAPI_CALL VulkanDevice::debugCallback(
+    vk::DebugUtilsMessageSeverityFlagBitsEXT severity,
+    vk::DebugUtilsMessageTypeFlagsEXT type,
+    const vk::DebugUtilsMessengerCallbackDataEXT* pCallbackData,
+    void*)
+{
     if (static_cast<uint32_t>(severity) & (VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT |
                                            VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)) {
-        std::cerr << "validation layer: " << pCallbackData->pMessage << std::endl;
+        std::cerr << "validation layer: type 0x" << std::hex << static_cast<uint32_t>(type)
+                  << std::dec << " msg: " << pCallbackData->pMessage << std::endl;
     }
     return VK_FALSE;
 }
+```
+
+**Note:** Vulkan-Hpp requires C++ types even on Linux with llvmpipe.
+
+---
+
+### ImGui RenderPass Casting Error
+
+**Error:**
+```
+error: cannot cast from type 'struct VkRenderPass_T' to pointer type 'VkRenderPass' (aka 'VkRenderPass_T *')
+```
+
+**Cause:**
+- `swapchain.getRenderPass()` already returns `vk::RenderPass` (value type)
+- Adding dereference (`*`) attempts to cast the struct to a pointer, causing an error
+
+**Solution:**
+
+Remove unnecessary dereference and use C-style cast:
+
+**Incorrect Code:**
+```cpp
+// ❌ Wrong: getRenderPass() already returns a value, don't dereference
+initInfo.RenderPass = static_cast<VkRenderPass>(*swapchain.getRenderPass());
+```
+
+**Correct Code:**
+```cpp
+// ✅ Correct: Use C-style cast without dereference
+initInfo.RenderPass = (VkRenderPass)swapchain.getRenderPass();
+```
+
+**Note:** When converting from `vk::RenderPass` to `VkRenderPass`, C-style cast `(VkRenderPass)` is safer than `static_cast`.
+
+---
+
+### Segmentation Fault with ImGui Rendering on Linux
+
+**Error:**
+```
+validation layer: VUID-vkCmdDrawIndexed-renderpass
+vkCmdDrawIndexed(): Rendering commands must occur inside a render pass.
+Segmentation fault (core dumped)
+```
+
+**Cause:**
+
+- Linux uses traditional render pass, but `Renderer::recordCommandBuffer` starts the render pass, renders the main mesh, then **immediately ends it**
+- ImGui rendering is called outside the render pass, causing validation errors and segfault
+- macOS/Windows use dynamic rendering, so each rendering stage can start/end its own rendering session independently
+
+**Solution:**
+
+On Linux, ImGui must render within the same render pass:
+
+**1. Renderer.cpp - Don't end render pass immediately:**
+
+**Incorrect Code:**
+```cpp
+// src/rendering/Renderer.cpp
+#ifdef __linux__
+    commandManager->getCommandBuffer(currentFrame).beginRenderPass(renderPassInfo, vk::SubpassContents::eInline);
+
+    // Draw main mesh
+    primaryMesh->draw(commandManager->getCommandBuffer(currentFrame));
+
+    // ❌ Problem: Ending render pass here means ImGui renders outside the pass
+    commandManager->getCommandBuffer(currentFrame).endRenderPass();
 #endif
 ```
+
+**Correct Code:**
+```cpp
+// src/rendering/Renderer.cpp
+#ifdef __linux__
+    commandManager->getCommandBuffer(currentFrame).beginRenderPass(renderPassInfo, vk::SubpassContents::eInline);
+
+    // Draw main mesh
+    primaryMesh->draw(commandManager->getCommandBuffer(currentFrame));
+
+    // ✅ Correct: Keep render pass open - ImGui will render in the same pass
+    // Note: endRenderPass() will be called after ImGui rendering
+#endif
+```
+
+**2. ImGuiManager.cpp - End render pass after ImGui rendering:**
+
+**Incorrect Code:**
+```cpp
+// src/ui/ImGuiManager.cpp
+#ifdef __linux__
+    VkCommandBuffer vkCmdBuffer = static_cast<VkCommandBuffer>(*commandBuffer);
+    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), vkCmdBuffer);
+    // ❌ Problem: Render pass never ends
+#endif
+```
+
+**Correct Code:**
+```cpp
+// src/ui/ImGuiManager.cpp
+#ifdef __linux__
+    VkCommandBuffer vkCmdBuffer = static_cast<VkCommandBuffer>(*commandBuffer);
+    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), vkCmdBuffer);
+
+    // ✅ Correct: End render pass after ImGui rendering
+    commandBuffer.endRenderPass();
+#endif
+```
+
+**Rendering Flow Comparison:**
+
+**Incorrect Flow (Causes Segfault):**
+```
+1. beginRenderPass()
+2. Draw main mesh
+3. endRenderPass()          ← Ended too early
+4. ImGui draw commands      ← Executes outside render pass → CRASH!
+5. end command buffer
+```
+
+**Correct Flow:**
+```
+1. beginRenderPass()
+2. Draw main mesh
+3. ImGui draw commands      ← Executes inside the same render pass
+4. endRenderPass()          ← Ended after ImGui
+5. end command buffer
+```
+
+**Note:**
+
+- macOS/Windows use dynamic rendering, so each rendering stage can have independent `beginRendering()/endRendering()` pairs
+- Linux (Vulkan 1.1) uses traditional render pass, so all rendering must occur within a single render pass
 
 ---
 
