@@ -54,6 +54,20 @@ public:
     virtual void submit(RHICommandBuffer* commandBuffer, RHIFence* signalFence = nullptr) = 0;
 
     /**
+     * @brief Submit a single command buffer with full synchronization
+     * @param commandBuffer Command buffer to submit
+     * @param waitSemaphore Semaphore to wait on before execution (optional)
+     * @param signalSemaphore Semaphore to signal after execution (optional)
+     * @param signalFence Fence to signal after execution (optional)
+     *
+     * Convenience method for frame rendering with semaphore sync.
+     */
+    virtual void submit(RHICommandBuffer* commandBuffer,
+                       RHISemaphore* waitSemaphore,
+                       RHISemaphore* signalSemaphore,
+                       RHIFence* signalFence = nullptr) = 0;
+
+    /**
      * @brief Wait for all operations on this queue to complete
      *
      * Blocks the CPU until the queue is idle.

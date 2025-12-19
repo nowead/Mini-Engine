@@ -41,10 +41,16 @@ public:
     uint32_t getHeight() const override { return m_extent.height; }
     TextureFormat getFormat() const override { return m_format; }
     uint32_t getBufferCount() const override { return static_cast<uint32_t>(m_imageViews.size()); }
+    uint32_t getCurrentImageIndex() const override { return m_currentImageIndex; }
+    rhi::RHITextureView* getCurrentTextureView() const override {
+        if (m_currentImageIndex < m_imageViews.size()) {
+            return m_imageViews[m_currentImageIndex].get();
+        }
+        return nullptr;
+    }
 
     // Vulkan-specific accessors
     vk::SwapchainKHR getVkSwapchain() const { return *m_swapchain; }
-    uint32_t getCurrentImageIndex() const { return m_currentImageIndex; }
 
 private:
     VulkanRHIDevice* m_device;

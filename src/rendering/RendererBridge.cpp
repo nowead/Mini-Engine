@@ -2,6 +2,7 @@
 #include <GLFW/glfw3.h>
 #include <stdexcept>
 #include <iostream>
+#include <fstream>
 
 namespace rendering {
 
@@ -55,6 +56,16 @@ void RendererBridge::createSyncObjects() {
         m_imageAvailableSemaphores[i] = m_device->createSemaphore();
         m_renderFinishedSemaphores[i] = m_device->createSemaphore();
     }
+
+    // Initialize command buffers (Phase 4.2)
+    createCommandBuffers();
+}
+
+void RendererBridge::createCommandBuffers() {
+    m_commandBuffers.clear();
+    m_commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+    // Note: Command buffers are created on-demand via createCommandEncoder()
+    // The vector is sized but elements remain null until populated
 }
 
 // ============================================================================
@@ -72,6 +83,7 @@ void RendererBridge::createSwapchain(uint32_t width, uint32_t height, bool vsync
     desc.height = height;
     desc.presentMode = vsync ? rhi::PresentMode::Fifo : rhi::PresentMode::Mailbox;
     desc.bufferCount = MAX_FRAMES_IN_FLIGHT + 1;  // Triple buffering
+    desc.windowHandle = m_window;  // Pass the GLFW window handle
 
     m_swapchain = m_device->createSwapchain(desc);
     m_needsResize = false;
@@ -126,6 +138,9 @@ bool RendererBridge::beginFrame() {
         return false;
     }
 
+    // Store current image index (from swapchain)
+    m_currentImageIndex = m_swapchain->getCurrentImageIndex();
+
     // Reset fence for this frame
     m_inFlightFences[m_currentFrame]->reset();
 
@@ -142,6 +157,102 @@ void RendererBridge::endFrame() {
 
     // Advance to next frame
     m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+}
+
+// ============================================================================
+// Command Encoding (Phase 4.2)
+// ============================================================================
+
+std::unique_ptr<rhi::RHICommandEncoder> RendererBridge::createCommandEncoder() {
+    if (!m_device) {
+        return nullptr;
+    }
+    return m_device->createCommandEncoder();
+}
+
+rhi::RHICommandBuffer* RendererBridge::getCommandBuffer(uint32_t frameIndex) const {
+    if (frameIndex >= m_commandBuffers.size()) {
+        return nullptr;
+    }
+    return m_commandBuffers[frameIndex].get();
+}
+
+void RendererBridge::submitCommandBuffer(
+    rhi::RHICommandBuffer* commandBuffer,
+    rhi::RHISemaphore* waitSemaphore,
+    rhi::RHISemaphore* signalSemaphore,
+    rhi::RHIFence* signalFence)
+{
+    if (!m_device || !commandBuffer) {
+        return;
+    }
+
+    // Get the graphics queue
+    auto* queue = m_device->getQueue(rhi::QueueType::Graphics);
+    if (!queue) {
+        std::cerr << "[RendererBridge] No graphics queue available\n";
+        return;
+    }
+
+    // Submit command buffer with synchronization
+    queue->submit(commandBuffer, waitSemaphore, signalSemaphore, signalFence);
+}
+
+rhi::RHITextureView* RendererBridge::getCurrentSwapchainView() const {
+    if (!m_swapchain) {
+        return nullptr;
+    }
+    return m_swapchain->getCurrentTextureView();
+}
+
+// ============================================================================
+// Pipeline Management (Phase 4.4)
+// ============================================================================
+
+std::unique_ptr<rhi::RHIRenderPipeline> RendererBridge::createRenderPipeline(
+    const rhi::RenderPipelineDesc& desc)
+{
+    if (!m_device) {
+        return nullptr;
+    }
+    return m_device->createRenderPipeline(desc);
+}
+
+std::unique_ptr<rhi::RHIPipelineLayout> RendererBridge::createPipelineLayout(
+    const rhi::PipelineLayoutDesc& desc)
+{
+    if (!m_device) {
+        return nullptr;
+    }
+    return m_device->createPipelineLayout(desc);
+}
+
+std::unique_ptr<rhi::RHIShader> RendererBridge::createShaderFromFile(
+    const std::string& path,
+    rhi::ShaderStage stage,
+    const std::string& entryPoint)
+{
+    if (!m_device) {
+        return nullptr;
+    }
+
+    // Read SPIR-V file
+    std::ifstream file(path, std::ios::ate | std::ios::binary);
+    if (!file.is_open()) {
+        throw std::runtime_error("Failed to open shader file: " + path);
+    }
+
+    size_t fileSize = static_cast<size_t>(file.tellg());
+    std::vector<uint8_t> code(fileSize);
+    file.seekg(0);
+    file.read(reinterpret_cast<char*>(code.data()), static_cast<std::streamsize>(fileSize));
+    file.close();
+
+    // Create shader descriptor using ShaderSource
+    rhi::ShaderSource source(rhi::ShaderLanguage::SPIRV, code, stage, entryPoint);
+    rhi::ShaderDesc desc(source, path.c_str());
+
+    return m_device->createShader(desc);
 }
 
 } // namespace rendering

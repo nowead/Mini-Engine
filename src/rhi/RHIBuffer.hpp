@@ -75,6 +75,20 @@ public:
      * @return Buffer usage flags
      */
     virtual BufferUsage getUsage() const = 0;
+
+    /**
+     * @brief Get the mapped data pointer (if buffer is mapped)
+     * @return Pointer to mapped memory, or nullptr if not mapped
+     *
+     * Only valid if the buffer was mapped with map() or mappedAtCreation=true.
+     */
+    virtual void* getMappedData() const = 0;
+
+    /**
+     * @brief Check if the buffer is currently mapped
+     * @return true if the buffer is mapped
+     */
+    virtual bool isMapped() const = 0;
 };
 
 } // namespace rhi

@@ -14,6 +14,7 @@ using rhi::QueueType;
 using rhi::SubmitInfo;
 using rhi::RHICommandBuffer;
 using rhi::RHIFence;
+using rhi::RHISemaphore;
 
 /**
  * @brief Vulkan implementation of RHIQueue
@@ -35,6 +36,10 @@ public:
     // RHIQueue interface
     void submit(const SubmitInfo& submitInfo) override;
     void submit(RHICommandBuffer* commandBuffer, RHIFence* signalFence = nullptr) override;
+    void submit(RHICommandBuffer* commandBuffer,
+               RHISemaphore* waitSemaphore,
+               RHISemaphore* signalSemaphore,
+               RHIFence* signalFence = nullptr) override;
     void waitIdle() override;
     QueueType getType() const override { return m_type; }
 

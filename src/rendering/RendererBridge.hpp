@@ -135,9 +135,108 @@ public:
      */
     uint32_t getCurrentFrameIndex() const { return m_currentFrame; }
 
+    /**
+     * @brief Get current swapchain image index
+     * @return Current swapchain image index (valid after beginFrame)
+     */
+    uint32_t getCurrentImageIndex() const { return m_currentImageIndex; }
+
+    // ========================================================================
+    // Command Encoding (Phase 4.2)
+    // ========================================================================
+
+    /**
+     * @brief Create a new command encoder for this frame
+     * @return Command encoder for recording commands
+     *
+     * The encoder should be used to record all commands for the current frame,
+     * then finished and submitted before calling endFrame().
+     */
+    std::unique_ptr<rhi::RHICommandEncoder> createCommandEncoder();
+
+    /**
+     * @brief Get command buffer for current frame
+     * @return Command buffer (valid after beginFrame until endFrame)
+     *
+     * This provides direct access to the per-frame command buffer that
+     * is automatically managed by the bridge. The buffer is reset at beginFrame.
+     */
+    rhi::RHICommandBuffer* getCommandBuffer(uint32_t frameIndex) const;
+
+    /**
+     * @brief Submit a command buffer to the graphics queue
+     * @param commandBuffer Command buffer to submit
+     * @param waitSemaphore Semaphore to wait on before execution
+     * @param signalSemaphore Semaphore to signal after execution
+     * @param signalFence Fence to signal after execution
+     */
+    void submitCommandBuffer(
+        rhi::RHICommandBuffer* commandBuffer,
+        rhi::RHISemaphore* waitSemaphore = nullptr,
+        rhi::RHISemaphore* signalSemaphore = nullptr,
+        rhi::RHIFence* signalFence = nullptr);
+
+    /**
+     * @brief Get image available semaphore for current frame
+     */
+    rhi::RHISemaphore* getImageAvailableSemaphore() const {
+        return m_imageAvailableSemaphores[m_currentFrame].get();
+    }
+
+    /**
+     * @brief Get render finished semaphore for current image
+     */
+    rhi::RHISemaphore* getRenderFinishedSemaphore() const {
+        return m_renderFinishedSemaphores[m_currentImageIndex].get();
+    }
+
+    /**
+     * @brief Get in-flight fence for current frame
+     */
+    rhi::RHIFence* getInFlightFence() const {
+        return m_inFlightFences[m_currentFrame].get();
+    }
+
+    /**
+     * @brief Get current swapchain texture view for rendering
+     * @return Texture view for current swapchain image (valid after beginFrame)
+     */
+    rhi::RHITextureView* getCurrentSwapchainView() const;
+
+    // ========================================================================
+    // Pipeline Management (Phase 4.4)
+    // ========================================================================
+
+    /**
+     * @brief Create a render pipeline
+     * @param desc Pipeline descriptor
+     * @return Created pipeline
+     */
+    std::unique_ptr<rhi::RHIRenderPipeline> createRenderPipeline(const rhi::RenderPipelineDesc& desc);
+
+    /**
+     * @brief Create a pipeline layout
+     * @param desc Layout descriptor
+     * @return Created pipeline layout
+     */
+    std::unique_ptr<rhi::RHIPipelineLayout> createPipelineLayout(const rhi::PipelineLayoutDesc& desc);
+
+    /**
+     * @brief Create a shader from SPIR-V file
+     * @param path Path to SPIR-V shader file
+     * @param stage Shader stage
+     * @param entryPoint Shader entry point name
+     * @return Created shader
+     */
+    std::unique_ptr<rhi::RHIShader> createShaderFromFile(
+        const std::string& path,
+        rhi::ShaderStage stage,
+        const std::string& entryPoint = "main");
+
 private:
     void initializeRHI(GLFWwindow* window, bool enableValidation);
     void createSyncObjects();
+    void createCommandBuffers();
 
     std::unique_ptr<rhi::RHIDevice> m_device;
     std::unique_ptr<rhi::RHISwapchain> m_swapchain;
@@ -145,9 +244,13 @@ private:
     // Frame synchronization
     static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
     uint32_t m_currentFrame = 0;
+    uint32_t m_currentImageIndex = 0;  // Current swapchain image index
     std::vector<std::unique_ptr<rhi::RHIFence>> m_inFlightFences;
     std::vector<std::unique_ptr<rhi::RHISemaphore>> m_imageAvailableSemaphores;
     std::vector<std::unique_ptr<rhi::RHISemaphore>> m_renderFinishedSemaphores;
+
+    // Per-frame command buffers (Phase 4.2)
+    std::vector<std::unique_ptr<rhi::RHICommandBuffer>> m_commandBuffers;
 
     // Window reference for resize handling
     GLFWwindow* m_window = nullptr;

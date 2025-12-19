@@ -139,7 +139,17 @@ private:
     // Configuration
     bool m_enableValidationLayers = false;
     std::vector<const char*> m_validationLayers = {"VK_LAYER_KHRONOS_validation"};
+#ifdef __APPLE__
+    // macOS: MoltenVK requires portability subset + dynamic rendering extensions
+    std::vector<const char*> m_deviceExtensions = {
+        VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+        "VK_KHR_portability_subset",
+        VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME,
+        VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME
+    };
+#else
     std::vector<const char*> m_deviceExtensions = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+#endif
 
     // Debug callback
     static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(

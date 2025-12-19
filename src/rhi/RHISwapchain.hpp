@@ -89,6 +89,22 @@ public:
      * @return Buffer count
      */
     virtual uint32_t getBufferCount() const = 0;
+
+    /**
+     * @brief Get the current image index
+     * @return Index of the currently acquired swapchain image
+     *
+     * Only valid after acquireNextImage() and before present().
+     */
+    virtual uint32_t getCurrentImageIndex() const = 0;
+
+    /**
+     * @brief Get the current texture view
+     * @return Texture view for the currently acquired image, or nullptr
+     *
+     * Alias for the result of the last acquireNextImage() call.
+     */
+    virtual RHITextureView* getCurrentTextureView() const = 0;
 };
 
 } // namespace rhi

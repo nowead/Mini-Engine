@@ -57,6 +57,11 @@ vk::Format ToVkFormat(TextureFormat format) {
         case TextureFormat::RGBA16Sint:         return vk::Format::eR16G16B16A16Sint;
         case TextureFormat::RGBA16Float:        return vk::Format::eR16G16B16A16Sfloat;
 
+        // 96-bit formats (for vertex attributes)
+        case TextureFormat::RGB32Uint:          return vk::Format::eR32G32B32Uint;
+        case TextureFormat::RGB32Sint:          return vk::Format::eR32G32B32Sint;
+        case TextureFormat::RGB32Float:         return vk::Format::eR32G32B32Sfloat;
+
         // 128-bit formats
         case TextureFormat::RGBA32Uint:         return vk::Format::eR32G32B32A32Uint;
         case TextureFormat::RGBA32Sint:         return vk::Format::eR32G32B32A32Sint;

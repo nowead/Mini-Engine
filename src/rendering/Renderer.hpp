@@ -11,6 +11,7 @@
 #include "src/scene/SceneManager.hpp"
 #include "src/utils/VulkanCommon.hpp"
 #include "src/utils/Vertex.hpp"
+#include "src/rendering/RendererBridge.hpp"
 
 #include <GLFW/glfw3.h>
 #include <memory>
@@ -137,6 +138,9 @@ private:
     // Window reference
     GLFWwindow* window;
 
+    // RHI Bridge (Phase 4 - provides RHI device access)
+    std::unique_ptr<rendering::RendererBridge> rhiBridge;
+
     // Core device
     std::unique_ptr<VulkanDevice> device;
 
@@ -153,6 +157,24 @@ private:
     // Shared resources managed by Renderer
     std::unique_ptr<VulkanImage> depthImage;
     std::vector<std::unique_ptr<VulkanBuffer>> uniformBuffers;
+
+    // RHI resources (Phase 4 migration - parallel to legacy resources)
+    std::unique_ptr<rhi::RHITexture> rhiDepthImage;
+    std::unique_ptr<rhi::RHITextureView> rhiDepthImageView;  // Cached depth view
+    std::vector<std::unique_ptr<rhi::RHIBuffer>> rhiUniformBuffers;
+    std::unique_ptr<rhi::RHIBindGroupLayout> rhiBindGroupLayout;
+    std::vector<std::unique_ptr<rhi::RHIBindGroup>> rhiBindGroups;
+
+    // RHI Pipeline (Phase 4.4)
+    std::unique_ptr<rhi::RHIShader> rhiVertexShader;
+    std::unique_ptr<rhi::RHIShader> rhiFragmentShader;
+    std::unique_ptr<rhi::RHIPipelineLayout> rhiPipelineLayout;
+    std::unique_ptr<rhi::RHIRenderPipeline> rhiPipeline;
+
+    // RHI Vertex/Index Buffers (Phase 4.5)
+    std::unique_ptr<rhi::RHIBuffer> rhiVertexBuffer;
+    std::unique_ptr<rhi::RHIBuffer> rhiIndexBuffer;
+    uint32_t rhiIndexCount = 0;
 
     // Descriptor management
     vk::raii::DescriptorPool descriptorPool = nullptr;
@@ -182,6 +204,20 @@ private:
     void createDescriptorPool();
     void createDescriptorSets();
     void updateDescriptorSets();
+
+    // RHI initialization methods (Phase 4)
+    void createRHIDepthResources();
+    void createRHIUniformBuffers();
+    void createRHIBindGroups();
+    void createRHIPipeline();  // Phase 4.4
+    void createRHIBuffers();   // Phase 4.5 - vertex/index buffers
+
+    // RHI command recording (Phase 4.2)
+    void recordRHICommandBuffer(uint32_t imageIndex);
+    void updateRHIUniformBuffer(uint32_t currentImage);
+
+    // RHI frame rendering (Phase 4.4)
+    void drawFrameRHI(std::function<void(const vk::raii::CommandBuffer&, uint32_t)> imguiRenderCallback = nullptr);
 
     // Rendering methods
     void recordCommandBuffer(uint32_t imageIndex);

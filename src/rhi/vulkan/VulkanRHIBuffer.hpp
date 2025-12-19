@@ -39,6 +39,8 @@ public:
     void write(const void* data, uint64_t size, uint64_t offset = 0) override;
     uint64_t getSize() const override { return m_size; }
     BufferUsage getUsage() const override { return m_usage; }
+    void* getMappedData() const override { return m_mappedData; }
+    bool isMapped() const override { return m_mappedData != nullptr; }
 
     // Vulkan-specific accessors
     VkBuffer getVkBuffer() const { return m_buffer; }

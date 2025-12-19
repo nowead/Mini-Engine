@@ -97,6 +97,16 @@ public:
     bool hasData() const { return !vertices.empty() && !indices.empty(); }
 
     /**
+     * @brief Get raw vertex data (for RHI buffer creation)
+     */
+    const std::vector<Vertex>& getVertices() const { return vertices; }
+
+    /**
+     * @brief Get raw index data (for RHI buffer creation)
+     */
+    const std::vector<uint32_t>& getIndices() const { return indices; }
+
+    /**
      * @brief Get bounding box center of the mesh
      * @return Center point of the mesh's bounding box
      */

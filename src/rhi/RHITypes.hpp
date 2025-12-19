@@ -133,6 +133,11 @@ enum class TextureFormat {
     RGBA16Sint,
     RGBA16Float,
 
+    // 96-bit formats (for vertex attributes)
+    RGB32Uint,
+    RGB32Sint,
+    RGB32Float,
+
     // 128-bit formats
     RGBA32Uint,
     RGBA32Sint,

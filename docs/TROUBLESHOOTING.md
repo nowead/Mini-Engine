@@ -12,6 +12,7 @@ Common issues and solutions when building or running Mini-Engine.
 - [Platform-Specific Issues](#platform-specific-issues)
 - [Performance Issues](#performance-issues)
 - [Debugging Tools](#debugging-tools)
+- [RHI (Render Hardware Interface) Issues](#rhi-render-hardware-interface-issues)
 
 ---
 
@@ -777,6 +778,130 @@ static constexpr bool ENABLE_VALIDATION = true;
 
 ---
 
+## RHI (Render Hardware Interface) Issues
+
+### ErrorIncompatibleDriver on macOS (MoltenVK)
+
+**Error:**
+```
+vk::SystemError: ErrorIncompatibleDriver
+```
+
+**Cause:**
+- macOS uses MoltenVK (Vulkan-to-Metal translation layer)
+- MoltenVK requires the `VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME` instance extension
+- Instance must be created with `vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR` flag
+- Device must enable `VK_KHR_portability_subset` extension
+
+**Solution:**
+
+1. **Add portability flag to instance creation:**
+```cpp
+vk::InstanceCreateInfo createInfo{
+    .flags = vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR,
+    // ... other fields
+};
+```
+
+2. **Add required instance extension:**
+```cpp
+requiredExtensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+```
+
+3. **Add device extension:**
+```cpp
+#ifdef __APPLE__
+std::vector<const char*> deviceExtensions = {
+    VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+    "VK_KHR_portability_subset",
+    VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME,
+    VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME
+};
+#endif
+```
+
+---
+
+### VMA (Vulkan Memory Allocator) Segfault on macOS
+
+**Error:**
+```
+Segmentation fault in vmaCreateAllocator()
+Crash in vkGetDeviceProcAddr -> loader_lookup_device_dispatch_table
+```
+
+**Cause:**
+- VMA configured with `VMA_DYNAMIC_VULKAN_FUNCTIONS 1` tries to use global `vkGetInstanceProcAddr` and `vkGetDeviceProcAddr`
+- vulkan-hpp uses its own dispatch mechanism, making global function pointers unreliable with MoltenVK
+
+**Solution:**
+
+Change VMA to use static Vulkan functions:
+
+**VulkanMemoryAllocator.cpp:**
+```cpp
+#define VMA_IMPLEMENTATION
+// Use static Vulkan functions - more reliable with vulkan-hpp and MoltenVK
+#define VMA_STATIC_VULKAN_FUNCTIONS 1
+#define VMA_DYNAMIC_VULKAN_FUNCTIONS 0
+#include <vk_mem_alloc.h>
+```
+
+**VulkanCommon.hpp:**
+```cpp
+// VMA (Vulkan Memory Allocator)
+// Use static Vulkan functions - more reliable with vulkan-hpp and MoltenVK
+#define VMA_STATIC_VULKAN_FUNCTIONS 1
+#define VMA_DYNAMIC_VULKAN_FUNCTIONS 0
+#include <vk_mem_alloc.h>
+```
+
+**VMA Allocator creation (no need for pVulkanFunctions):**
+```cpp
+void createVmaAllocator() {
+    VmaAllocatorCreateInfo allocatorInfo{};
+    allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_3;
+    allocatorInfo.physicalDevice = *m_physicalDevice;
+    allocatorInfo.device = *m_device;
+    allocatorInfo.instance = *m_instance;
+    // Using VMA_STATIC_VULKAN_FUNCTIONS=1, so no need to provide pVulkanFunctions
+
+    VkResult result = vmaCreateAllocator(&allocatorInfo, &m_vmaAllocator);
+}
+```
+
+---
+
+### Swapchain Window Handle is Null
+
+**Error:**
+```
+VulkanRHISwapchain: Window handle is null
+```
+
+**Cause:**
+- `SwapchainDesc` passed to `createSwapchain()` does not include `windowHandle`
+- The RHI layer needs the window handle to create a Vulkan surface
+
+**Solution:**
+
+Always set `windowHandle` in `SwapchainDesc`:
+
+```cpp
+void RendererBridge::createSwapchain(uint32_t width, uint32_t height, bool vsync) {
+    rhi::SwapchainDesc desc;
+    desc.width = width;
+    desc.height = height;
+    desc.presentMode = vsync ? rhi::PresentMode::Fifo : rhi::PresentMode::Mailbox;
+    desc.bufferCount = MAX_FRAMES_IN_FLIGHT + 1;
+    desc.windowHandle = m_window;  // ← Don't forget this!
+
+    m_swapchain = m_device->createSwapchain(desc);
+}
+```
+
+---
+
 ## Getting More Help
 
 If none of these solutions work:
@@ -798,4 +923,4 @@ If none of these solutions work:
 
 ---
 
-*Last Updated: 2025-11-21*
+*Last Updated: 2025-12-19*

@@ -1,5 +1,7 @@
 #include "VulkanRHIQueue.hpp"
 #include "VulkanRHIDevice.hpp"
+#include "VulkanRHICommandEncoder.hpp"
+#include "VulkanRHISync.hpp"
 
 namespace RHI {
 namespace Vulkan {
@@ -16,30 +18,49 @@ VulkanRHIQueue::VulkanRHIQueue(VulkanRHIDevice* device,
 }
 
 void VulkanRHIQueue::submit(const SubmitInfo& submitInfo) {
-    // Convert RHI submit info to Vulkan submit info
+    // Convert RHI command buffers to Vulkan command buffers
     std::vector<vk::CommandBuffer> vkCommandBuffers;
     vkCommandBuffers.reserve(submitInfo.commandBuffers.size());
 
     for (auto* cmdBuffer : submitInfo.commandBuffers) {
-        // TODO: Extract VkCommandBuffer from RHICommandBuffer
-        // For now, this is a placeholder
+        auto* vulkanCmdBuffer = static_cast<VulkanRHICommandBuffer*>(cmdBuffer);
+        if (vulkanCmdBuffer) {
+            vkCommandBuffers.push_back(vulkanCmdBuffer->getVkCommandBuffer());
+        }
     }
 
+    // Convert wait semaphores
     std::vector<vk::Semaphore> vkWaitSemaphores;
     std::vector<vk::PipelineStageFlags> vkWaitStages;
     vkWaitSemaphores.reserve(submitInfo.waitSemaphores.size());
     vkWaitStages.reserve(submitInfo.waitSemaphores.size());
 
     for (auto* semaphore : submitInfo.waitSemaphores) {
-        // TODO: Extract VkSemaphore from RHISemaphore
-        vkWaitStages.push_back(vk::PipelineStageFlagBits::eAllCommands);
+        auto* vulkanSemaphore = static_cast<VulkanRHISemaphore*>(semaphore);
+        if (vulkanSemaphore) {
+            vkWaitSemaphores.push_back(vulkanSemaphore->getVkSemaphore());
+            vkWaitStages.push_back(vk::PipelineStageFlagBits::eColorAttachmentOutput);
+        }
     }
 
+    // Convert signal semaphores
     std::vector<vk::Semaphore> vkSignalSemaphores;
     vkSignalSemaphores.reserve(submitInfo.signalSemaphores.size());
 
     for (auto* semaphore : submitInfo.signalSemaphores) {
-        // TODO: Extract VkSemaphore from RHISemaphore
+        auto* vulkanSemaphore = static_cast<VulkanRHISemaphore*>(semaphore);
+        if (vulkanSemaphore) {
+            vkSignalSemaphores.push_back(vulkanSemaphore->getVkSemaphore());
+        }
+    }
+
+    // Convert fence
+    vk::Fence vkFence = nullptr;
+    if (submitInfo.signalFence) {
+        auto* vulkanFence = static_cast<VulkanRHIFence*>(submitInfo.signalFence);
+        if (vulkanFence) {
+            vkFence = vulkanFence->getVkFence();
+        }
     }
 
     vk::SubmitInfo vkSubmitInfo{
@@ -52,16 +73,72 @@ void VulkanRHIQueue::submit(const SubmitInfo& submitInfo) {
         .pSignalSemaphores = vkSignalSemaphores.data()
     };
 
-    // TODO: Get VkFence from submitInfo.signalFence if present
-    m_queue.submit(vkSubmitInfo, nullptr);
+    m_queue.submit(vkSubmitInfo, vkFence);
 }
 
 void VulkanRHIQueue::submit(RHICommandBuffer* commandBuffer, RHIFence* signalFence) {
-    // Convert to SubmitInfo and call the main submit method
-    SubmitInfo submitInfo;
-    submitInfo.commandBuffers.push_back(commandBuffer);
-    submitInfo.signalFence = signalFence;
-    submit(submitInfo);
+    if (!commandBuffer) {
+        return;
+    }
+
+    auto* vulkanCmdBuffer = static_cast<VulkanRHICommandBuffer*>(commandBuffer);
+    vk::CommandBuffer vkCmdBuffer = vulkanCmdBuffer->getVkCommandBuffer();
+
+    vk::Fence vkFence = nullptr;
+    if (signalFence) {
+        auto* vulkanFence = static_cast<VulkanRHIFence*>(signalFence);
+        vkFence = vulkanFence->getVkFence();
+    }
+
+    vk::SubmitInfo vkSubmitInfo{
+        .commandBufferCount = 1,
+        .pCommandBuffers = &vkCmdBuffer
+    };
+
+    m_queue.submit(vkSubmitInfo, vkFence);
+}
+
+void VulkanRHIQueue::submit(RHICommandBuffer* commandBuffer,
+                           RHISemaphore* waitSemaphore,
+                           RHISemaphore* signalSemaphore,
+                           RHIFence* signalFence) {
+    if (!commandBuffer) {
+        return;
+    }
+
+    auto* vulkanCmdBuffer = static_cast<VulkanRHICommandBuffer*>(commandBuffer);
+    vk::CommandBuffer vkCmdBuffer = vulkanCmdBuffer->getVkCommandBuffer();
+
+    vk::Semaphore vkWaitSemaphore = nullptr;
+    vk::PipelineStageFlags waitStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+    if (waitSemaphore) {
+        auto* vulkanSemaphore = static_cast<VulkanRHISemaphore*>(waitSemaphore);
+        vkWaitSemaphore = vulkanSemaphore->getVkSemaphore();
+    }
+
+    vk::Semaphore vkSignalSemaphore = nullptr;
+    if (signalSemaphore) {
+        auto* vulkanSemaphore = static_cast<VulkanRHISemaphore*>(signalSemaphore);
+        vkSignalSemaphore = vulkanSemaphore->getVkSemaphore();
+    }
+
+    vk::Fence vkFence = nullptr;
+    if (signalFence) {
+        auto* vulkanFence = static_cast<VulkanRHIFence*>(signalFence);
+        vkFence = vulkanFence->getVkFence();
+    }
+
+    vk::SubmitInfo vkSubmitInfo{
+        .waitSemaphoreCount = waitSemaphore ? 1u : 0u,
+        .pWaitSemaphores = waitSemaphore ? &vkWaitSemaphore : nullptr,
+        .pWaitDstStageMask = waitSemaphore ? &waitStage : nullptr,
+        .commandBufferCount = 1,
+        .pCommandBuffers = &vkCmdBuffer,
+        .signalSemaphoreCount = signalSemaphore ? 1u : 0u,
+        .pSignalSemaphores = signalSemaphore ? &vkSignalSemaphore : nullptr
+    };
+
+    m_queue.submit(vkSubmitInfo, vkFence);
 }
 
 void VulkanRHIQueue::waitIdle() {

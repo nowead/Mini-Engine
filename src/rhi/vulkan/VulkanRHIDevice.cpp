@@ -73,6 +73,10 @@ void VulkanRHIDevice::createInstance(bool enableValidation) {
     auto extensions = getRequiredExtensions(enableValidation);
 
     vk::InstanceCreateInfo createInfo{
+#ifdef __APPLE__
+        // macOS requires this flag for MoltenVK portability
+        .flags = vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR,
+#endif
         .pApplicationInfo = &appInfo,
         .enabledExtensionCount = static_cast<uint32_t>(extensions.size()),
         .ppEnabledExtensionNames = extensions.data()
@@ -137,14 +141,18 @@ void VulkanRHIDevice::pickPhysicalDevice() {
 }
 
 void VulkanRHIDevice::createLogicalDevice() {
+    std::cout << "Creating logical device..." << std::endl;
+    
     // Find graphics queue family
     auto queueFamilies = m_physicalDevice.getQueueFamilyProperties();
+    std::cout << "Found " << queueFamilies.size() << " queue families" << std::endl;
 
     for (uint32_t i = 0; i < queueFamilies.size(); i++) {
         if (queueFamilies[i].queueFlags & vk::QueueFlagBits::eGraphics) {
             // Check if this queue family supports present
             if (m_physicalDevice.getSurfaceSupportKHR(i, *m_surface)) {
                 m_graphicsQueueFamily = i;
+                std::cout << "Using queue family " << i << " for graphics and present" << std::endl;
                 break;
             }
         }
@@ -162,12 +170,45 @@ void VulkanRHIDevice::createLogicalDevice() {
         .pQueuePriorities = &queuePriority
     };
 
-    // Device features
+    // Device features - query available features first
+    std::cout << "Querying device features..." << std::endl;
+    auto availableFeatures = m_physicalDevice.getFeatures();
     vk::PhysicalDeviceFeatures deviceFeatures{
-        .fillModeNonSolid = VK_TRUE,
-        .samplerAnisotropy = VK_TRUE
+        .fillModeNonSolid = availableFeatures.fillModeNonSolid,  // Only enable if supported
+        .samplerAnisotropy = availableFeatures.samplerAnisotropy  // Only enable if supported
+    };
+    std::cout << "fillModeNonSolid: " << availableFeatures.fillModeNonSolid << ", samplerAnisotropy: " << availableFeatures.samplerAnisotropy << std::endl;
+
+#ifdef __APPLE__
+    std::cout << "Enabling macOS dynamic rendering features..." << std::endl;
+    // macOS: Enable Vulkan 1.3 features for dynamic rendering
+    vk::PhysicalDeviceDynamicRenderingFeatures dynamicRenderingFeatures{
+        .dynamicRendering = VK_TRUE
+    };
+    vk::PhysicalDeviceSynchronization2Features sync2Features{
+        .pNext = &dynamicRenderingFeatures,
+        .synchronization2 = VK_TRUE
+    };
+    vk::PhysicalDeviceFeatures2 deviceFeatures2{
+        .pNext = &sync2Features,
+        .features = deviceFeatures
     };
 
+    // Device create info with features2
+    vk::DeviceCreateInfo createInfo{
+        .pNext = &deviceFeatures2,
+        .queueCreateInfoCount = 1,
+        .pQueueCreateInfos = &queueCreateInfo,
+        .enabledExtensionCount = static_cast<uint32_t>(m_deviceExtensions.size()),
+        .ppEnabledExtensionNames = m_deviceExtensions.data()
+    };
+    
+    std::cout << "Device extensions: ";
+    for (const auto& ext : m_deviceExtensions) {
+        std::cout << ext << " ";
+    }
+    std::cout << std::endl;
+#else
     // Device create info
     vk::DeviceCreateInfo createInfo{
         .queueCreateInfoCount = 1,
@@ -176,30 +217,33 @@ void VulkanRHIDevice::createLogicalDevice() {
         .ppEnabledExtensionNames = m_deviceExtensions.data(),
         .pEnabledFeatures = &deviceFeatures
     };
+#endif
 
     if (m_enableValidationLayers) {
         createInfo.enabledLayerCount = static_cast<uint32_t>(m_validationLayers.size());
         createInfo.ppEnabledLayerNames = m_validationLayers.data();
     }
 
+    std::cout << "Creating vk::raii::Device..." << std::endl;
     m_device = vk::raii::Device(m_physicalDevice, createInfo);
+    std::cout << "Device created, getting queue..." << std::endl;
     m_graphicsQueue = vk::raii::Queue(m_device, m_graphicsQueueFamily, 0);
+    std::cout << "Logical device creation complete" << std::endl;
 }
 
 void VulkanRHIDevice::createVmaAllocator() {
-    VmaVulkanFunctions vulkanFunctions{};
-    vulkanFunctions.vkGetInstanceProcAddr = &vkGetInstanceProcAddr;
-    vulkanFunctions.vkGetDeviceProcAddr = &vkGetDeviceProcAddr;
-
+    std::cout << "Creating VMA allocator..." << std::endl;
+    
     VmaAllocatorCreateInfo allocatorInfo{};
     allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_3;
     allocatorInfo.physicalDevice = *m_physicalDevice;
     allocatorInfo.device = *m_device;
     allocatorInfo.instance = *m_instance;
-    allocatorInfo.pVulkanFunctions = &vulkanFunctions;
+    // Using VMA_STATIC_VULKAN_FUNCTIONS=1, so no need to provide pVulkanFunctions
 
     VkResult result = vmaCreateAllocator(&allocatorInfo, &m_vmaAllocator);
     CheckVkResult(result, "vmaCreateAllocator");
+    std::cout << "VMA allocator created successfully" << std::endl;
 }
 
 void VulkanRHIDevice::createCommandPool() {
