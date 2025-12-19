@@ -11,6 +11,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 find_package(glfw3 CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
 find_package(Vulkan REQUIRED)
+find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 find_package(Stb REQUIRED)
 find_package(tinyobjloader REQUIRED)
 find_package(imgui CONFIG REQUIRED)
@@ -63,6 +64,34 @@ add_executable(vulkanGLFW
     # UI classes
     src/ui/ImGuiManager.cpp
     src/ui/ImGuiManager.hpp
+    # RHI Vulkan Backend
+    src/rhi/vulkan/VulkanCommon.hpp
+    src/rhi/vulkan/VulkanCommon.cpp
+    src/rhi/vulkan/VulkanRHIDevice.hpp
+    src/rhi/vulkan/VulkanRHIDevice.cpp
+    src/rhi/vulkan/VulkanRHIQueue.hpp
+    src/rhi/vulkan/VulkanRHIQueue.cpp
+    src/rhi/vulkan/VulkanRHIBuffer.hpp
+    src/rhi/vulkan/VulkanRHIBuffer.cpp
+    src/rhi/vulkan/VulkanRHITexture.hpp
+    src/rhi/vulkan/VulkanRHITexture.cpp
+    src/rhi/vulkan/VulkanRHICapabilities.hpp
+    src/rhi/vulkan/VulkanRHICapabilities.cpp
+    src/rhi/vulkan/VulkanRHISampler.hpp
+    src/rhi/vulkan/VulkanRHISampler.cpp
+    src/rhi/vulkan/VulkanRHIShader.hpp
+    src/rhi/vulkan/VulkanRHIShader.cpp
+    src/rhi/vulkan/VulkanRHISync.hpp
+    src/rhi/vulkan/VulkanRHISync.cpp
+    src/rhi/vulkan/VulkanRHIBindGroup.hpp
+    src/rhi/vulkan/VulkanRHIBindGroup.cpp
+    src/rhi/vulkan/VulkanRHIPipeline.hpp
+    src/rhi/vulkan/VulkanRHIPipeline.cpp
+    src/rhi/vulkan/VulkanRHICommandEncoder.hpp
+    src/rhi/vulkan/VulkanRHICommandEncoder.cpp
+    src/rhi/vulkan/VulkanRHISwapchain.hpp
+    src/rhi/vulkan/VulkanRHISwapchain.cpp
+    src/rhi/vulkan/VulkanMemoryAllocator.cpp
     # Utility headers (header-only)
     src/utils/VulkanCommon.hpp
     src/utils/Vertex.hpp
@@ -79,6 +108,7 @@ target_include_directories(vulkanGLFW BEFORE PRIVATE
 target_link_libraries(vulkanGLFW PRIVATE
     glm::glm
     Vulkan::Vulkan
+    GPUOpen::VulkanMemoryAllocator
     Stb::stb
     Vulkan::cppm
     tinyobjloader::tinyobjloader

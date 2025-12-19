@@ -1,0 +1,70 @@
+#pragma once
+
+#include "RHITypes.hpp"
+#include <vector>
+
+namespace rhi {
+
+// Forward declarations
+class RHICommandBuffer;
+class RHIFence;
+class RHISemaphore;
+class RHISwapchain;
+
+/**
+ * @brief Submit info for queue submission
+ */
+struct SubmitInfo {
+    std::vector<RHICommandBuffer*> commandBuffers;
+
+    // Synchronization (optional)
+    std::vector<RHISemaphore*> waitSemaphores;      // Semaphores to wait on before execution
+    std::vector<RHISemaphore*> signalSemaphores;    // Semaphores to signal after execution
+
+    RHIFence* signalFence = nullptr;  // Fence to signal after execution (optional)
+
+    SubmitInfo() = default;
+};
+
+/**
+ * @brief Queue interface for command submission
+ *
+ * Queues are used to submit command buffers for execution on the GPU.
+ * Different queue types support different operations (Graphics, Compute, Transfer).
+ */
+class RHIQueue {
+public:
+    virtual ~RHIQueue() = default;
+
+    /**
+     * @brief Submit command buffers to the queue
+     * @param submitInfo Submit information including command buffers and synchronization
+     *
+     * The command buffers will be executed in order.
+     */
+    virtual void submit(const SubmitInfo& submitInfo) = 0;
+
+    /**
+     * @brief Submit a single command buffer with optional fence
+     * @param commandBuffer Command buffer to submit
+     * @param signalFence Fence to signal after execution (optional)
+     *
+     * Convenience method for simple submissions.
+     */
+    virtual void submit(RHICommandBuffer* commandBuffer, RHIFence* signalFence = nullptr) = 0;
+
+    /**
+     * @brief Wait for all operations on this queue to complete
+     *
+     * Blocks the CPU until the queue is idle.
+     */
+    virtual void waitIdle() = 0;
+
+    /**
+     * @brief Get the queue type
+     * @return Queue type
+     */
+    virtual QueueType getType() const = 0;
+};
+
+} // namespace rhi
