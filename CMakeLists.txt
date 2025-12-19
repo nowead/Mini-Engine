@@ -8,6 +8,17 @@ set(CMAKE_CXX_SCAN_FOR_MODULES ON)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 
+# =============================================================================
+# RHI Backend Options
+# =============================================================================
+option(RHI_BACKEND_VULKAN "Enable Vulkan RHI backend" ON)
+option(RHI_BACKEND_WEBGPU "Enable WebGPU RHI backend" OFF)
+
+message(STATUS "--- RHI Backend Configuration ---")
+message(STATUS "RHI_BACKEND_VULKAN: ${RHI_BACKEND_VULKAN}")
+message(STATUS "RHI_BACKEND_WEBGPU: ${RHI_BACKEND_WEBGPU}")
+message(STATUS "---------------------------------")
+
 find_package(glfw3 CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
 find_package(Vulkan REQUIRED)
@@ -49,6 +60,8 @@ add_executable(vulkanGLFW
     src/rendering/VulkanSwapchain.hpp
     src/rendering/VulkanPipeline.cpp
     src/rendering/VulkanPipeline.hpp
+    src/rendering/RendererBridge.hpp
+    src/rendering/RendererBridge.cpp
     # Scene classes
     src/scene/Mesh.cpp
     src/scene/Mesh.hpp
@@ -92,6 +105,9 @@ add_executable(vulkanGLFW
     src/rhi/vulkan/VulkanRHISwapchain.hpp
     src/rhi/vulkan/VulkanRHISwapchain.cpp
     src/rhi/vulkan/VulkanMemoryAllocator.cpp
+    # RHI Factory
+    src/rhi/RHIFactory.hpp
+    src/rhi/RHIFactory.cpp
     # Utility headers (header-only)
     src/utils/VulkanCommon.hpp
     src/utils/Vertex.hpp
@@ -119,6 +135,15 @@ target_link_libraries(vulkanGLFW PRIVATE
 target_compile_definitions(vulkanGLFW PRIVATE
     IMGUI_IMPL_VULKAN_NO_PROTOTYPES=0
 )
+
+# RHI Backend compile definitions
+if(RHI_BACKEND_VULKAN)
+    target_compile_definitions(vulkanGLFW PRIVATE RHI_BACKEND_VULKAN=1)
+endif()
+
+if(RHI_BACKEND_WEBGPU)
+    target_compile_definitions(vulkanGLFW PRIVATE RHI_BACKEND_WEBGPU=1)
+endif()
 
 find_package (Vulkan REQUIRED)
 
@@ -234,3 +259,69 @@ add_slang_shader_target(foo SOURCES ${SHADER_SLANG_SOURCES})
 # 실제 프로그램 실행 파일 타겟인 'bar'가 'foo' 타겟에 의존하도록 설정
 # 이렇게 하면 'bar'를 빌드하기 전에 항상 셰이더('foo')가 먼저 컴파일됩니다.
 add_dependencies(vulkanGLFW foo)
+
+# =============================================================================
+# Phase 3 Smoke Test
+# =============================================================================
+add_executable(rhi_smoke_test
+    tests/rhi_smoke_test.cpp
+    # RHI Factory
+    src/rhi/RHIFactory.hpp
+    src/rhi/RHIFactory.cpp
+    # Renderer Bridge
+    src/rendering/RendererBridge.hpp
+    src/rendering/RendererBridge.cpp
+    # RHI Vulkan Backend (link same sources as main executable)
+    src/rhi/vulkan/VulkanCommon.hpp
+    src/rhi/vulkan/VulkanCommon.cpp
+    src/rhi/vulkan/VulkanRHIDevice.hpp
+    src/rhi/vulkan/VulkanRHIDevice.cpp
+    src/rhi/vulkan/VulkanRHIQueue.hpp
+    src/rhi/vulkan/VulkanRHIQueue.cpp
+    src/rhi/vulkan/VulkanRHIBuffer.hpp
+    src/rhi/vulkan/VulkanRHIBuffer.cpp
+    src/rhi/vulkan/VulkanRHITexture.hpp
+    src/rhi/vulkan/VulkanRHITexture.cpp
+    src/rhi/vulkan/VulkanRHICapabilities.hpp
+    src/rhi/vulkan/VulkanRHICapabilities.cpp
+    src/rhi/vulkan/VulkanRHISampler.hpp
+    src/rhi/vulkan/VulkanRHISampler.cpp
+    src/rhi/vulkan/VulkanRHIShader.hpp
+    src/rhi/vulkan/VulkanRHIShader.cpp
+    src/rhi/vulkan/VulkanRHISync.hpp
+    src/rhi/vulkan/VulkanRHISync.cpp
+    src/rhi/vulkan/VulkanRHIBindGroup.hpp
+    src/rhi/vulkan/VulkanRHIBindGroup.cpp
+    src/rhi/vulkan/VulkanRHIPipeline.hpp
+    src/rhi/vulkan/VulkanRHIPipeline.cpp
+    src/rhi/vulkan/VulkanRHICommandEncoder.hpp
+    src/rhi/vulkan/VulkanRHICommandEncoder.cpp
+    src/rhi/vulkan/VulkanRHISwapchain.hpp
+    src/rhi/vulkan/VulkanRHISwapchain.cpp
+    src/rhi/vulkan/VulkanMemoryAllocator.cpp
+)
+
+target_include_directories(rhi_smoke_test BEFORE PRIVATE
+    ${Vulkan_INCLUDE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(rhi_smoke_test PRIVATE
+    glfw
+    glm::glm
+    Vulkan::Vulkan
+    GPUOpen::VulkanMemoryAllocator
+    Vulkan::cppm
+)
+
+target_compile_definitions(rhi_smoke_test PRIVATE
+    IMGUI_IMPL_VULKAN_NO_PROTOTYPES=0
+)
+
+if(RHI_BACKEND_VULKAN)
+    target_compile_definitions(rhi_smoke_test PRIVATE RHI_BACKEND_VULKAN=1)
+endif()
+
+if(RHI_BACKEND_WEBGPU)
+    target_compile_definitions(rhi_smoke_test PRIVATE RHI_BACKEND_WEBGPU=1)
+endif()

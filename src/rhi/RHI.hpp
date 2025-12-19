@@ -41,6 +41,9 @@
 // Device interface
 #include "RHIDevice.hpp"
 
+// Factory for creating devices
+#include "RHIFactory.hpp"
+
 /**
  * @namespace rhi
  * @brief RHI (Render Hardware Interface) namespace

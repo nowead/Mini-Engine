@@ -63,6 +63,8 @@ public:
 
     const RHICapabilities& getCapabilities() const override;
 
+    const std::string& getDeviceName() const override;
+
     RHIQueue* getQueue(QueueType type) override;
 
     std::unique_ptr<RHIBuffer> createBuffer(const BufferDesc& desc) override;

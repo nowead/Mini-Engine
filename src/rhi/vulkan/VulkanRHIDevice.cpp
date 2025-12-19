@@ -244,6 +244,15 @@ const RHICapabilities& VulkanRHIDevice::getCapabilities() const {
     return *m_capabilities;
 }
 
+const std::string& VulkanRHIDevice::getDeviceName() const {
+    static std::string deviceName;
+    if (deviceName.empty() && *m_physicalDevice) {
+        auto props = m_physicalDevice.getProperties();
+        deviceName = std::string(props.deviceName.data());
+    }
+    return deviceName;
+}
+
 RHIQueue* VulkanRHIDevice::getQueue(QueueType type) {
     // Currently only graphics queue is supported
     if (type == QueueType::Graphics) {
