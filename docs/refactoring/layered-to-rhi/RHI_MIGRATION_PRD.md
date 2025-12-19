@@ -410,8 +410,14 @@ public:
 | 5.3 | Renderer: Remove duplicate rhiVertexBuffer/rhiIndexBuffer | ~40 lines | P0 | Use Mesh::getRHIBuffers() |
 | 5.4 | ResourceManager: VulkanImage → RHITexture | ~80 lines | P0 | Texture cache migration |
 | 5.5 | SceneManager: Update to use RHI types | ~20 lines | P1 | Type references |
-| 5.6 | CommandManager: Evaluate RHI migration | ~30 lines | P2 | May keep legacy for now |
+| 5.6 | CommandManager: **Complete Removal** | ~90 lines | P0 | **DECIDED: Direct RHI usage (2025-12-20)** |
 | 5.7 | Integration test | - | P0 | Model loading verification |
+
+**CommandManager Decision** (2025-12-20):
+- **Selected**: Choice 1 - Complete Removal
+- **Rationale**: Prefer direct RHI usage for simplicity, consistency, and full abstraction
+- **Impact**: Delete CommandManager.hpp/cpp, update 3 usage sites (Mesh, ResourceManager, ImGuiManager)
+- **Alternative Considered**: RHI Wrapper (rejected due to added complexity)
 
 **Code Example**:
 ```cpp
