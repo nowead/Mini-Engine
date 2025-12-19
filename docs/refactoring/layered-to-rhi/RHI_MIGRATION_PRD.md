@@ -380,46 +380,65 @@ public:
 
 ---
 
-### Phase 5: ResourceManager & SceneManager Migration
+### Phase 5: Scene Layer RHI Migration
 
-**Goal**: 리소스 및 씬 레이어 API 독립화
+**Goal**: Migrate scene layer (Mesh, ResourceManager, SceneManager) to RHI
 
 **Timeline**: 2-3 days
 
-**Key Insight**: 
-- OBJLoader, FDFLoader는 CPU 데이터 처리만 수행 → **변경 불필요**
-- Mesh 클래스만 VulkanBuffer → RHIBuffer 전환 필요
-- Material은 선택적 (Phase 6 이후 가능)
+**Key Insights**: 
+- OBJLoader, FDFLoader perform CPU-only data processing → **No changes needed**
+- Phase 4 already created `rhiVertexBuffer`/`rhiIndexBuffer` in Renderer (temporary duplication)
+- Mesh class needs internal buffer migration to RHI
+- TextureLoader.hpp is empty - actual texture loading is in `ResourceManager::uploadTexture()`
+- Material migration is optional (can defer to Phase 7+)
+
+**Current State Analysis**:
+| Component | Current | Target | Notes |
+|-----------|---------|--------|-------|
+| Mesh | VulkanBuffer (internal) | RHIBuffer | Primary task |
+| Renderer | rhiVertexBuffer (duplicate) | Use Mesh buffers | Remove duplication |
+| ResourceManager | VulkanImage cache | RHITexture cache | Texture migration |
+| TextureLoader | Empty file | Keep as-is or remove | Not actually used |
 
 **Tasks**:
 
 | # | Task | Estimated Changes | Priority | Notes |
 |---|------|------------------|----------|-------|
-| 5.1 | Mesh::VulkanBuffer → RHIBuffer | ~40 lines | P0 | vertex, index 버퍼 |
-| 5.2 | TextureLoader → RHITexture | ~50 lines | P0 | 텍스처 로딩 |
-| 5.3 | ResourceManager 캐싱 유지 | ~20 lines | P0 | 기존 캐싱 로직 보존 |
-| 5.4 | SceneManager 참조 업데이트 | ~20 lines | P1 | RHI 타입 참조 |
-| 5.5 | OBJLoader | 0 lines | - | **변경 불필요** |
-| 5.6 | FDFLoader | 0 lines | - | **변경 불필요** |
-| 5.7 | Integration test | - | P0 | 모델 로딩 검증 |
+| 5.1 | Mesh: VulkanBuffer → RHIBuffer | ~60 lines | P0 | Internal buffer migration |
+| 5.2 | Mesh: Accept RHIDevice in constructor | ~30 lines | P0 | Dependency injection |
+| 5.3 | Renderer: Remove duplicate rhiVertexBuffer/rhiIndexBuffer | ~40 lines | P0 | Use Mesh::getRHIBuffers() |
+| 5.4 | ResourceManager: VulkanImage → RHITexture | ~80 lines | P0 | Texture cache migration |
+| 5.5 | SceneManager: Update to use RHI types | ~20 lines | P1 | Type references |
+| 5.6 | CommandManager: Evaluate RHI migration | ~30 lines | P2 | May keep legacy for now |
+| 5.7 | Integration test | - | P0 | Model loading verification |
 
 **Code Example**:
 ```cpp
 // Mesh.hpp BEFORE
-std::unique_ptr<VulkanBuffer> m_vertexBuffer;
-std::unique_ptr<VulkanBuffer> m_indexBuffer;
+class Mesh {
+    VulkanDevice& device;
+    std::unique_ptr<VulkanBuffer> vertexBuffer;
+    std::unique_ptr<VulkanBuffer> indexBuffer;
+};
 
 // Mesh.hpp AFTER
-std::unique_ptr<rhi::RHIBuffer> m_vertexBuffer;
-std::unique_ptr<rhi::RHIBuffer> m_indexBuffer;
+class Mesh {
+    rhi::RHIDevice* rhiDevice;
+    std::unique_ptr<rhi::RHIBuffer> vertexBuffer;
+    std::unique_ptr<rhi::RHIBuffer> indexBuffer;
+public:
+    rhi::RHIBuffer* getVertexBuffer() const;
+    rhi::RHIBuffer* getIndexBuffer() const;
+};
 ```
 
 **Acceptance Criteria**:
-- [ ] Mesh uses RHIBuffer
-- [ ] Texture loading uses RHITexture
+- [ ] Mesh uses RHIBuffer internally
+- [ ] No duplicate buffers in Renderer
+- [ ] ResourceManager uses RHITexture for caching
 - [ ] OBJ model loading works
 - [ ] FDF wireframe loading works
-- [ ] Resource caching works correctly
 - [ ] No memory leaks
 
 ---
@@ -520,16 +539,17 @@ class VulkanBuffer { ... };
 
 #### 7.B: Unit Tests (Deferred from Phase 2)
 
-**Goal**: Unit tests for RHI implementation
+**Goal**: Extend smoke tests and add unit tests for RHI implementation
+
+**Note**: Existing smoke tests (6/6 passing) provide good coverage. Extend rather than rewrite.
 
 | # | Task | Priority | Coverage Target |
 |---|------|----------|-----------------|
-| 7.B.1 | RHIBuffer tests | P0 | 90%+ |
-| 7.B.2 | RHITexture tests | P0 | 90%+ |
-| 7.B.3 | RHIPipeline tests | P0 | 80%+ |
-| 7.B.4 | RHICommandEncoder tests | P0 | 80%+ |
-| 7.B.5 | RHISwapchain tests | P0 | 80%+ |
-| 7.B.6 | Full rendering integration test | P0 | - |
+| 7.B.1 | Extend smoke tests for edge cases | P0 | - |
+| 7.B.2 | RHIBuffer tests (create, map, destroy) | P1 | 80%+ |
+| 7.B.3 | RHITexture tests (formats, mipmaps) | P1 | 80%+ |
+| 7.B.4 | RHIPipeline tests (shader variants) | P2 | 70%+ |
+| 7.B.5 | Full rendering integration test | P0 | - |
 
 #### 7.C: Performance Verification
 
@@ -555,13 +575,13 @@ class VulkanBuffer { ... };
 
 #### 7.E: Platform & Build Tests
 
-| # | Task | Priority |
-|---|------|----------|
-| 7.E.1 | Linux (Ubuntu 22.04+) 빌드 및 실행 | P0 |
-| 7.E.2 | macOS (12.0+) 빌드 및 실행 | P0 |
-| 7.E.3 | Windows (10/11) 빌드 및 실행 | P1 |
-| 7.E.4 | Clean build from scratch | P0 |
-| 7.E.5 | CMake backend 옵션 검증 | P1 |
+| # | Task | Priority | Notes |
+|---|------|----------|-------|
+| 7.E.1 | Linux (Ubuntu 22.04+) build and run | P0 | Primary target |
+| 7.E.2 | macOS (12.0+) build and run | P0 | Current dev platform |
+| 7.E.3 | Windows (10/11) build and run | P2 | Deferred (vcpkg arm64-osx only) |
+| 7.E.4 | Clean build from scratch | P0 | Verify no hidden deps |
+| 7.E.5 | CMake backend options validation | P1 | Backend selection |
 
 #### 7.F: Validation & Memory
 
