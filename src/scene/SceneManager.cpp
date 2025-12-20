@@ -1,11 +1,11 @@
 #include "SceneManager.hpp"
 #include <algorithm>
 
-SceneManager::SceneManager(VulkanDevice& device, CommandManager& commandManager)
-    : device(device), commandManager(commandManager) {}
+SceneManager::SceneManager(rhi::RHIDevice* device, rhi::RHIQueue* queue)
+    : rhiDevice(device), graphicsQueue(queue) {}
 
 Mesh* SceneManager::loadMesh(const std::string& path, float zScale) {
-    auto mesh = std::make_unique<Mesh>(device, commandManager);
+    auto mesh = std::make_unique<Mesh>(rhiDevice, graphicsQueue);
 
     // Determine file type by extension
     std::string extension;

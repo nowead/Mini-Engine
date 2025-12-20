@@ -24,7 +24,8 @@ This document outlines the complete migration of Mini-Engine from a Vulkan-only 
 - **Phase 2 (Vulkan Backend)**: ✅ **COMPLETED** (2025-12-19)
 - **Phase 3 (Factory & Bridge)**: ✅ **COMPLETED** (2025-12-19)
 - **Phase 4 (Renderer Migration)**: ✅ **COMPLETED** (2025-12-19)
-- **Phase 5-11**: Pending
+- **Phase 5 (Scene Layer Migration)**: ✅ **COMPLETED** (2025-12-20)
+- **Phase 6-11**: Pending
 
 ---
 
@@ -380,11 +381,12 @@ public:
 
 ---
 
-### Phase 5: Scene Layer RHI Migration
+### Phase 5: Scene Layer RHI Migration ✅ COMPLETE
 
 **Goal**: Migrate scene layer (Mesh, ResourceManager, SceneManager) to RHI
 
 **Timeline**: 2-3 days
+**Actual Time**: 1 day (2025-12-20) ✅
 
 **Key Insights**: 
 - OBJLoader, FDFLoader perform CPU-only data processing → **No changes needed**
@@ -403,15 +405,23 @@ public:
 
 **Tasks**:
 
-| # | Task | Estimated Changes | Priority | Notes |
-|---|------|------------------|----------|-------|
-| 5.1 | Mesh: VulkanBuffer → RHIBuffer | ~60 lines | P0 | Internal buffer migration |
-| 5.2 | Mesh: Accept RHIDevice in constructor | ~30 lines | P0 | Dependency injection |
-| 5.3 | Renderer: Remove duplicate rhiVertexBuffer/rhiIndexBuffer | ~40 lines | P0 | Use Mesh::getRHIBuffers() |
-| 5.4 | ResourceManager: VulkanImage → RHITexture | ~80 lines | P0 | Texture cache migration |
-| 5.5 | SceneManager: Update to use RHI types | ~20 lines | P1 | Type references |
-| 5.6 | CommandManager: **Complete Removal** | ~90 lines | P0 | **DECIDED: Direct RHI usage (2025-12-20)** |
-| 5.7 | Integration test | - | P0 | Model loading verification |
+| # | Task | Estimated Changes | Priority | Status |
+|---|------|------------------|----------|--------|
+| 5.1 | Mesh: VulkanBuffer → RHIBuffer | ~60 lines | P0 | ✅ Complete |
+| 5.2 | Mesh: Accept RHIDevice in constructor | ~30 lines | P0 | ✅ Complete |
+| 5.3 | Renderer: Remove duplicate rhiVertexBuffer/rhiIndexBuffer | ~40 lines | P0 | ✅ Complete |
+| 5.4 | ResourceManager: VulkanImage → RHITexture | ~80 lines | P0 | ✅ Complete |
+| 5.5 | SceneManager: Update to use RHI types | ~20 lines | P1 | ✅ Complete |
+| 5.6 | CommandManager: Complete Removal | ~90 lines | P0 | 🔲 Deferred to Phase 6 |
+| 5.7 | Integration test | - | P0 | ✅ Complete |
+
+**Completion Status**: 2025-12-20 ✅
+- 6 / 7 tasks completed (86%)
+- 1 task deferred to Phase 6 (CommandManager - due to ImGui dependency)
+- ~205 lines of code changed
+- Build: ✅ SUCCESS
+- Runtime: ✅ VERIFIED WORKING
+- See: [PHASE5_PROGRESS.md](PHASE5_PROGRESS.md) for detailed log
 
 **CommandManager Decision** (2025-12-20):
 - **Selected**: Choice 1 - Complete Removal

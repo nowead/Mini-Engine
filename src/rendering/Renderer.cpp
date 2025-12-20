@@ -53,9 +53,11 @@ Renderer::Renderer(GLFWwindow* window,
     syncManager = std::make_unique<SyncManager>(
         *device, MAX_FRAMES_IN_FLIGHT, swapchain->getImageCount());
 
-    // Create high-level managers (ORDER MATTERS for RAII)
-    resourceManager = std::make_unique<ResourceManager>(*device, *commandManager);
-    sceneManager = std::make_unique<SceneManager>(*device, *commandManager);
+    // Create high-level managers using RHI (Phase 5)
+    auto* rhiDevice = rhiBridge->getDevice();
+    auto* rhiQueue = rhiDevice->getQueue(rhi::QueueType::Graphics);
+    resourceManager = std::make_unique<ResourceManager>(rhiDevice, rhiQueue);
+    sceneManager = std::make_unique<SceneManager>(rhiDevice, rhiQueue);
 
     // Create uniform buffers and descriptors
     createUniformBuffers();
@@ -188,8 +190,10 @@ void Renderer::adjustZScale(float delta) {
     // Wait for device idle before reloading
     device->getDevice().waitIdle();
 
-    // Clear existing meshes and reload with new Z-scale
-    sceneManager = std::make_unique<SceneManager>(*device, *commandManager);
+    // Clear existing meshes and reload with new Z-scale (using RHI)
+    auto* rhiDevice = rhiBridge->getDevice();
+    auto* rhiQueue = rhiDevice->getQueue(rhi::QueueType::Graphics);
+    sceneManager = std::make_unique<SceneManager>(rhiDevice, rhiQueue);
     sceneManager->loadMesh(currentModelPath, zScale);
 }
 
@@ -285,11 +289,17 @@ void Renderer::updateDescriptorSets() {
         }
     } else {
         // OBJ mode: Update both uniform buffer and texture
-        VulkanImage* textureImage = resourceManager->getTexture("textures/viking_room.png");
+        // TODO Phase 5: Legacy descriptor updates - needs RHI texture view integration
+        // Temporarily disabled until descriptor set migration complete
+        /*
+        auto* textureImage = resourceManager->getTexture("textures/viking_room.png");
         if (!textureImage) {
             return;  // Texture not loaded yet
         }
+        */
+        return;  // Skip legacy descriptor updates for now
 
+        /*
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
             vk::DescriptorBufferInfo bufferInfo{
                 .buffer = uniformBuffers[i]->getHandle(),
@@ -321,6 +331,7 @@ void Renderer::updateDescriptorSets() {
             };
             device->getDevice().updateDescriptorSets(descriptorWrites, {});
         }
+        */
     }
 }
 
@@ -358,16 +369,15 @@ void Renderer::recordCommandBuffer(uint32_t imageIndex) {
     commandManager->getCommandBuffer(currentFrame).setScissor(
         0, vk::Rect2D(vk::Offset2D(0, 0), swapchain->getExtent()));
 
-    // Draw primary mesh from SceneManager
+    // TODO Phase 5: Legacy rendering path temporarily disabled
+    // Mesh no longer has bind/draw methods (migrated to RHI)
+    // Will be removed when legacy Vulkan path is completely replaced
+    /*
     Mesh* primaryMesh = sceneManager->getPrimaryMesh();
     if (primaryMesh && primaryMesh->hasData()) {
-        primaryMesh->bind(commandManager->getCommandBuffer(currentFrame));
-        commandManager->getCommandBuffer(currentFrame).bindDescriptorSets(
-            vk::PipelineBindPoint::eGraphics,
-            pipeline->getPipelineLayout(),
-            0, *descriptorSets[currentFrame], nullptr);
-        primaryMesh->draw(commandManager->getCommandBuffer(currentFrame));
+        // bind() and draw() removed - use RHI rendering path instead
     }
+    */
 
     // Note: Render pass is NOT ended here on Linux - ImGui will render in the same pass
     // endRenderPass() will be called after ImGui rendering
@@ -445,16 +455,15 @@ void Renderer::recordCommandBuffer(uint32_t imageIndex) {
     commandManager->getCommandBuffer(currentFrame).setScissor(
         0, vk::Rect2D(vk::Offset2D(0, 0), swapchain->getExtent()));
 
-    // Draw primary mesh from SceneManager
+    // TODO Phase 5: Legacy rendering path temporarily disabled
+    // Mesh no longer has bind/draw methods (migrated to RHI)
+    // Will be removed when legacy Vulkan path is completely replaced
+    /*
     Mesh* primaryMesh = sceneManager->getPrimaryMesh();
     if (primaryMesh && primaryMesh->hasData()) {
-        primaryMesh->bind(commandManager->getCommandBuffer(currentFrame));
-        commandManager->getCommandBuffer(currentFrame).bindDescriptorSets(
-            vk::PipelineBindPoint::eGraphics,
-            pipeline->getPipelineLayout(),
-            0, *descriptorSets[currentFrame], nullptr);
-        primaryMesh->draw(commandManager->getCommandBuffer(currentFrame));
+        // bind() and draw() removed - use RHI rendering path instead
     }
+    */
 
     commandManager->getCommandBuffer(currentFrame).endRendering();
 

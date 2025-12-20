@@ -1,8 +1,7 @@
 #pragma once
 
 #include "src/scene/Mesh.hpp"
-#include "src/core/VulkanDevice.hpp"
-#include "src/core/CommandManager.hpp"
+#include "src/rhi/RHI.hpp"
 
 #include <memory>
 #include <vector>
@@ -18,12 +17,14 @@
  *
  * Hides from Renderer:
  * - OBJ file parsing
- * - Mesh buffer creation
+ * - Mesh buffer creation (via RHI)
  * - Vertex deduplication
+ *
+ * Note: Migrated to RHI in Phase 5 (Scene Layer Migration)
  */
 class SceneManager {
 public:
-    SceneManager(VulkanDevice& device, CommandManager& commandManager);
+    SceneManager(rhi::RHIDevice* device, rhi::RHIQueue* queue);
     ~SceneManager() = default;
 
     // Disable copy and move
@@ -51,8 +52,8 @@ public:
     const std::vector<std::unique_ptr<Mesh>>& getMeshes() const { return meshes; }
 
 private:
-    VulkanDevice& device;
-    CommandManager& commandManager;
+    rhi::RHIDevice* rhiDevice;
+    rhi::RHIQueue* graphicsQueue;
 
     std::vector<std::unique_ptr<Mesh>> meshes;
 };

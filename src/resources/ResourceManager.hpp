@@ -1,9 +1,6 @@
 #pragma once
 
-#include "src/core/VulkanDevice.hpp"
-#include "src/resources/VulkanImage.hpp"
-#include "src/resources/VulkanBuffer.hpp"
-#include "src/core/CommandManager.hpp"
+#include "src/rhi/RHI.hpp"
 
 #include <memory>
 #include <string>
@@ -20,12 +17,14 @@
  *
  * Hides from Renderer:
  * - stb_image details
- * - Staging buffer creation
- * - Layout transitions
+ * - Staging buffer creation (via RHI)
+ * - Layout transitions (via RHI)
+ *
+ * Note: Migrated to RHI in Phase 5 (Scene Layer Migration)
  */
 class ResourceManager {
 public:
-    ResourceManager(VulkanDevice& device, CommandManager& commandManager);
+    ResourceManager(rhi::RHIDevice* device, rhi::RHIQueue* queue);
     ~ResourceManager() = default;
 
     // Disable copy and move
@@ -39,13 +38,13 @@ public:
      * @param path Path to image file
      * @return Pointer to loaded texture (owned by ResourceManager)
      */
-    VulkanImage* loadTexture(const std::string& path);
+    rhi::RHITexture* loadTexture(const std::string& path);
 
     /**
      * @brief Get texture by path (if already loaded)
      * @return Pointer to texture or nullptr if not loaded
      */
-    VulkanImage* getTexture(const std::string& path);
+    rhi::RHITexture* getTexture(const std::string& path);
 
     /**
      * @brief Clear all cached resources
@@ -53,14 +52,14 @@ public:
     void clearCache();
 
 private:
-    VulkanDevice& device;
-    CommandManager& commandManager;
+    rhi::RHIDevice* rhiDevice;
+    rhi::RHIQueue* graphicsQueue;
 
     // Resource cache
-    std::unordered_map<std::string, std::unique_ptr<VulkanImage>> textureCache;
+    std::unordered_map<std::string, std::unique_ptr<rhi::RHITexture>> textureCache;
 
     // Helper for uploading texture data
-    std::unique_ptr<VulkanImage> uploadTexture(
+    std::unique_ptr<rhi::RHITexture> uploadTexture(
         unsigned char* pixels,
         int width,
         int height,

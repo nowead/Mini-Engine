@@ -1,10 +1,7 @@
 #pragma once
 
-#include "src/utils/VulkanCommon.hpp"
 #include "src/utils/Vertex.hpp"
-#include "src/core/VulkanDevice.hpp"
-#include "src/resources/VulkanBuffer.hpp"
-#include "src/core/CommandManager.hpp"
+#include "src/rhi/RHI.hpp"
 
 #include <vector>
 #include <string>
@@ -15,27 +12,29 @@
  *
  * Responsibilities:
  * - Store vertex and index data
- * - Manage vertex and index buffers
- * - Provide bind() and draw() methods for rendering
+ * - Manage vertex and index buffers (RHI)
+ * - Provide buffer accessors for rendering
  * - Support loading from various formats (OBJ, FDF)
+ *
+ * Note: Migrated to RHI in Phase 5 (Scene Layer Migration)
  */
 class Mesh {
 public:
     /**
      * @brief Construct empty mesh
-     * @param device Vulkan device reference
-     * @param commandManager Command manager for staging operations
+     * @param device RHI device pointer
+     * @param queue RHI graphics queue for staging operations
      */
-    Mesh(VulkanDevice& device, CommandManager& commandManager);
+    Mesh(rhi::RHIDevice* device, rhi::RHIQueue* queue);
 
     /**
      * @brief Construct mesh with vertex and index data
-     * @param device Vulkan device reference
-     * @param commandManager Command manager for staging operations
+     * @param device RHI device pointer
+     * @param queue RHI graphics queue for staging operations
      * @param vertices Vertex data
      * @param indices Index data
      */
-    Mesh(VulkanDevice& device, CommandManager& commandManager,
+    Mesh(rhi::RHIDevice* device, rhi::RHIQueue* queue,
          const std::vector<Vertex>& vertices,
          const std::vector<uint32_t>& indices);
 
@@ -70,18 +69,6 @@ public:
     void setData(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices);
 
     /**
-     * @brief Bind mesh buffers to command buffer
-     * @param commandBuffer Command buffer to bind to
-     */
-    void bind(const vk::raii::CommandBuffer& commandBuffer) const;
-
-    /**
-     * @brief Draw mesh
-     * @param commandBuffer Command buffer to record draw call
-     */
-    void draw(const vk::raii::CommandBuffer& commandBuffer) const;
-
-    /**
      * @brief Get vertex count
      */
     size_t getVertexCount() const { return vertices.size(); }
@@ -97,14 +84,26 @@ public:
     bool hasData() const { return !vertices.empty() && !indices.empty(); }
 
     /**
-     * @brief Get raw vertex data (for RHI buffer creation)
+     * @brief Get raw vertex data (for reference)
      */
     const std::vector<Vertex>& getVertices() const { return vertices; }
 
     /**
-     * @brief Get raw index data (for RHI buffer creation)
+     * @brief Get raw index data (for reference)
      */
     const std::vector<uint32_t>& getIndices() const { return indices; }
+
+    /**
+     * @brief Get RHI vertex buffer
+     * @return Pointer to vertex buffer (owned by Mesh)
+     */
+    rhi::RHIBuffer* getVertexBuffer() const { return vertexBuffer.get(); }
+
+    /**
+     * @brief Get RHI index buffer
+     * @return Pointer to index buffer (owned by Mesh)
+     */
+    rhi::RHIBuffer* getIndexBuffer() const { return indexBuffer.get(); }
 
     /**
      * @brief Get bounding box center of the mesh
@@ -119,14 +118,14 @@ public:
     float getBoundingBoxRadius() const;
 
 private:
-    VulkanDevice& device;
-    CommandManager& commandManager;
+    rhi::RHIDevice* rhiDevice;
+    rhi::RHIQueue* graphicsQueue;
 
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
 
-    std::unique_ptr<VulkanBuffer> vertexBuffer;
-    std::unique_ptr<VulkanBuffer> indexBuffer;
+    std::unique_ptr<rhi::RHIBuffer> vertexBuffer;
+    std::unique_ptr<rhi::RHIBuffer> indexBuffer;
 
     void createBuffers();
 };
