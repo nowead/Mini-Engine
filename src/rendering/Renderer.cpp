@@ -5,35 +5,7 @@
 #include <stdexcept>
 #include <iostream>
 
-// ============================================================================
-// Phase 6: Temporary wrapper for legacy command buffer -> RHI encoder
-// This allows ImGui to work during the migration from legacy to RHI rendering
-// ============================================================================
-
-namespace {
-
-/**
- * @brief Minimal wrapper that allows ImGuiVulkanBackend to access a legacy command buffer
- *
- * This lightweight adapter is used during Phase 6 migration to bridge legacy Vulkan
- * rendering with RHI-based ImGui. The wrapper provides only the getCommandBuffer()
- * method needed by ImGuiVulkanBackend.
- *
- * Once rendering is fully migrated to RHI (Phase 7+), this wrapper will be removed.
- */
-class LegacyCommandBufferAdapter {
-public:
-    explicit LegacyCommandBufferAdapter(vk::raii::CommandBuffer& cmdBuffer)
-        : commandBuffer(cmdBuffer) {}
-
-    // Provides access to wrapped command buffer for ImGui backend
-    vk::raii::CommandBuffer& getCommandBuffer() { return commandBuffer; }
-
-private:
-    vk::raii::CommandBuffer& commandBuffer;
-};
-
-} // anonymous namespace
+// Phase 7: LegacyCommandBufferAdapter removed - ImGui now uses RHI directly
 
 Renderer::Renderer(GLFWwindow* window,
                    const std::vector<const char*>& validationLayers,
@@ -79,9 +51,8 @@ Renderer::Renderer(GLFWwindow* window,
         *device, *swapchain, shaderPath, findDepthFormat(), nullptr, topology);
 #endif
 
-    // Create command and sync managers
-    commandManager = std::make_unique<CommandManager>(
-        *device, device->getGraphicsQueueFamily(), MAX_FRAMES_IN_FLIGHT);
+    // Phase 7: CommandManager removed - now using RHI command encoding
+    // Create sync manager (still needed for legacy swapchain synchronization)
     syncManager = std::make_unique<SyncManager>(
         *device, MAX_FRAMES_IN_FLIGHT, swapchain->getImageCount());
 
@@ -129,77 +100,8 @@ void Renderer::loadTexture(const std::string& texturePath) {
     updateDescriptorSets();  // Update descriptors with new texture
 }
 
-void Renderer::drawFrame() {
-    // Wait for the current frame's fence
-    syncManager->waitForFence(currentFrame);
-
-    // Acquire next swapchain image
-    auto [result, imageIndex] = swapchain->acquireNextImage(
-        UINT64_MAX,
-        syncManager->getImageAvailableSemaphore(currentFrame),
-        nullptr);
-
-    if (result == vk::Result::eErrorOutOfDateKHR) {
-        recreateSwapchain();
-        return;
-    }
-    if (result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR) {
-        throw std::runtime_error("failed to acquire swap chain image!");
-    }
-
-    updateUniformBuffer(currentFrame);
-
-    // Reset fence and record command buffer
-    syncManager->resetFence(currentFrame);
-    commandManager->getCommandBuffer(currentFrame).reset();
-    recordCommandBuffer(imageIndex);
-
-    // Phase 6: Render ImGui if manager is initialized
-    if (imguiManager) {
-        // Create temporary adapter to wrap legacy command buffer for RHI-based ImGui
-        LegacyCommandBufferAdapter adapter(commandManager->getCommandBuffer(currentFrame));
-        // Cast to RHICommandEncoder* for ImGui backend (it will static_cast to VulkanRHICommandEncoder)
-        imguiManager->render(reinterpret_cast<rhi::RHICommandEncoder*>(&adapter), imageIndex);
-    }
-
-    // End command buffer recording
-    commandManager->getCommandBuffer(currentFrame).end();
-
-    // Submit command buffer
-    vk::PipelineStageFlags waitDestinationStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput);
-    vk::Semaphore waitSemaphores[] = { syncManager->getImageAvailableSemaphore(currentFrame) };
-    vk::Semaphore signalSemaphores[] = { syncManager->getRenderFinishedSemaphore(imageIndex) };
-
-    const vk::SubmitInfo submitInfo{
-        .waitSemaphoreCount = 1,
-        .pWaitSemaphores = waitSemaphores,
-        .pWaitDstStageMask = &waitDestinationStageMask,
-        .commandBufferCount = 1,
-        .pCommandBuffers = &*commandManager->getCommandBuffer(currentFrame),
-        .signalSemaphoreCount = 1,
-        .pSignalSemaphores = signalSemaphores
-    };
-    device->getGraphicsQueue().submit(submitInfo, syncManager->getInFlightFence(currentFrame));
-
-    // Present
-    vk::SwapchainKHR swapchainHandle = swapchain->getSwapchain();
-    const vk::PresentInfoKHR presentInfoKHR{
-        .waitSemaphoreCount = 1,
-        .pWaitSemaphores = signalSemaphores,
-        .swapchainCount = 1,
-        .pSwapchains = &swapchainHandle,
-        .pImageIndices = &imageIndex
-    };
-    result = device->getGraphicsQueue().presentKHR(presentInfoKHR);
-
-    if (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR) {
-        recreateSwapchain();
-    } else if (result != vk::Result::eSuccess) {
-        throw std::runtime_error("failed to present swap chain image!");
-    }
-
-    currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
-}
+// Phase 7: Legacy rendering methods (drawFrameLegacy, recordCommandBuffer, updateUniformBuffer, transitionImageLayout) removed
+// Now using RHI-based rendering via drawFrame()
 
 void Renderer::waitIdle() {
     device->getDevice().waitIdle();
@@ -370,195 +272,8 @@ void Renderer::updateDescriptorSets() {
     }
 }
 
-void Renderer::recordCommandBuffer(uint32_t imageIndex) {
-    commandManager->getCommandBuffer(currentFrame).begin({});
-
-    // Clear values
-    std::array<vk::ClearValue, 2> clearValues = {
-        vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f),
-        vk::ClearDepthStencilValue(1.0f, 0)
-    };
-
-#ifdef __linux__
-    // Linux: Use traditional render pass
-    vk::RenderPassBeginInfo renderPassInfo{
-        .renderPass = swapchain->getRenderPass(),
-        .framebuffer = swapchain->getFramebuffer(imageIndex),
-        .renderArea = {
-            .offset = {0, 0},
-            .extent = swapchain->getExtent()
-        },
-        .clearValueCount = static_cast<uint32_t>(clearValues.size()),
-        .pClearValues = clearValues.data()
-    };
-
-    commandManager->getCommandBuffer(currentFrame).beginRenderPass(renderPassInfo, vk::SubpassContents::eInline);
-
-    // Bind pipeline and draw
-    pipeline->bind(commandManager->getCommandBuffer(currentFrame));
-    commandManager->getCommandBuffer(currentFrame).setViewport(
-        0, vk::Viewport(0.0f, 0.0f,
-                       static_cast<float>(swapchain->getExtent().width),
-                       static_cast<float>(swapchain->getExtent().height),
-                       0.0f, 1.0f));
-    commandManager->getCommandBuffer(currentFrame).setScissor(
-        0, vk::Rect2D(vk::Offset2D(0, 0), swapchain->getExtent()));
-
-    // TODO Phase 5: Legacy rendering path temporarily disabled
-    // Mesh no longer has bind/draw methods (migrated to RHI)
-    // Will be removed when legacy Vulkan path is completely replaced
-    /*
-    Mesh* primaryMesh = sceneManager->getPrimaryMesh();
-    if (primaryMesh && primaryMesh->hasData()) {
-        // bind() and draw() removed - use RHI rendering path instead
-    }
-    */
-
-    // Note: Render pass is NOT ended here on Linux - ImGui will render in the same pass
-    // endRenderPass() will be called after ImGui rendering
-#else
-    // macOS/Windows: Use dynamic rendering (Vulkan 1.3)
-    // Transition swapchain image to COLOR_ATTACHMENT_OPTIMAL
-    transitionImageLayout(
-        imageIndex,
-        vk::ImageLayout::eUndefined,
-        vk::ImageLayout::eColorAttachmentOptimal,
-        {},
-        vk::AccessFlagBits2::eColorAttachmentWrite,
-        vk::PipelineStageFlagBits2::eTopOfPipe,
-        vk::PipelineStageFlagBits2::eColorAttachmentOutput
-    );
-
-    // Transition depth image to depth attachment optimal layout
-    vk::ImageMemoryBarrier2 depthBarrier = {
-        .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
-        .srcAccessMask = {},
-        .dstStageMask = vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-        .dstAccessMask = vk::AccessFlagBits2::eDepthStencilAttachmentRead | vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-        .oldLayout = vk::ImageLayout::eUndefined,
-        .newLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
-        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .image = depthImage->getImage(),
-        .subresourceRange = {
-            .aspectMask = vk::ImageAspectFlagBits::eDepth,
-            .baseMipLevel = 0,
-            .levelCount = 1,
-            .baseArrayLayer = 0,
-            .layerCount = 1
-        }
-    };
-    vk::DependencyInfo depthDependencyInfo = {
-        .imageMemoryBarrierCount = 1,
-        .pImageMemoryBarriers = &depthBarrier
-    };
-    commandManager->getCommandBuffer(currentFrame).pipelineBarrier2(depthDependencyInfo);
-
-    // Setup rendering attachments
-    vk::RenderingAttachmentInfo colorAttachmentInfo = {
-        .imageView = swapchain->getImageView(imageIndex),
-        .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
-        .loadOp = vk::AttachmentLoadOp::eClear,
-        .storeOp = vk::AttachmentStoreOp::eStore,
-        .clearValue = clearValues[0]
-    };
-
-    vk::RenderingAttachmentInfo depthAttachmentInfo = {
-        .imageView = depthImage->getImageView(),
-        .imageLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
-        .loadOp = vk::AttachmentLoadOp::eClear,
-        .storeOp = vk::AttachmentStoreOp::eDontCare,
-        .clearValue = clearValues[1]
-    };
-
-    vk::RenderingInfo renderingInfo = {
-        .renderArea = { .offset = { 0, 0 }, .extent = swapchain->getExtent() },
-        .layerCount = 1,
-        .colorAttachmentCount = 1,
-        .pColorAttachments = &colorAttachmentInfo,
-        .pDepthAttachment = &depthAttachmentInfo
-    };
-
-    // Begin rendering
-    commandManager->getCommandBuffer(currentFrame).beginRendering(renderingInfo);
-    pipeline->bind(commandManager->getCommandBuffer(currentFrame));
-    commandManager->getCommandBuffer(currentFrame).setViewport(
-        0, vk::Viewport(0.0f, 0.0f,
-                       static_cast<float>(swapchain->getExtent().width),
-                       static_cast<float>(swapchain->getExtent().height),
-                       0.0f, 1.0f));
-    commandManager->getCommandBuffer(currentFrame).setScissor(
-        0, vk::Rect2D(vk::Offset2D(0, 0), swapchain->getExtent()));
-
-    // TODO Phase 5: Legacy rendering path temporarily disabled
-    // Mesh no longer has bind/draw methods (migrated to RHI)
-    // Will be removed when legacy Vulkan path is completely replaced
-    /*
-    Mesh* primaryMesh = sceneManager->getPrimaryMesh();
-    if (primaryMesh && primaryMesh->hasData()) {
-        // bind() and draw() removed - use RHI rendering path instead
-    }
-    */
-
-    commandManager->getCommandBuffer(currentFrame).endRendering();
-
-    // Transition swapchain image to PRESENT_SRC
-    transitionImageLayout(
-        imageIndex,
-        vk::ImageLayout::eColorAttachmentOptimal,
-        vk::ImageLayout::ePresentSrcKHR,
-        vk::AccessFlagBits2::eColorAttachmentWrite,
-        {},
-        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-        vk::PipelineStageFlagBits2::eBottomOfPipe
-    );
-#endif
-
-    // Note: end() is called in drawFrame after ImGui rendering
-}
-
-void Renderer::updateUniformBuffer(uint32_t currentImage) {
-    UniformBufferObject ubo{};
-    ubo.model = glm::mat4(1.0f);  // Identity matrix (no model transformation)
-    ubo.view = viewMatrix;
-    ubo.proj = projectionMatrix;
-
-    memcpy(uniformBuffers[currentImage]->getMappedData(), &ubo, sizeof(ubo));
-}
-
-void Renderer::transitionImageLayout(
-    uint32_t imageIndex,
-    vk::ImageLayout oldLayout,
-    vk::ImageLayout newLayout,
-    vk::AccessFlags2 srcAccessMask,
-    vk::AccessFlags2 dstAccessMask,
-    vk::PipelineStageFlags2 srcStageMask,
-    vk::PipelineStageFlags2 dstStageMask) {
-
-    vk::ImageMemoryBarrier2 barrier = {
-        .srcStageMask = srcStageMask,
-        .srcAccessMask = srcAccessMask,
-        .dstStageMask = dstStageMask,
-        .dstAccessMask = dstAccessMask,
-        .oldLayout = oldLayout,
-        .newLayout = newLayout,
-        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .image = swapchain->getImages()[imageIndex],
-        .subresourceRange = {
-            .aspectMask = vk::ImageAspectFlagBits::eColor,
-            .baseMipLevel = 0,
-            .levelCount = 1,
-            .baseArrayLayer = 0,
-            .layerCount = 1
-        }
-    };
-    vk::DependencyInfo dependencyInfo = {
-        .imageMemoryBarrierCount = 1,
-        .pImageMemoryBarriers = &barrier
-    };
-    commandManager->getCommandBuffer(currentFrame).pipelineBarrier2(dependencyInfo);
-}
+// Phase 7: Legacy rendering methods removed (recordCommandBuffer, updateUniformBuffer, transitionImageLayout)
+// Now using RHI-based rendering via drawFrame()
 
 void Renderer::recreateSwapchain() {
     // Wait for window to be visible
@@ -1009,12 +724,12 @@ void Renderer::updateRHIUniformBuffer(uint32_t currentImage) {
 }
 
 // ============================================================================
-// Phase 4.4: Full RHI Render Loop
+// Phase 7: Primary RHI Render Loop (migrated from drawFrameRHI)
 // ============================================================================
 
-void Renderer::drawFrameRHI() {
+void Renderer::drawFrame() {
     // Complete RHI rendering path using RHI abstractions
-    // This replaces the legacy Vulkan rendering in drawFrame()
+    // Phase 7: Replaces legacy Vulkan rendering (now drawFrameLegacy)
 
     if (!rhiBridge || !rhiBridge->isReady()) {
         return;
@@ -1098,6 +813,12 @@ void Renderer::drawFrameRHI() {
                 renderPass->setIndexBuffer(rhiIndexBuffer.get(), rhi::IndexFormat::Uint32, 0);
                 renderPass->drawIndexed(rhiIndexCount, 1, 0, 0, 0);
             }
+        }
+
+        // Phase 7: Render ImGui UI (if initialized)
+        if (imguiManager) {
+            uint32_t imageIndex = rhiBridge->getCurrentImageIndex();
+            imguiManager->render(encoder.get(), imageIndex);
         }
 
         renderPass->end();

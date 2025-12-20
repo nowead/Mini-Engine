@@ -3,7 +3,7 @@
 #include "src/core/VulkanDevice.hpp"
 #include "src/rendering/VulkanSwapchain.hpp"
 #include "src/rendering/VulkanPipeline.hpp"
-#include "src/core/CommandManager.hpp"
+// Phase 7: CommandManager removed - using RHI command encoding
 #include "src/rendering/SyncManager.hpp"
 #include "src/resources/VulkanImage.hpp"
 #include "src/resources/VulkanBuffer.hpp"
@@ -69,7 +69,7 @@ public:
     void loadTexture(const std::string& texturePath);
 
     /**
-     * @brief Draw a single frame
+     * @brief Draw a single frame using RHI rendering (Phase 7: Full RHI migration)
      */
     void drawFrame();
 
@@ -162,7 +162,7 @@ private:
     // Rendering components (directly owned)
     std::unique_ptr<VulkanSwapchain> swapchain;
     std::unique_ptr<VulkanPipeline> pipeline;
-    std::unique_ptr<CommandManager> commandManager;  // TODO Phase 7: Remove when legacy rendering is replaced with RHI
+    // Phase 7: CommandManager removed - using RHI command encoding
     std::unique_ptr<SyncManager> syncManager;
 
     // High-level managers
@@ -232,20 +232,8 @@ private:
     void recordRHICommandBuffer(uint32_t imageIndex);
     void updateRHIUniformBuffer(uint32_t currentImage);
 
-    // RHI frame rendering (Phase 4.4)
-    void drawFrameRHI();
-
-    // Rendering methods
-    void recordCommandBuffer(uint32_t imageIndex);
-    void updateUniformBuffer(uint32_t currentImage);
-    void transitionImageLayout(
-        uint32_t imageIndex,
-        vk::ImageLayout oldLayout,
-        vk::ImageLayout newLayout,
-        vk::AccessFlags2 srcAccessMask,
-        vk::AccessFlags2 dstAccessMask,
-        vk::PipelineStageFlags2 srcStageMask,
-        vk::PipelineStageFlags2 dstStageMask);
+    // Phase 7: Legacy rendering methods removed (drawFrameLegacy, recordCommandBuffer, updateUniformBuffer, transitionImageLayout)
+    // Now using RHI-based rendering via drawFrame()
 
     // Swapchain recreation
     void recreateSwapchain();

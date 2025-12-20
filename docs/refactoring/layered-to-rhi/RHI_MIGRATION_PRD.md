@@ -818,8 +818,8 @@ Daily/weekly tasks to minimize risk:
 | Phase 4: Renderer Migration | 1 day | 2025-12-19 | 2025-12-19 | ✅ **Complete** |
 | Phase 5: Resource/Scene Migration | 2-3 days | 2025-12-20 | 2025-12-20 | ✅ **Complete** |
 | Phase 6: ImGui Migration | 3-4 days | 2025-12-20 | 2025-12-20 | ✅ **Complete** |
-| Phase 7: Testing & Cleanup | 1-2 weeks | TBD | TBD | ⏳ Planned |
-| **Subtotal (Core Migration)** | **3-4 weeks** | - | - | **Phase 1-6 Complete (60%)** |
+| Phase 7: Renderer RHI Migration & Legacy Cleanup | 1 day | 2025-12-20 | 2025-12-20 | ✅ **Complete** |
+| **Subtotal (Core Migration)** | **3-4 weeks** | - | - | **Phase 1-7 Complete (80%)** |
 | Phase 8: WebGPU Backend | 2-3 weeks | TBD | TBD | 🔲 Future |
 | **Total (with WebGPU)** | **5-7 weeks** | - | - | - |
 

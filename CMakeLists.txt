@@ -42,8 +42,7 @@ add_executable(vulkanGLFW
     # Core classes
     src/core/VulkanDevice.cpp
     src/core/VulkanDevice.hpp
-    src/core/CommandManager.cpp
-    src/core/CommandManager.hpp
+    # Phase 7: CommandManager removed - using RHI command encoding
     # Resource classes
     src/resources/VulkanBuffer.cpp
     src/resources/VulkanBuffer.hpp
