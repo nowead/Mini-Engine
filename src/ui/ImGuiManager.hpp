@@ -1,28 +1,29 @@
 #pragma once
 
-#include "src/core/VulkanDevice.hpp"
-#include "src/rendering/VulkanSwapchain.hpp"
-#include "src/core/CommandManager.hpp"
+#include "ImGuiBackend.hpp"
+#include "src/rhi/RHI.hpp"
 #include "src/scene/Camera.hpp"
 
 #include <GLFW/glfw3.h>
 #include <functional>
 #include <string>
+#include <memory>
 
 /**
  * @brief ImGui UI manager (Application layer)
  *
  * Responsibilities:
- * - ImGui context management
+ * - ImGui backend management (Vulkan, WebGPU, etc.)
  * - UI rendering (camera controls, file loading, statistics)
- * - Platform-specific rendering (dynamic rendering on macOS, render pass on Linux)
+ * - Backend-agnostic ImGui integration via adapter pattern
+ *
+ * Note: Migrated to RHI in Phase 6 (ImGui Layer Migration)
  */
 class ImGuiManager {
 public:
     ImGuiManager(GLFWwindow* window,
-                 VulkanDevice& device,
-                 VulkanSwapchain& swapchain,
-                 CommandManager& commandManager);
+                 rhi::RHIDevice* device,
+                 rhi::RHISwapchain* swapchain);
     ~ImGuiManager();
 
     // Disable copy and move
@@ -33,15 +34,11 @@ public:
     void renderUI(Camera& camera, bool isFdfMode, float zScale,
                   std::function<void()> onModeToggle,
                   std::function<void(const std::string&)> onFileLoad);
-    void render(const vk::raii::CommandBuffer& commandBuffer, uint32_t imageIndex);
+    void render(rhi::RHICommandEncoder* encoder, uint32_t imageIndex);
     void handleResize();
 
 private:
-    VulkanDevice& device;
-    VulkanSwapchain& swapchain;
-    CommandManager& commandManager;
-
-    vk::raii::DescriptorPool imguiPool = nullptr;
+    std::unique_ptr<ui::ImGuiBackend> backend;
 
     // UI state
     bool showDemoWindow = false;
@@ -49,8 +46,4 @@ private:
     float moveSpeed = 1.0f;
     float rotateSpeed = 0.5f;
     float zoomSpeed = 1.0f;
-
-    void createDescriptorPool();
-    void initImGui(GLFWwindow* window);
-    void cleanup();
 };

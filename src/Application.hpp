@@ -2,7 +2,6 @@
 
 #include "src/rendering/Renderer.hpp"
 #include "src/scene/Camera.hpp"
-#include "src/ui/ImGuiManager.hpp"
 
 #include <GLFW/glfw3.h>
 #include <memory>
@@ -68,8 +67,7 @@ private:
     // Members (destruction order matters - reverse of declaration order)
     GLFWwindow* window = nullptr;
     std::unique_ptr<Camera> camera;              // Destroyed first (no dependencies)
-    std::unique_ptr<Renderer> renderer;          // Destroyed second
-    std::unique_ptr<ImGuiManager> imguiManager;  // Destroyed third (depends on Renderer's Vulkan resources)
+    std::unique_ptr<Renderer> renderer;          // Destroyed second (now owns ImGuiManager)
 
     // Mouse state
     bool firstMouse = true;

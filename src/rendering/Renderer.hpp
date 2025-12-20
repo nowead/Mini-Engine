@@ -70,9 +70,8 @@ public:
 
     /**
      * @brief Draw a single frame
-     * @param imguiRenderCallback Optional callback for ImGui rendering (takes commandBuffer and imageIndex)
      */
-    void drawFrame(std::function<void(const vk::raii::CommandBuffer&, uint32_t)> imguiRenderCallback = nullptr);
+    void drawFrame();
 
     /**
      * @brief Wait for device to be idle (for cleanup)
@@ -130,9 +129,25 @@ public:
     VulkanSwapchain& getSwapchain() { return *swapchain; }
 
     /**
-     * @brief Get command manager (for external components like ImGui)
+     * @brief Get RHI device (for external components like ImGui)
      */
-    CommandManager& getCommandManager() { return *commandManager; }
+    rhi::RHIDevice* getRHIDevice() { return rhiBridge ? rhiBridge->getDevice() : nullptr; }
+
+    /**
+     * @brief Get RHI swapchain (for external components like ImGui)
+     */
+    rhi::RHISwapchain* getRHISwapchain() { return rhiBridge ? rhiBridge->getSwapchain() : nullptr; }
+
+    /**
+     * @brief Get ImGui manager (for external UI updates)
+     */
+    class ImGuiManager* getImGuiManager() { return imguiManager.get(); }
+
+    /**
+     * @brief Initialize ImGui subsystem
+     */
+    void initImGui(GLFWwindow* window);
+
 
 private:
     // Window reference
@@ -147,12 +162,13 @@ private:
     // Rendering components (directly owned)
     std::unique_ptr<VulkanSwapchain> swapchain;
     std::unique_ptr<VulkanPipeline> pipeline;
-    std::unique_ptr<CommandManager> commandManager;
+    std::unique_ptr<CommandManager> commandManager;  // TODO Phase 7: Remove when legacy rendering is replaced with RHI
     std::unique_ptr<SyncManager> syncManager;
 
     // High-level managers
     std::unique_ptr<ResourceManager> resourceManager;
     std::unique_ptr<SceneManager> sceneManager;
+    std::unique_ptr<class ImGuiManager> imguiManager;  // Phase 6: ImGui integration
 
     // Shared resources managed by Renderer
     std::unique_ptr<VulkanImage> depthImage;
@@ -217,7 +233,7 @@ private:
     void updateRHIUniformBuffer(uint32_t currentImage);
 
     // RHI frame rendering (Phase 4.4)
-    void drawFrameRHI(std::function<void(const vk::raii::CommandBuffer&, uint32_t)> imguiRenderCallback = nullptr);
+    void drawFrameRHI();
 
     // Rendering methods
     void recordCommandBuffer(uint32_t imageIndex);

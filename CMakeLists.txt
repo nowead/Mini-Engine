@@ -74,7 +74,10 @@ add_executable(vulkanGLFW
     src/loaders/OBJLoader.hpp
     src/loaders/FDFLoader.cpp
     src/loaders/FDFLoader.hpp
-    # UI classes
+    # UI classes (Phase 6: ImGui RHI migration)
+    src/ui/ImGuiBackend.hpp
+    src/ui/ImGuiVulkanBackend.hpp
+    src/ui/ImGuiVulkanBackend.cpp
     src/ui/ImGuiManager.cpp
     src/ui/ImGuiManager.hpp
     # RHI Vulkan Backend

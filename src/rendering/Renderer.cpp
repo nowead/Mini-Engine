@@ -1,7 +1,39 @@
 #include "Renderer.hpp"
+#include "src/ui/ImGuiManager.hpp"
+#include "src/rhi/vulkan/VulkanRHICommandEncoder.hpp"
 
 #include <stdexcept>
 #include <iostream>
+
+// ============================================================================
+// Phase 6: Temporary wrapper for legacy command buffer -> RHI encoder
+// This allows ImGui to work during the migration from legacy to RHI rendering
+// ============================================================================
+
+namespace {
+
+/**
+ * @brief Minimal wrapper that allows ImGuiVulkanBackend to access a legacy command buffer
+ *
+ * This lightweight adapter is used during Phase 6 migration to bridge legacy Vulkan
+ * rendering with RHI-based ImGui. The wrapper provides only the getCommandBuffer()
+ * method needed by ImGuiVulkanBackend.
+ *
+ * Once rendering is fully migrated to RHI (Phase 7+), this wrapper will be removed.
+ */
+class LegacyCommandBufferAdapter {
+public:
+    explicit LegacyCommandBufferAdapter(vk::raii::CommandBuffer& cmdBuffer)
+        : commandBuffer(cmdBuffer) {}
+
+    // Provides access to wrapped command buffer for ImGui backend
+    vk::raii::CommandBuffer& getCommandBuffer() { return commandBuffer; }
+
+private:
+    vk::raii::CommandBuffer& commandBuffer;
+};
+
+} // anonymous namespace
 
 Renderer::Renderer(GLFWwindow* window,
                    const std::vector<const char*>& validationLayers,
@@ -97,7 +129,7 @@ void Renderer::loadTexture(const std::string& texturePath) {
     updateDescriptorSets();  // Update descriptors with new texture
 }
 
-void Renderer::drawFrame(std::function<void(const vk::raii::CommandBuffer&, uint32_t)> imguiRenderCallback) {
+void Renderer::drawFrame() {
     // Wait for the current frame's fence
     syncManager->waitForFence(currentFrame);
 
@@ -122,9 +154,12 @@ void Renderer::drawFrame(std::function<void(const vk::raii::CommandBuffer&, uint
     commandManager->getCommandBuffer(currentFrame).reset();
     recordCommandBuffer(imageIndex);
 
-    // Render ImGui if callback is provided
-    if (imguiRenderCallback) {
-        imguiRenderCallback(commandManager->getCommandBuffer(currentFrame), imageIndex);
+    // Phase 6: Render ImGui if manager is initialized
+    if (imguiManager) {
+        // Create temporary adapter to wrap legacy command buffer for RHI-based ImGui
+        LegacyCommandBufferAdapter adapter(commandManager->getCommandBuffer(currentFrame));
+        // Cast to RHICommandEncoder* for ImGui backend (it will static_cast to VulkanRHICommandEncoder)
+        imguiManager->render(reinterpret_cast<rhi::RHICommandEncoder*>(&adapter), imageIndex);
     }
 
     // End command buffer recording
@@ -538,6 +573,11 @@ void Renderer::recreateSwapchain() {
 
     swapchain->recreate();
     createDepthResources();
+
+    // Phase 6: Notify ImGui of resize
+    if (imguiManager) {
+        imguiManager->handleResize();
+    }
 }
 
 vk::Format Renderer::findDepthFormat() {
@@ -546,6 +586,16 @@ vk::Format Renderer::findDepthFormat() {
         vk::ImageTiling::eOptimal,
         vk::FormatFeatureFlagBits::eDepthStencilAttachment
     );
+}
+
+void Renderer::initImGui(GLFWwindow* window) {
+    // Phase 6: Create ImGui manager using RHI types
+    auto* rhiDevice = rhiBridge->getDevice();
+    auto* rhiSwapchain = rhiBridge->getSwapchain();
+
+    if (rhiDevice && rhiSwapchain) {
+        imguiManager = std::make_unique<ImGuiManager>(window, rhiDevice, rhiSwapchain);
+    }
 }
 
 // ============================================================================
@@ -962,10 +1012,9 @@ void Renderer::updateRHIUniformBuffer(uint32_t currentImage) {
 // Phase 4.4: Full RHI Render Loop
 // ============================================================================
 
-void Renderer::drawFrameRHI(std::function<void(const vk::raii::CommandBuffer&, uint32_t)> imguiRenderCallback) {
+void Renderer::drawFrameRHI() {
     // Complete RHI rendering path using RHI abstractions
     // This replaces the legacy Vulkan rendering in drawFrame()
-    // Note: imguiRenderCallback is currently unused in RHI path
 
     if (!rhiBridge || !rhiBridge->isReady()) {
         return;

@@ -816,10 +816,10 @@ Daily/weekly tasks to minimize risk:
 | Phase 2: Vulkan Backend | 1 day | 2025-12-19 | 2025-12-19 | ✅ **Complete** |
 | Phase 3: RHI Factory & Bridge | 1 day | 2025-12-19 | 2025-12-19 | ✅ **Complete** |
 | Phase 4: Renderer Migration | 1 day | 2025-12-19 | 2025-12-19 | ✅ **Complete** |
-| Phase 5: Resource/Scene Migration | 2-3 days | TBD | TBD | ⏳ Planned |
-| Phase 6: ImGui Migration | 3-4 days | TBD | TBD | ⏳ Planned |
+| Phase 5: Resource/Scene Migration | 2-3 days | 2025-12-20 | 2025-12-20 | ✅ **Complete** |
+| Phase 6: ImGui Migration | 3-4 days | 2025-12-20 | 2025-12-20 | ✅ **Complete** |
 | Phase 7: Testing & Cleanup | 1-2 weeks | TBD | TBD | ⏳ Planned |
-| **Subtotal (Core Migration)** | **3-4 weeks** | - | - | **Phase 1-4 Complete** |
+| **Subtotal (Core Migration)** | **3-4 weeks** | - | - | **Phase 1-6 Complete (60%)** |
 | Phase 8: WebGPU Backend | 2-3 weeks | TBD | TBD | 🔲 Future |
 | **Total (with WebGPU)** | **5-7 weeks** | - | - | - |
 
@@ -841,10 +841,10 @@ Daily/weekly tasks to minimize risk:
 - ✅ **M2**: Vulkan backend functional (Phase 2) - **COMPLETE** (2025-12-19)
 - ✅ **M3**: RHI Factory & Bridge (Phase 3) - **COMPLETE** (2025-12-19)
 - ✅ **M4**: Renderer RHI Migration (Phase 4) - **COMPLETE** (2025-12-19)
-- ⏳ **M5**: Core migration complete (Phases 5-7) - PENDING
-  - 🔲 Phase 5: Resource/Scene Migration
-  - 🔲 Phase 6: ImGui Integration
-  - 🔲 Phase 7: Testing & Code Cleanup
+- ⏳ **M5**: Core migration complete (Phases 5-7) - **60% COMPLETE**
+  - ✅ Phase 5: Resource/Scene Migration - **COMPLETE** (2025-12-20)
+  - ✅ Phase 6: ImGui Integration - **COMPLETE** (2025-12-20)
+  - 🔲 Phase 7: Testing & Code Cleanup - PENDING
 - 🔲 **M6**: WebGPU backend functional (Phase 8)
 - 🔲 **M7**: Production-ready multi-backend engine
 

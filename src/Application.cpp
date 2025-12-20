@@ -1,4 +1,5 @@
 #include "Application.hpp"
+#include "src/ui/ImGuiManager.hpp"
 
 #include <iostream>
 #include <stdexcept>
@@ -12,9 +13,8 @@ Application::Application() {
 
 Application::~Application() {
     // RAII cleanup: Members destroyed in reverse declaration order
-    // 1. ~ImGuiManager() - cleans up ImGui resources
-    // 2. ~Renderer() - calls waitIdle() and cleans up Vulkan resources
-    // 3. ~Camera() - no special cleanup needed
+    // 1. ~Renderer() - cleans up ImGui (if initialized), calls waitIdle(), cleans up Vulkan resources
+    // 2. ~Camera() - no special cleanup needed
 
     // Manual cleanup for raw pointers only
     if (window) {
@@ -56,14 +56,9 @@ void Application::initVulkan() {
         renderer->loadTexture(TEXTURE_PATH);
     }
 
-    // Create ImGui manager if enabled
+    // Phase 6: Initialize ImGui if enabled (now managed by Renderer)
     if (ENABLE_IMGUI) {
-        imguiManager = std::make_unique<ImGuiManager>(
-            window,
-            renderer->getDevice(),
-            renderer->getSwapchain(),
-            renderer->getCommandManager()
-        );
+        renderer->initImGui(window);
     }
 }
 
@@ -73,10 +68,11 @@ void Application::mainLoop() {
         processInput();
         renderer->updateCamera(camera->getViewMatrix(), camera->getProjectionMatrix());
 
-        // Render ImGui UI
-        if (ENABLE_IMGUI && imguiManager) {
-            imguiManager->newFrame();
-            imguiManager->renderUI(
+        // Phase 6: Render ImGui UI (now handled internally by Renderer)
+        if (ENABLE_IMGUI && renderer->getImGuiManager()) {
+            auto* imgui = renderer->getImGuiManager();
+            imgui->newFrame();
+            imgui->renderUI(
                 *camera,
                 renderer->isFdfMode(),
                 renderer->getZScale(),
@@ -85,14 +81,10 @@ void Application::mainLoop() {
                     renderer->loadModel(path);
                 }
             );
-
-            // Pass ImGui render callback to renderer
-            renderer->drawFrame([this](const vk::raii::CommandBuffer& commandBuffer, uint32_t imageIndex) {
-                imguiManager->render(commandBuffer, imageIndex);
-            });
-        } else {
-            renderer->drawFrame();
         }
+
+        // Renderer handles both scene and ImGui rendering
+        renderer->drawFrame();
     }
     renderer->waitIdle();
 }

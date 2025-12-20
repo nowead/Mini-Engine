@@ -9,6 +9,19 @@
  *
  * Handles command pool creation, command buffer allocation, and provides
  * utilities for single-time command execution (staging operations).
+ *
+ * @deprecated This class is only used by the legacy Vulkan rendering path.
+ * It will be removed in Phase 7 when the Renderer is fully migrated to RHI.
+ *
+ * Current usage (Phase 6):
+ * - Renderer::drawFrame() - Legacy rendering path
+ * - Renderer::recordCommandBuffer() - Legacy command recording
+ *
+ * Migration status:
+ * - ImGui: ✅ Migrated to RHI (Phase 6) - uses direct RHI command encoding
+ * - ResourceManager: ✅ Migrated to RHI (Phase 5) - uses direct RHI command encoding
+ * - SceneManager: ✅ Migrated to RHI (Phase 5) - uses direct RHI command encoding
+ * - Renderer: ⏳ Pending (Phase 7) - still uses legacy CommandManager
  */
 class CommandManager {
 public:

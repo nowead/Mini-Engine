@@ -110,6 +110,9 @@ public:
     void copyTextureToTexture(const rhi::TextureCopyInfo& src, const rhi::TextureCopyInfo& dst, const rhi::Extent3D& copySize) override;
     std::unique_ptr<RHICommandBuffer> finish() override;
 
+    // Vulkan-specific accessor (for ImGui backend)
+    vk::raii::CommandBuffer& getCommandBuffer() { return m_commandBuffer; }
+
 private:
     VulkanRHIDevice* m_device;
     vk::raii::CommandBuffer m_commandBuffer;
