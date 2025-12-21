@@ -123,8 +123,10 @@ bool RendererBridge::beginFrame() {
         return false;
     }
 
-    // Wait for this frame's fence
-    m_inFlightFences[m_currentFrame]->wait();
+    // Phase 8: Wait for fence FIRST to ensure previous frame completed
+    // This prevents semaphore reuse before the previous signal is consumed
+    m_inFlightFences[m_currentFrame]->wait(UINT64_MAX);
+    m_inFlightFences[m_currentFrame]->reset();
 
     // Phase 7.5: Acquire next image with semaphore signaling
     // The semaphore will be signaled when the image is ready to be rendered to
@@ -144,9 +146,6 @@ bool RendererBridge::beginFrame() {
 
     // Store current image index (from swapchain)
     m_currentImageIndex = m_swapchain->getCurrentImageIndex();
-
-    // Reset fence for this frame
-    m_inFlightFences[m_currentFrame]->reset();
 
     return true;
 }

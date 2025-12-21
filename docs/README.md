@@ -59,12 +59,13 @@ The engine was built through a systematic 11-phase refactoring process, transfor
 
 #### RHI (Render Hardware Interface) Migration
 
-The engine is undergoing a major architectural upgrade to support multiple graphics backends through a hardware-agnostic RHI layer.
+✅ **COMPLETED (2025-12-21)** - Multi-backend graphics architecture with complete Vulkan implementation.
 
 **[RHI Migration PRD](refactoring/layered-to-rhi/RHI_MIGRATION_PRD.md)**
-- Complete migration plan (12 phases)
+
+- Complete migration plan (Phases 1-8 complete)
 - WebGPU-style API design
-- Multi-backend architecture (Vulkan, WebGPU, Metal, D3D12)
+- Multi-backend architecture (Vulkan ✅, WebGPU/Metal/D3D12 planned)
 
 **RHI Phase Documentation:**
 
@@ -74,11 +75,15 @@ The engine is undergoing a major architectural upgrade to support multiple graph
 4. **[Phase 4: Renderer Migration](refactoring/layered-to-rhi/PHASE4_SUMMARY.md)** ✅
 5. **[Phase 5: Scene Layer Migration](refactoring/layered-to-rhi/PHASE5_SUMMARY.md)** ✅
 6. **[Phase 6: ImGui Migration](refactoring/layered-to-rhi/PHASE6_SUMMARY.md)** ✅
-7. **[Phase 7: Legacy Cleanup](refactoring/layered-to-rhi/PHASE7_SUMMARY.md)** ✅
-8. **[Phase 8: Directory Refactoring](refactoring/layered-to-rhi/PHASE8_DIRECTORY_REFACTORING.md)** 📋 PLANNED
+7. **[Phase 7: Renderer RHI Migration](refactoring/layered-to-rhi/PHASE7_SUMMARY.md)** ✅
+8. **[Phase 8: Legacy Code Cleanup](refactoring/layered-to-rhi/PHASE8_SUMMARY.md)** ✅ **LATEST**
+   - **[Directory Refactoring](refactoring/layered-to-rhi/PHASE8_DIRECTORY_REFACTORING.md)** - Modular structure
 
 **Additional RHI Documentation:**
+
+- **[Architecture Overview](refactoring/layered-to-rhi/ARCHITECTURE.md)** ✨ **NEW** - Complete 4-layer architecture guide
 - **[RHI Technical Guide](refactoring/layered-to-rhi/RHI_TECHNICAL_GUIDE.md)** - API usage and patterns
+- **[Troubleshooting](refactoring/layered-to-rhi/TROUBLESHOOTING.md)** - Migration issues and solutions
 - **[Legacy Code Reference](refactoring/layered-to-rhi/LEGACY_CODE_REFERENCE.md)** - Pre-RHI code archive
 
 ---
@@ -300,5 +305,6 @@ Found an error in the documentation? Want to suggest improvements?
 
 ---
 
-*Last Updated: 2025-11-17*
-*Project: Mini-Engine (vulkan-fdf)*
+*Last Updated: 2025-12-21*
+*Project: Mini-Engine*
+*Latest: Phase 8 Complete - RHI Migration & Legacy Cleanup*

@@ -23,61 +23,25 @@ Renderer::Renderer(GLFWwindow* window,
     device->createSurface(window);
     device->createLogicalDevice();
 
-    // Phase 4: Initialize RHI Bridge (parallel to legacy device)
-    // Note: RHI Bridge creates its own VulkanRHIDevice internally
-    // In future phases, we'll use this as the primary device
+    // Phase 4: Initialize RHI Bridge (primary rendering system)
     rhiBridge = std::make_unique<rendering::RendererBridge>(window, enableValidation);
 
-    // Create rendering components
-    swapchain = std::make_unique<VulkanSwapchain>(*device, window);
-    createDepthResources();
+    // Create swapchain first (needed for depth resources)
+    int width, height;
+    glfwGetFramebufferSize(window, &width, &height);
+    rhiBridge->createSwapchain(static_cast<uint32_t>(width), static_cast<uint32_t>(height), true);
 
-    // Select shader and topology based on mode
-    std::string shaderPath = fdfMode ? "shaders/fdf.spv" : "shaders/slang.spv";
-    TopologyMode topology = fdfMode ? TopologyMode::LineList : TopologyMode::TriangleList;
-
-    // Platform-specific pipeline creation
-#ifdef __linux__
-    // Linux: Create render pass and framebuffers for traditional rendering
-    swapchain->createRenderPass(findDepthFormat());
-    std::vector<vk::ImageView> depthViews(swapchain->getImageCount(), depthImage->getImageView());
-    swapchain->createFramebuffers(depthViews);
-
-    // Create pipeline with render pass
-    pipeline = std::make_unique<VulkanPipeline>(
-        *device, *swapchain, shaderPath, findDepthFormat(), swapchain->getRenderPass(), topology);
-#else
-    // macOS/Windows: Create pipeline with dynamic rendering
-    pipeline = std::make_unique<VulkanPipeline>(
-        *device, *swapchain, shaderPath, findDepthFormat(), nullptr, topology);
-#endif
-
-    // Phase 7: CommandManager removed - now using RHI command encoding
-    // Create sync manager (still needed for legacy swapchain synchronization)
-    syncManager = std::make_unique<SyncManager>(
-        *device, MAX_FRAMES_IN_FLIGHT, swapchain->getImageCount());
-
-    // Create high-level managers using RHI (Phase 5)
+    // Create high-level managers using RHI
     auto* rhiDevice = rhiBridge->getDevice();
     auto* rhiQueue = rhiDevice->getQueue(rhi::QueueType::Graphics);
     resourceManager = std::make_unique<ResourceManager>(rhiDevice, rhiQueue);
     sceneManager = std::make_unique<SceneManager>(rhiDevice, rhiQueue);
 
-    // Create uniform buffers and descriptors
-    createUniformBuffers();
-    createDescriptorPool();
-    createDescriptorSets();
-
-    // Phase 4: Create RHI resources (parallel to legacy for testing)
+    // Phase 8: Create RHI resources only
     createRHIDepthResources();
     createRHIUniformBuffers();
     createRHIBindGroups();
-    createRHIPipeline();  // Phase 4.4
-
-    // Initialize descriptors (FDF mode doesn't need texture)
-    if (fdfMode) {
-        updateDescriptorSets();
-    }
+    createRHIPipeline();
 }
 
 Renderer::~Renderer() {
@@ -98,11 +62,10 @@ void Renderer::loadModel(const std::string& modelPath) {
 
 void Renderer::loadTexture(const std::string& texturePath) {
     resourceManager->loadTexture(texturePath);  // Delegates to ResourceManager
-    updateDescriptorSets();  // Update descriptors with new texture
+    // Phase 8: Descriptor updates now handled via RHI bind groups
 }
 
-// Phase 7: Legacy rendering methods (drawFrameLegacy, recordCommandBuffer, updateUniformBuffer, transitionImageLayout) removed
-// Now using RHI-based rendering via drawFrame()
+// Phase 8: All legacy rendering methods removed - using only RHI-based rendering via drawFrame()
 
 void Renderer::waitIdle() {
     device->getDevice().waitIdle();
@@ -151,130 +114,7 @@ float Renderer::getMeshRadius() const {
     return 0.0f;
 }
 
-void Renderer::createDepthResources() {
-    vk::Format depthFormat = findDepthFormat();
-
-    depthImage = std::make_unique<VulkanImage>(*device,
-        swapchain->getExtent().width, swapchain->getExtent().height,
-        depthFormat,
-        vk::ImageTiling::eOptimal,
-        vk::ImageUsageFlagBits::eDepthStencilAttachment,
-        vk::MemoryPropertyFlagBits::eDeviceLocal,
-        vk::ImageAspectFlagBits::eDepth);
-}
-
-void Renderer::createUniformBuffers() {
-    uniformBuffers.clear();
-
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        vk::DeviceSize bufferSize = sizeof(UniformBufferObject);
-        auto uniformBuffer = std::make_unique<VulkanBuffer>(*device, bufferSize,
-            vk::BufferUsageFlagBits::eUniformBuffer,
-            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-
-        // Map the buffer for persistent mapping
-        uniformBuffer->map();
-        uniformBuffers.emplace_back(std::move(uniformBuffer));
-    }
-}
-
-void Renderer::createDescriptorPool() {
-    std::array poolSizes {
-        vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT),
-        vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler, MAX_FRAMES_IN_FLIGHT)
-    };
-    vk::DescriptorPoolCreateInfo poolInfo{
-        .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
-        .maxSets = MAX_FRAMES_IN_FLIGHT,
-        .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
-        .pPoolSizes = poolSizes.data()
-    };
-    descriptorPool = vk::raii::DescriptorPool(device->getDevice(), poolInfo);
-}
-
-void Renderer::createDescriptorSets() {
-    std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, pipeline->getDescriptorSetLayout());
-    vk::DescriptorSetAllocateInfo allocInfo{
-        .descriptorPool = descriptorPool,
-        .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
-        .pSetLayouts = layouts.data()
-    };
-
-    descriptorSets.clear();
-    descriptorSets = device->getDevice().allocateDescriptorSets(allocInfo);
-}
-
-void Renderer::updateDescriptorSets() {
-    if (fdfMode) {
-        // FDF mode: Only update uniform buffer (no texture)
-        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-            vk::DescriptorBufferInfo bufferInfo{
-                .buffer = uniformBuffers[i]->getHandle(),
-                .offset = 0,
-                .range = sizeof(UniformBufferObject)
-            };
-
-            vk::WriteDescriptorSet descriptorWrite{
-                .dstSet = descriptorSets[i],
-                .dstBinding = 0,
-                .dstArrayElement = 0,
-                .descriptorCount = 1,
-                .descriptorType = vk::DescriptorType::eUniformBuffer,
-                .pBufferInfo = &bufferInfo
-            };
-
-            device->getDevice().updateDescriptorSets(descriptorWrite, {});
-        }
-    } else {
-        // OBJ mode: Update both uniform buffer and texture
-        // TODO Phase 5: Legacy descriptor updates - needs RHI texture view integration
-        // Temporarily disabled until descriptor set migration complete
-        /*
-        auto* textureImage = resourceManager->getTexture("textures/viking_room.png");
-        if (!textureImage) {
-            return;  // Texture not loaded yet
-        }
-        */
-        return;  // Skip legacy descriptor updates for now
-
-        /*
-        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-            vk::DescriptorBufferInfo bufferInfo{
-                .buffer = uniformBuffers[i]->getHandle(),
-                .offset = 0,
-                .range = sizeof(UniformBufferObject)
-            };
-            vk::DescriptorImageInfo imageInfo{
-                .sampler = textureImage->getSampler(),
-                .imageView = textureImage->getImageView(),
-                .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal
-            };
-            std::array descriptorWrites{
-                vk::WriteDescriptorSet{
-                    .dstSet = descriptorSets[i],
-                    .dstBinding = 0,
-                    .dstArrayElement = 0,
-                    .descriptorCount = 1,
-                    .descriptorType = vk::DescriptorType::eUniformBuffer,
-                    .pBufferInfo = &bufferInfo
-                },
-                vk::WriteDescriptorSet{
-                    .dstSet = descriptorSets[i],
-                    .dstBinding = 1,
-                    .dstArrayElement = 0,
-                    .descriptorCount = 1,
-                    .descriptorType = vk::DescriptorType::eCombinedImageSampler,
-                    .pImageInfo = &imageInfo
-                }
-            };
-            device->getDevice().updateDescriptorSets(descriptorWrites, {});
-        }
-        */
-    }
-}
-
-// Phase 7: Legacy rendering methods removed (recordCommandBuffer, updateUniformBuffer, transitionImageLayout)
-// Now using RHI-based rendering via drawFrame()
+// Phase 8: All legacy resource creation methods removed - using only RHI
 
 void Renderer::recreateSwapchain() {
     // Wait for window to be visible
@@ -287,21 +127,15 @@ void Renderer::recreateSwapchain() {
 
     device->getDevice().waitIdle();
 
-    swapchain->recreate();
-    createDepthResources();
+    // Phase 8: Recreate RHI swapchain and depth resources
+    rhiBridge->createSwapchain(static_cast<uint32_t>(width), static_cast<uint32_t>(height), true);
+    createRHIDepthResources();
+    createRHIPipeline();  // Pipeline needs recreation with new render pass on Linux
 
-    // Phase 6: Notify ImGui of resize
+    // Notify ImGui of resize
     if (imguiManager) {
         imguiManager->handleResize();
     }
-}
-
-vk::Format Renderer::findDepthFormat() {
-    return device->findSupportedFormat(
-        {vk::Format::eD32Sfloat, vk::Format::eD32SfloatS8Uint, vk::Format::eD24UnormS8Uint},
-        vk::ImageTiling::eOptimal,
-        vk::FormatFeatureFlagBits::eDepthStencilAttachment
-    );
 }
 
 void Renderer::initImGui(GLFWwindow* window) {
@@ -324,11 +158,15 @@ void Renderer::createRHIDepthResources() {
     }
 
     auto* rhiDevice = rhiBridge->getDevice();
+    auto* rhiSwapchain = rhiBridge->getSwapchain();
+    if (!rhiSwapchain) {
+        return;  // Swapchain not created yet
+    }
 
     // Create depth texture using RHI
     rhi::TextureDesc depthDesc;
-    depthDesc.size = rhi::Extent3D(swapchain->getExtent().width, swapchain->getExtent().height, 1);
-    depthDesc.format = rhi::TextureFormat::Depth32Float;  // Corresponds to vk::Format::eD32Sfloat
+    depthDesc.size = rhi::Extent3D(rhiSwapchain->getWidth(), rhiSwapchain->getHeight(), 1);
+    depthDesc.format = rhi::TextureFormat::Depth32Float;
     depthDesc.usage = rhi::TextureUsage::DepthStencil;
     depthDesc.label = "RHI Depth Image";
 
@@ -653,97 +491,8 @@ void Renderer::createRHIBuffers() {
 }
 
 // ============================================================================
-// Phase 4.2: RHI Command Recording (parallel to legacy recording)
+// Phase 8: RHI Uniform Buffer Update
 // ============================================================================
-
-void Renderer::recordRHICommandBuffer(uint32_t imageIndex) {
-    // This function demonstrates RHI command recording alongside legacy Vulkan
-    // In the final migration phase, this will replace recordCommandBuffer()
-
-    if (!rhiBridge || !rhiBridge->isReady()) {
-        return;
-    }
-
-    // Create command encoder for this frame
-    auto encoder = rhiBridge->createCommandEncoder();
-    if (!encoder) {
-        return;
-    }
-
-    // Get current swapchain view for rendering
-    auto* swapchainView = rhiBridge->getCurrentSwapchainView();
-    if (!swapchainView) {
-        return;
-    }
-
-    // Setup render pass descriptor
-    rhi::RenderPassDesc renderPassDesc;
-    renderPassDesc.width = swapchain->getExtent().width;
-    renderPassDesc.height = swapchain->getExtent().height;
-
-    // Color attachment (swapchain image)
-    rhi::RenderPassColorAttachment colorAttachment;
-    colorAttachment.view = swapchainView;
-    colorAttachment.loadOp = rhi::LoadOp::Clear;
-    colorAttachment.storeOp = rhi::StoreOp::Store;
-    colorAttachment.clearValue = rhi::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
-    renderPassDesc.colorAttachments.push_back(colorAttachment);
-
-    // Depth attachment
-    rhi::RenderPassDepthStencilAttachment depthAttachmentStorage;
-    if (rhiDepthImage) {
-        // Create view for depth image
-        rhi::TextureViewDesc depthViewDesc;
-        depthViewDesc.format = rhi::TextureFormat::Depth32Float;
-        depthViewDesc.dimension = rhi::TextureViewDimension::View2D;
-        auto depthView = rhiDepthImage->createView(depthViewDesc);
-
-        depthAttachmentStorage.view = depthView.get();  // Note: view ownership issue - would need caching
-        depthAttachmentStorage.depthLoadOp = rhi::LoadOp::Clear;
-        depthAttachmentStorage.depthStoreOp = rhi::StoreOp::DontCare;
-        depthAttachmentStorage.depthClearValue = 1.0f;
-        depthAttachmentStorage.stencilLoadOp = rhi::LoadOp::DontCare;
-        depthAttachmentStorage.stencilStoreOp = rhi::StoreOp::DontCare;
-        // Note: For proper implementation, depth view should be cached
-        // renderPassDesc.depthStencilAttachment = &depthAttachmentStorage;
-    }
-
-    // Begin render pass
-    auto renderPassEncoder = encoder->beginRenderPass(renderPassDesc);
-    if (!renderPassEncoder) {
-        return;
-    }
-
-    // Set viewport and scissor
-    renderPassEncoder->setViewport(
-        0.0f, 0.0f,
-        static_cast<float>(swapchain->getExtent().width),
-        static_cast<float>(swapchain->getExtent().height),
-        0.0f, 1.0f
-    );
-    renderPassEncoder->setScissorRect(
-        0, 0,
-        swapchain->getExtent().width,
-        swapchain->getExtent().height
-    );
-
-    // TODO: In future phases:
-    // - Set RHI pipeline (when RHI pipeline is created)
-    // - Set bind groups
-    // - Bind vertex/index buffers from SceneManager
-    // - Draw calls
-
-    // End render pass
-    renderPassEncoder->end();
-
-    // Finish encoding and store command buffer
-    // Note: In production, we would submit this to the queue
-    auto commandBuffer = encoder->finish();
-
-    // For now, we just verify the command buffer was created successfully
-    // In future phases, this will be submitted via rhiBridge->submitCommandBuffer()
-    (void)commandBuffer;  // Suppress unused variable warning
-}
 
 void Renderer::updateRHIUniformBuffer(uint32_t currentImage) {
     if (currentImage >= rhiUniformBuffers.size() || !rhiUniformBuffers[currentImage]) {

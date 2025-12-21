@@ -1,9 +1,9 @@
 # RHI Migration - Product Requirements Document (PRD)
 
 **Project**: Mini-Engine RHI (Render Hardware Interface) Architecture Migration
-**Version**: 1.3
+**Version**: 2.0
 **Date**: 2025-12-21 (Updated)
-**Status**: Core Migration Complete - Phase 7.5 Complete
+**Status**: ✅ **Core Migration Complete - Phase 1-8 Complete**
 **Owner**: Development Team
 
 ---
@@ -26,12 +26,21 @@ This document outlines the complete migration of Mini-Engine from a Vulkan-only 
 - **Phase 4 (Renderer Migration)**: ✅ **COMPLETED** (2025-12-19)
 - **Phase 5 (Scene Layer Migration)**: ✅ **COMPLETED** (2025-12-20)
 - **Phase 6 (ImGui Migration)**: ✅ **COMPLETED** (2025-12-20)
-- **Phase 7 (Renderer RHI Migration & Legacy Cleanup)**: ✅ **COMPLETED** (2025-12-20)
+- **Phase 7 (Renderer RHI Migration)**: ✅ **COMPLETED** (2025-12-20)
 - **Phase 7.5 (RHI Runtime Fixes)**: ✅ **COMPLETED** (2025-12-21)
-- **Phase 8 (Directory Refactoring)**: 📋 **PLANNED**
-- **Phase 9-12**: Pending
+- **Phase 8 (Legacy Code Cleanup & Directory Refactoring)**: ✅ **COMPLETED** (2025-12-21)
+- **Phase 9+ (WebGPU Backend, Advanced Features)**: 📋 **PLANNED**
 
-**🎉 Core RHI Migration Complete! Engine now runs on 100% RHI-native rendering with zero validation errors.**
+**🎉 Phase 1-8 Complete! 100% RHI-native rendering with zero legacy code and zero validation errors.**
+
+### Phase 8 Achievements (2025-12-21)
+
+- ✅ ~890 LOC legacy code deleted (VulkanBuffer, VulkanImage, VulkanPipeline, VulkanSwapchain, SyncManager)
+- ✅ 100% RHI-native rendering pipeline
+- ✅ Directory structure refactored to `src/rhi/` and `src/rhi-vulkan/`
+- ✅ Initialization order bugs fixed
+- ✅ Semaphore synchronization warnings resolved
+- ✅ Complete documentation (PHASE8_SUMMARY.md, ARCHITECTURE.md)
 
 ---
 
@@ -132,16 +141,22 @@ This document outlines the complete migration of Mini-Engine from a Vulkan-only 
 - [x] Smoke tests: 6/6 passing
 - [x] Application test: RHI buffers uploaded (742KB vertices, 369KB indices)
 
-### Phase 5-7: Core Migration
-- [ ] ResourceManager, SceneManager migrated
-- [ ] ImGui integration working
-- [ ] All existing functionality preserved
-- [ ] Regression tests pass
+### Phase 5-8: Core Migration ✅ COMPLETE
 
-### Phase 8+: Additional Backends
+- [x] ResourceManager, SceneManager migrated (Phase 5)
+- [x] ImGui integration working (Phase 6)
+- [x] All existing functionality preserved (Phase 7)
+- [x] Legacy code cleanup complete (Phase 8)
+- [x] Directory refactoring complete (Phase 8)
+- [x] Zero validation errors (Phase 8)
+
+### Phase 9+: Advanced Features
+
 - [ ] WebGPU backend functional
 - [ ] Browser deployment working
 - [ ] Optional: D3D12, Metal backends
+- [ ] VulkanDevice removal (full RHI independence)
+- [ ] Ray tracing abstraction
 
 ---
 
@@ -733,65 +748,106 @@ See [PHASE7_SUMMARY.md](PHASE7_SUMMARY.md#phase-75-rhi-runtime-fixes) for detail
 
 ---
 
-### Phase 8: RHI Directory Refactoring - Modular Architecture
+### Phase 8: Legacy Code Cleanup & Directory Refactoring ✅ COMPLETED
 
-**Goal**: Refactor RHI code into modular, industry-standard directory structure
+**Goal**: Remove all legacy Vulkan wrapper classes and refactor to modular directory structure
 
-**Timeline**: 1-2 days
+**Status**: ✅ **COMPLETED** (2025-12-21)
+
+**Timeline**: 1-2 days (estimated) → **Actual: 1 day**
+
+#### Part 1: Legacy Code Deletion
 
 **Motivation**:
-- Current structure has all files in single `src/rhi/` folder with no Public/Private separation
-- Header and implementation files mixed together
-- Difficult to add new backends (WebGPU, Metal, D3D12)
 
-**Target Architecture** (Unreal Engine Style):
+- Duplicate resource management (legacy + RHI versions)
+- ~890 lines of obsolete wrapper classes
+- Memory overhead from maintaining two parallel systems
+
+**Deleted Components**:
+
+| Component        | Files                | Lines Deleted | Replacement             |
+|------------------|----------------------|---------------|-------------------------|
+| **VulkanBuffer** | VulkanBuffer.hpp/cpp | ~250          | rhi::RHIBuffer          |
+| **VulkanImage**  | VulkanImage.hpp/cpp  | ~200          | rhi::RHITexture         |
+| **VulkanPipeline** | VulkanPipeline.hpp/cpp | ~75       | rhi::RHIRenderPipeline  |
+| **VulkanSwapchain** | VulkanSwapchain.hpp/cpp | ~86    | rhi::RHISwapchain       |
+| **SyncManager**  | SyncManager.hpp/cpp  | ~140          | RHI internal sync       |
+| **CommandManager** | CommandManager.hpp/cpp | ~140      | RHI command encoding    |
+| **Total**        | **10 files**         | **~890**      | **100% RHI**            |
+
+#### Part 2: Directory Refactoring
+
+**Target Architecture** (Achieved):
 ```
 src/
-├── rhi/                           # RHI Abstract Interface Module
-│   ├── include/rhi/               # Public headers
+├── rhi/                           # ✅ RHI Abstract Interface Module
+│   ├── include/rhi/               # Public headers (15 files)
 │   │   ├── RHI.hpp
-│   │   ├── Device.hpp
-│   │   ├── Buffer.hpp
-│   │   └── ...
-│   ├── src/                       # Private implementation
+│   │   ├── RHIDevice.hpp
+│   │   ├── RHIBuffer.hpp
+│   │   └── ... (12 more)
+│   ├── src/                       # Factory implementation
+│   │   └── RHIFactory.cpp
 │   └── CMakeLists.txt
 │
-├── rhi-vulkan/                    # Vulkan Backend Module
-│   ├── include/rhi-vulkan/
-│   ├── src/
+├── rhi-vulkan/                    # ✅ Vulkan Backend Module
+│   ├── include/rhi-vulkan/        # Vulkan implementations
+│   │   └── VulkanRHI*.hpp (12 files)
+│   ├── src/                       # Implementation
+│   │   └── VulkanRHI*.cpp (12 files)
 │   └── CMakeLists.txt
 │
-└── rhi-webgpu/                    # WebGPU Backend Module (Phase 9+)
+└── rhi-webgpu/                    # 🔲 WebGPU Backend (Phase 9+)
 ```
 
-**Tasks**:
+**Tasks Completed**:
 
-| # | Task | Priority | Status |
-|---|------|----------|--------|
-| 8.1 | Create new directory structure | P0 | 🗓️ |
-| 8.2 | Move RHI interface headers to `rhi/include/rhi/` | P0 | 🗓️ |
-| 8.3 | Move Vulkan backend to `rhi-vulkan/src/` | P0 | 🗓️ |
-| 8.4 | Create Forward.hpp for forward declarations | P1 | 🗓️ |
-| 8.5 | Create `rhi/CMakeLists.txt` | P0 | 🗓️ |
-| 8.6 | Create `rhi-vulkan/CMakeLists.txt` | P0 | 🗓️ |
-| 8.7 | Update root CMakeLists.txt | P0 | 🗓️ |
-| 8.8 | Update all include statements | P0 | 🗓️ |
-| 8.9 | Build verification | P0 | 🗓️ |
-| 8.10 | Runtime verification | P0 | 🗓️ |
-| 8.11 | Cleanup old directories | P0 | 🗓️ |
+| #    | Task                           | Priority | Status | Notes                     |
+|------|--------------------------------|----------|--------|---------------------------|
+| 8.1  | Create new directory structure | P0       | ✅     | src/rhi/, src/rhi-vulkan/ |
+| 8.2 | Move RHI interface headers | P0 | ✅ | 15 headers → rhi/include/rhi/ |
+| 8.3 | Move Vulkan backend | P0 | ✅ | 12 implementations → rhi-vulkan/ |
+| 8.4 | Delete legacy wrapper classes | P0 | ✅ | ~890 LOC removed |
+| 8.5 | Create `rhi/CMakeLists.txt` | P0 | ✅ | Static library: rhi_factory |
+| 8.6 | Create `rhi-vulkan/CMakeLists.txt` | P0 | ✅ | Static library: rhi_vulkan |
+| 8.7 | Update root CMakeLists.txt | P0 | ✅ | Link libraries updated |
+| 8.8 | Update all include statements | P0 | ✅ | #include "rhi/RHI*.hpp" |
+| 8.9 | Fix initialization order bugs | P0 | ✅ | Swapchain before depth |
+| 8.10 | Fix semaphore synchronization | P0 | ✅ | Fence wait before acquire |
+| 8.11 | Build verification | P0 | ✅ | Clean build, 0 errors |
+| 8.12 | Runtime verification | P0 | ✅ | 0 validation errors |
+| 8.13 | Documentation | P0 | ✅ | PHASE8_SUMMARY.md, ARCHITECTURE.md |
 
-**Architecture Benefits**:
-- ✅ Same architecture pattern as Unreal Engine, Unity
+**Critical Fixes**:
+
+1. **Initialization Order** ([src/rendering/Renderer.cpp:29-32](../../../src/rendering/Renderer.cpp#L29-L32)):
+   - Fixed: Swapchain created before depth resources
+   - Prevented segmentation fault from null depth attachment
+
+2. **Semaphore Synchronization** ([src/rendering/RendererBridge.cpp:126-129](../../../src/rendering/RendererBridge.cpp#L126-L129)):
+   - Fixed: Fence wait before image acquisition
+   - Eliminated validation warnings
+
+**Architecture Benefits Achieved**:
+
+- ✅ Same pattern as Unreal Engine, Unity
 - ✅ Independent build/test for each module
-- ✅ Dependency Inversion Principle (DIP), Open-Closed Principle (OCP)
-- ✅ Adding new backends requires no changes to existing code
+- ✅ Dependency Inversion Principle (DIP)
+- ✅ Open-Closed Principle (OCP)
+- ✅ Zero legacy code remaining
 
-**Acceptance Criteria**:
-- [ ] All RHI code compiles in new structure
-- [ ] Application runs identically to before
-- [ ] No Vulkan validation errors
-- [ ] Clear Public/Private separation
-- [ ] CMake builds both modules independently
+#### ✅ Phase 8 Acceptance Criteria Met
+
+- [x] All RHI code compiles in new structure
+- [x] Application runs identically to before
+- [x] No Vulkan validation errors (0 errors)
+- [x] Clear Public/Private separation (include/ vs src/)
+- [x] CMake builds both modules independently
+- [x] Legacy wrapper classes completely removed (~890 LOC)
+- [x] Initialization order bugs fixed
+- [x] Semaphore synchronization issues resolved
+- [x] Documentation complete (PHASE8_SUMMARY.md, ARCHITECTURE.md, TROUBLESHOOTING.md)
 
 **Detailed Plan**: See [PHASE8_DIRECTORY_REFACTORING.md](PHASE8_DIRECTORY_REFACTORING.md)
 

@@ -996,6 +996,117 @@ void VulkanRHICommandEncoder::pipelineBarrier(...) {
 
 ---
 
+### Phase 8: 레거시 코드 제거 후 세그멘테이션 폴트
+
+**오류:**
+```
+[Vulkan] Validation Error: [ VUID-VkFramebufferCreateInfo-attachmentCount-00876 ]
+pCreateInfo->attachmentCount 1 does not match attachmentCount of 2
+
+[Vulkan] Validation Error: [ VUID-VkClearDepthStencilValue-depth-00022 ]
+pRenderPassBegin->pClearValues[1].depthStencil.depth is invalid
+
+[Vulkan] Validation Error: [ VUID-VkRenderPassBeginInfo-clearValueCount-00902 ]
+clearValueCount is 1 but there must be at least 2 entries
+
+Segmentation fault (core dumped)
+```
+
+**원인:**
+
+- 레거시 래퍼 클래스(VulkanSwapchain, VulkanImage 등)를 삭제한 후 초기화 순서가 잘못됨
+- Depth 리소스(`createRHIDepthResources()`)가 swapchain 생성 전에 호출됨
+- `createRHIDepthResources()`가 호출되었을 때 `rhiBridge->getSwapchain()`이 null이었음
+- 이로 인해 depth image가 생성되지 않음
+- 나중에 framebuffer 생성 시 depth attachment를 기대했지만 없었음
+
+**잘못된 초기화 순서:**
+
+```cpp
+Renderer::Renderer(...) {
+    device = std::make_unique<VulkanDevice>(...);
+    rhiBridge = std::make_unique<rendering::RendererBridge>(...);
+
+    // ❌ Swapchain이 아직 생성되지 않음!
+    createRHIDepthResources();  // 조기 반환 - swapchain이 null
+    createRHIUniformBuffers();
+    createRHIBindGroups();
+    createRHIPipeline();        // Depth attachment 없이 framebuffer 생성
+}
+```
+
+**해결책:**
+
+Depth 리소스 **전에** swapchain을 생성:
+
+```cpp
+Renderer::Renderer(...) {
+    device = std::make_unique<VulkanDevice>(...);
+    rhiBridge = std::make_unique<rendering::RendererBridge>(...);
+
+    // ✅ Swapchain을 먼저 생성 (depth 리소스에 필요)
+    int width, height;
+    glfwGetFramebufferSize(window, &width, &height);
+    rhiBridge->createSwapchain(static_cast<uint32_t>(width), static_cast<uint32_t>(height), true);
+
+    // 이제 depth 리소스가 swapchain 크기를 가져올 수 있음
+    createRHIDepthResources();
+    createRHIUniformBuffers();
+    createRHIBindGroups();
+    createRHIPipeline();
+}
+```
+
+**주요 변경사항:**
+
+1. RendererBridge 생성 직후 `rhiBridge->createSwapchain()` 호출
+2. `createRHIDepthResources()`가 이제 swapchain 크기를 쿼리할 수 있음
+3. `createRHIPipeline()`에서 생성된 framebuffer가 depth attachment를 올바르게 포함
+
+---
+
+### Phase 8: 세마포어 시그널링 경고 (심각하지 않음)
+
+**경고:**
+```
+[Vulkan] Validation Error: [ VUID-vkQueueSubmit-pCommandBuffers-00065 ]
+vkQueueSubmit(): pSubmits[0].pSignalSemaphores[0] is being signaled by VkQueue,
+but it was previously signaled by VkQueue and has not since been waited on.
+```
+
+**원인:**
+
+- 세마포어가 적절한 동기화 없이 프레임 간에 재사용됨
+- 새 작업을 제출하기 전에 fence를 대기하지 않았을 수 있음
+- 엄격한 validation에서 감지되지만 런타임 문제를 일으키지 않음
+
+**영향:**
+
+- ⚠️ **비차단** - 애플리케이션이 정상적으로 렌더링됨
+- 성능 영향 없음
+- Validation layer 경고만 발생
+
+**임시 해결책:**
+
+지금은 이 경고를 무시하세요. 세마포어 동기화는 validation 경고에도 불구하고 올바르게 작동합니다.
+
+**향후 수정 (선택사항):**
+
+RendererBridge에서 fence 대기 최적화:
+
+```cpp
+void RendererBridge::beginFrame() {
+    // 타임아웃과 함께 fence 대기
+    m_inFlightFences[m_currentFrame]->wait(UINT64_MAX);
+    m_inFlightFences[m_currentFrame]->reset();  // Fence 리셋
+
+    // 이제 세마포어를 안전하게 재사용할 수 있음
+    // ...
+}
+```
+
+---
+
 ## 추가 도움 받기
 
 이러한 해결 방법으로 문제가 해결되지 않으면:

@@ -88,23 +88,13 @@ add_executable(vulkanGLFW
     # Core classes
     src/core/VulkanDevice.cpp
     src/core/VulkanDevice.hpp
-    # Phase 7: CommandManager removed - using RHI command encoding
+    # Phase 8: Legacy rendering classes removed - using RHI only
     # Resource classes
-    src/resources/VulkanBuffer.cpp
-    src/resources/VulkanBuffer.hpp
-    src/resources/VulkanImage.cpp
-    src/resources/VulkanImage.hpp
     src/resources/ResourceManager.cpp
     src/resources/ResourceManager.hpp
     # Rendering classes
     src/rendering/Renderer.cpp
     src/rendering/Renderer.hpp
-    src/rendering/SyncManager.cpp
-    src/rendering/SyncManager.hpp
-    src/rendering/VulkanSwapchain.cpp
-    src/rendering/VulkanSwapchain.hpp
-    src/rendering/VulkanPipeline.cpp
-    src/rendering/VulkanPipeline.hpp
     src/rendering/RendererBridge.hpp
     src/rendering/RendererBridge.cpp
     # Scene classes

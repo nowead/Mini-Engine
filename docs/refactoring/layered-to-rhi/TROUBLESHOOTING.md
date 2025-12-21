@@ -304,6 +304,164 @@ RHI::Vulkan::VulkanRHISwapchain* swapchain = ...;
 
 ---
 
+## Phase 8: Legacy Code Cleanup
+
+### Issue 8: Segmentation Fault After Legacy Wrapper Deletion
+
+**Date**: 2025-12-21
+**Severity**: Critical (Application crash)
+**Status**: ✅ Resolved
+
+**Description**:
+After deleting legacy Vulkan wrapper classes (VulkanBuffer, VulkanImage, VulkanPipeline, VulkanSwapchain, SyncManager), the application crashed with segmentation fault during initialization.
+
+**Error Messages**:
+```
+[Vulkan] Validation Error: [ VUID-VkFramebufferCreateInfo-attachmentCount-00876 ]
+pCreateInfo->attachmentCount 1 does not match attachmentCount of 2
+
+[Vulkan] Validation Error: [ VUID-VkClearDepthStencilValue-depth-00022 ]
+pRenderPassBegin->pClearValues[1].depthStencil.depth is invalid
+
+[Vulkan] Validation Error: [ VUID-VkRenderPassBeginInfo-clearValueCount-00902 ]
+clearValueCount is 1 but there must be at least 2 entries
+
+Segmentation fault (core dumped)
+```
+
+**Root Cause**:
+1. Incorrect initialization order in `Renderer` constructor
+2. `createRHIDepthResources()` was called before swapchain creation
+3. When `createRHIDepthResources()` executed, `rhiBridge->getSwapchain()` returned null
+4. Depth image was not created (early return)
+5. Later, `createRHIPipeline()` created framebuffers expecting depth attachment
+6. Framebuffer attachment count mismatch caused validation errors and crash
+
+**Investigation Steps**:
+1. Traced validation errors back to framebuffer creation
+2. Discovered depth image was null despite creation call
+3. Found `createRHIDepthResources()` returned early due to null swapchain
+4. Identified initialization order as root cause
+
+**Resolution**:
+Changed initialization order to create swapchain before depth resources:
+
+**Before (Broken)**:
+```cpp
+Renderer::Renderer(...) {
+    device = std::make_unique<VulkanDevice>(...);
+    rhiBridge = std::make_unique<rendering::RendererBridge>(...);
+
+    // ❌ Swapchain not created yet!
+    createRHIDepthResources();  // Returns early - swapchain is null
+    createRHIUniformBuffers();
+    createRHIBindGroups();
+    createRHIPipeline();        // Creates framebuffers without depth attachment
+}
+```
+
+**After (Fixed)**:
+```cpp
+Renderer::Renderer(...) {
+    device = std::make_unique<VulkanDevice>(...);
+    rhiBridge = std::make_unique<rendering::RendererBridge>(...);
+
+    // ✅ Create swapchain first (needed for depth resources)
+    int width, height;
+    glfwGetFramebufferSize(window, &width, &height);
+    rhiBridge->createSwapchain(static_cast<uint32_t>(width), static_cast<uint32_t>(height), true);
+
+    // Now depth resources can get correct dimensions from swapchain
+    createRHIDepthResources();
+    createRHIUniformBuffers();
+    createRHIBindGroups();
+    createRHIPipeline();
+}
+```
+
+**Files Modified**:
+- `src/rendering/Renderer.cpp`: Fixed constructor initialization order
+
+**Key Takeaway**:
+Resource creation must follow dependency order:
+1. Device → Bridge → Swapchain
+2. Swapchain → Depth Resources
+3. All resources → Pipeline (which references them)
+
+---
+
+### Issue 9: Semaphore Signaling Validation Warnings
+
+**Date**: 2025-12-21
+**Severity**: Low (Non-blocking validation warnings)
+**Status**: ✅ Resolved
+
+**Description**:
+After Phase 8 cleanup, validation layer reported continuous semaphore signaling warnings during rendering.
+
+**Error Message**:
+```
+[Vulkan] Validation Error: [ VUID-vkQueueSubmit-pCommandBuffers-00065 ]
+vkQueueSubmit(): pSubmits[0].pSignalSemaphores[0] (VkSemaphore 0xee647e0000000009[])
+is being signaled by VkQueue 0x5b940156fba0[], but it was previously signaled by
+VkQueue 0x5b940156fba0[] and has not since been waited on.
+```
+
+**Root Cause**:
+1. Fence synchronization in `RendererBridge::beginFrame()` was not strict enough
+2. Semaphore was being signaled again before previous signal was consumed
+3. Timeline of events:
+   - Frame N: Signal semaphore
+   - Frame N+1: Fence wait (too late - semaphore already signaled)
+   - Frame N+1: Signal semaphore again ← Validation error
+
+**Investigation**:
+```cpp
+// RendererBridge.cpp - Original (problematic)
+bool RendererBridge::beginFrame() {
+    // Acquire image first
+    auto result = m_swapchain->acquireNextImage(...);
+
+    // Wait for fence AFTER acquiring image
+    m_inFlightFences[m_currentFrame]->wait();  // ← Too late!
+    m_inFlightFences[m_currentFrame]->reset();
+
+    return true;
+}
+```
+
+**Resolution**:
+Wait for fence **before** acquiring next image to ensure previous frame completed:
+
+```cpp
+// RendererBridge.cpp - Fixed
+bool RendererBridge::beginFrame() {
+    // ✅ Wait for fence FIRST to ensure previous frame completed
+    m_inFlightFences[m_currentFrame]->wait(UINT64_MAX);
+    m_inFlightFences[m_currentFrame]->reset();
+
+    // Now safe to acquire next image and reuse semaphores
+    auto result = m_swapchain->acquireNextImage(...);
+
+    return true;
+}
+```
+
+**Files Modified**:
+- `src/rendering/RendererBridge.cpp`: Moved fence wait before image acquisition
+
+**Verification**:
+After fix, no more semaphore warnings:
+```bash
+❯ make run
+[RendererBridge] Initialized with Vulkan backend
+[Renderer] RHI Pipeline created successfully
+[Renderer] RHI buffers uploaded: 23200 vertices, 92168 indices
+# ✅ No semaphore warnings!
+```
+
+---
+
 ## Future Issues
 
 *Issues discovered during later phases will be documented here*

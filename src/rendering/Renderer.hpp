@@ -1,12 +1,6 @@
 #pragma once
 
 #include "src/core/VulkanDevice.hpp"
-#include "src/rendering/VulkanSwapchain.hpp"
-#include "src/rendering/VulkanPipeline.hpp"
-// Phase 7: CommandManager removed - using RHI command encoding
-#include "src/rendering/SyncManager.hpp"
-#include "src/resources/VulkanImage.hpp"
-#include "src/resources/VulkanBuffer.hpp"
 #include "src/resources/ResourceManager.hpp"
 #include "src/scene/SceneManager.hpp"
 #include "src/utils/VulkanCommon.hpp"
@@ -124,11 +118,6 @@ public:
     VulkanDevice& getDevice() { return *device; }
 
     /**
-     * @brief Get swapchain (for external components like ImGui)
-     */
-    VulkanSwapchain& getSwapchain() { return *swapchain; }
-
-    /**
      * @brief Get RHI device (for external components like ImGui)
      */
     rhi::RHIDevice* getRHIDevice() { return rhiBridge ? rhiBridge->getDevice() : nullptr; }
@@ -159,20 +148,10 @@ private:
     // Core device
     std::unique_ptr<VulkanDevice> device;
 
-    // Rendering components (directly owned)
-    std::unique_ptr<VulkanSwapchain> swapchain;
-    std::unique_ptr<VulkanPipeline> pipeline;
-    // Phase 7: CommandManager removed - using RHI command encoding
-    std::unique_ptr<SyncManager> syncManager;
-
     // High-level managers
     std::unique_ptr<ResourceManager> resourceManager;
     std::unique_ptr<SceneManager> sceneManager;
     std::unique_ptr<class ImGuiManager> imguiManager;  // Phase 6: ImGui integration
-
-    // Shared resources managed by Renderer
-    std::unique_ptr<VulkanImage> depthImage;
-    std::vector<std::unique_ptr<VulkanBuffer>> uniformBuffers;
 
     // RHI resources (Phase 4 migration - parallel to legacy resources)
     std::unique_ptr<rhi::RHITexture> rhiDepthImage;
@@ -192,10 +171,6 @@ private:
     std::unique_ptr<rhi::RHIBuffer> rhiIndexBuffer;
     uint32_t rhiIndexCount = 0;
 
-    // Descriptor management
-    vk::raii::DescriptorPool descriptorPool = nullptr;
-    std::vector<vk::raii::DescriptorSet> descriptorSets;
-
     // Frame synchronization
     uint32_t currentFrame = 0;
     static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
@@ -214,13 +189,6 @@ private:
     float zScale = 1.0f;
     std::string currentModelPath;
 
-    // Private initialization methods
-    void createDepthResources();
-    void createUniformBuffers();
-    void createDescriptorPool();
-    void createDescriptorSets();
-    void updateDescriptorSets();
-
     // RHI initialization methods (Phase 4)
     void createRHIDepthResources();
     void createRHIUniformBuffers();
@@ -229,15 +197,10 @@ private:
     void createRHIBuffers();   // Phase 4.5 - vertex/index buffers
 
     // RHI command recording (Phase 4.2)
-    void recordRHICommandBuffer(uint32_t imageIndex);
     void updateRHIUniformBuffer(uint32_t currentImage);
 
-    // Phase 7: Legacy rendering methods removed (drawFrameLegacy, recordCommandBuffer, updateUniformBuffer, transitionImageLayout)
-    // Now using RHI-based rendering via drawFrame()
+    // Phase 8: Legacy rendering methods removed - using only RHI-based rendering via drawFrame()
 
     // Swapchain recreation
     void recreateSwapchain();
-
-    // Utility
-    vk::Format findDepthFormat();
 };

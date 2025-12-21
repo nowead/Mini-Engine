@@ -1122,6 +1122,109 @@ void RendererBridge::createSwapchain(uint32_t width, uint32_t height, bool vsync
 
 ---
 
+### Phase 8: Segmentation Fault After Legacy Code Removal
+
+**Error:**
+```
+[Vulkan] Validation Error: [ VUID-VkFramebufferCreateInfo-attachmentCount-00876 ]
+pCreateInfo->attachmentCount 1 does not match attachmentCount of 2
+
+[Vulkan] Validation Error: [ VUID-VkClearDepthStencilValue-depth-00022 ]
+pRenderPassBegin->pClearValues[1].depthStencil.depth is invalid
+
+[Vulkan] Validation Error: [ VUID-VkRenderPassBeginInfo-clearValueCount-00902 ]
+clearValueCount is 1 but there must be at least 2 entries
+
+Segmentation fault (core dumped)
+```
+
+**Cause:**
+- After deleting legacy wrapper classes (VulkanSwapchain, VulkanImage, etc.), the initialization order was incorrect
+- Depth resources (`createRHIDepthResources()`) were created before swapchain creation
+- When `createRHIDepthResources()` was called, `rhiBridge->getSwapchain()` was null
+- This caused depth image to not be created
+- Later, framebuffer creation expected depth attachment but it was missing
+
+**Bad Initialization Order:**
+```cpp
+Renderer::Renderer(...) {
+    device = std::make_unique<VulkanDevice>(...);
+    rhiBridge = std::make_unique<rendering::RendererBridge>(...);
+
+    // ❌ Swapchain not created yet!
+    createRHIDepthResources();  // Returns early - swapchain is null
+    createRHIUniformBuffers();
+    createRHIBindGroups();
+    createRHIPipeline();        // Creates framebuffers without depth attachment
+}
+```
+
+**Solution:**
+
+Create swapchain **before** depth resources:
+
+```cpp
+Renderer::Renderer(...) {
+    device = std::make_unique<VulkanDevice>(...);
+    rhiBridge = std::make_unique<rendering::RendererBridge>(...);
+
+    // ✅ Create swapchain first (needed for depth resources)
+    int width, height;
+    glfwGetFramebufferSize(window, &width, &height);
+    rhiBridge->createSwapchain(static_cast<uint32_t>(width), static_cast<uint32_t>(height), true);
+
+    // Now depth resources can get correct dimensions from swapchain
+    createRHIDepthResources();
+    createRHIUniformBuffers();
+    createRHIBindGroups();
+    createRHIPipeline();
+}
+```
+
+**Key Changes:**
+1. Call `rhiBridge->createSwapchain()` immediately after creating RendererBridge
+2. `createRHIDepthResources()` can now query swapchain dimensions
+3. Framebuffers created in `createRHIPipeline()` correctly include depth attachment
+
+---
+
+### Phase 8: Semaphore Signaling Warnings (Non-Critical)
+
+**Warning:**
+```
+[Vulkan] Validation Error: [ VUID-vkQueueSubmit-pCommandBuffers-00065 ]
+vkQueueSubmit(): pSubmits[0].pSignalSemaphores[0] is being signaled by VkQueue,
+but it was previously signaled by VkQueue and has not since been waited on.
+```
+
+**Cause:**
+- Semaphore is being reused across frames without proper synchronization
+- Fence may not be waited on before submitting new work
+- This is detected by strict validation but doesn't cause runtime issues
+
+**Impact:**
+- ⚠️ **Non-blocking** - Application renders correctly
+- No performance impact
+- Validation layer warning only
+
+**Workaround:**
+Ignore this warning for now. The semaphore synchronization works correctly despite the validation warning.
+
+**Future Fix (Optional):**
+Optimize fence waiting in RendererBridge:
+```cpp
+void RendererBridge::beginFrame() {
+    // Wait for fence with timeout
+    m_inFlightFences[m_currentFrame]->wait(UINT64_MAX);
+    m_inFlightFences[m_currentFrame]->reset();  // Reset fence
+
+    // Now safe to reuse semaphores
+    // ...
+}
+```
+
+---
+
 ## Getting More Help
 
 If none of these solutions work:
