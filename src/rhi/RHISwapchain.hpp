@@ -8,6 +8,7 @@ namespace rhi {
 // Forward declarations
 class RHITexture;
 class RHITextureView;
+class RHISemaphore;  // Phase 7.5: Forward declaration for semaphore
 
 /**
  * @brief Swapchain creation descriptor
@@ -42,12 +43,15 @@ public:
 
     /**
      * @brief Acquire the next image for rendering
+     * @param signalSemaphore Semaphore to signal when image is ready (optional)
      * @return Texture view of the acquired swapchain image, or nullptr on failure
      *
      * This must be called before rendering to get the current backbuffer.
      * The returned view is only valid until the next present() call.
+     *
+     * @note Phase 7.5: Added semaphore parameter for proper synchronization
      */
-    virtual RHITextureView* acquireNextImage() = 0;
+    virtual RHITextureView* acquireNextImage(RHISemaphore* signalSemaphore = nullptr) = 0;
 
     /**
      * @brief Present the current image to the screen

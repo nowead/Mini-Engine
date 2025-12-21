@@ -56,6 +56,7 @@ VulkanRHIPipelineLayout& VulkanRHIPipelineLayout::operator=(VulkanRHIPipelineLay
 VulkanRHIRenderPipeline::VulkanRHIRenderPipeline(VulkanRHIDevice* device, const RenderPipelineDesc& desc)
     : m_device(device)
     , m_pipeline(nullptr)
+    , m_layout(desc.layout)  // Phase 7.5: Store layout for descriptor set binding
 {
     if (!desc.vertexShader || !desc.fragmentShader) {
         throw std::runtime_error("Both vertex and fragment shaders are required");
@@ -229,6 +230,7 @@ VulkanRHIRenderPipeline::~VulkanRHIRenderPipeline() {
 VulkanRHIRenderPipeline::VulkanRHIRenderPipeline(VulkanRHIRenderPipeline&& other) noexcept
     : m_device(other.m_device)
     , m_pipeline(std::move(other.m_pipeline))
+    , m_layout(other.m_layout)
 {
 }
 
@@ -236,6 +238,7 @@ VulkanRHIRenderPipeline& VulkanRHIRenderPipeline::operator=(VulkanRHIRenderPipel
     if (this != &other) {
         m_device = other.m_device;
         m_pipeline = std::move(other.m_pipeline);
+        m_layout = other.m_layout;
     }
     return *this;
 }

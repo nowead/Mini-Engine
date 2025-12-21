@@ -749,20 +749,119 @@ During runtime testing, the following RHI implementation issues were discovered:
 - ✅ Build succeeds with zero errors
 - ✅ Code simplified by 418 lines
 
-**Recommendation**: **PHASE 7 COMPLETE** - Ready to address RHI runtime issues or proceed to Phase 8
+**Recommendation**: **PHASE 7 COMPLETE (Architecturally)** - Proceed to Phase 7.5 to fix RHI runtime issues
+
+---
+
+## Phase 7.5: RHI Runtime Fixes
+
+**Status**: ✅ **COMPLETED**
+**Date**: 2025-12-21
+**Priority**: P0 (CRITICAL)
+
+While Phase 7 successfully completed the **architectural migration**, runtime testing revealed **critical RHI implementation bugs**. Phase 7.5 resolved all runtime validation errors and rendering issues.
+
+### ✅ Fixed Issues
+
+1. **Semaphore Initialization** ✅
+   - **Issue**: `RendererBridge::beginFrame()` not passing semaphore to `vkAcquireNextImageKHR()`
+   - **Validation error**: "semaphore and fence are both VK_NULL_HANDLE"
+   - **Fix**: Modified `RendererBridge::beginFrame()` to pass `m_imageAvailableSemaphores[m_currentFrame].get()` to `acquireNextImage()`
+   - **File**: [src/rendering/RendererBridge.cpp:130-132](src/rendering/RendererBridge.cpp#L130-L132)
+
+2. **Format Mismatch** ✅
+   - **Issue**: Swapchain format (SRGB) vs Pipeline format (UNORM) inconsistency
+   - **Validation error**: Format mismatch in rendering attachment
+   - **Fix**: Modified `Renderer::initializeRHIPipeline()` to query swapchain's actual format instead of hardcoding
+   - **File**: [src/rendering/Renderer.cpp](src/rendering/Renderer.cpp)
+
+3. **Descriptor Set Binding** ✅
+   - **Issue**: `RHIRenderPassEncoder::setBindGroup()` not implemented
+   - **Validation error**: "descriptor was never bound"
+   - **Fix**: Implemented `VulkanRHIRenderPassEncoder::setBindGroup()` to properly bind descriptor sets
+   - **File**: [src/rhi/vulkan/VulkanRHICommandEncoder.cpp](src/rhi/vulkan/VulkanRHICommandEncoder.cpp)
+
+4. **Command Buffer Synchronization** ✅
+   - **Issue**: Command buffers freed while still in use
+   - **Validation error**: "vkFreeCommandBuffers(): pCommandBuffers[0] is in use"
+   - **Fix**: Added `m_device->waitIdle()` in `VulkanRHICommandBuffer` destructor
+   - **File**: [src/rhi/vulkan/VulkanRHICommandEncoder.cpp](src/rhi/vulkan/VulkanRHICommandEncoder.cpp)
+
+5. **Image Layout Transitions** ✅
+   - **Issue**: Swapchain images in UNDEFINED layout, causing purple screen
+   - **Validation error**: "images must be in layout VK_IMAGE_LAYOUT_PRESENT_SRC_KHR but is in VK_IMAGE_LAYOUT_UNDEFINED"
+   - **Fix**: Added proper image layout transitions in rendering command buffer
+     - UNDEFINED → COLOR_ATTACHMENT_OPTIMAL before render pass
+     - COLOR_ATTACHMENT_OPTIMAL → PRESENT_SRC_KHR after render pass
+   - **Files**:
+     - [src/rendering/Renderer.cpp:778-802](src/rendering/Renderer.cpp#L778-L802) (acquire barrier)
+     - [src/rendering/Renderer.cpp:863-887](src/rendering/Renderer.cpp#L863-L887) (present barrier)
+     - [src/rhi/vulkan/VulkanRHISwapchain.hpp:54-59](src/rhi/vulkan/VulkanRHISwapchain.hpp#L54-L59) (getCurrentVkImage())
+
+6. **Semaphore Reuse Errors** ✅
+   - **Issue**: Separate command buffers for layout transitions caused semaphore reuse errors
+   - **Validation error**: "semaphore is being signaled by VkQueue, but it was previously signaled and has not since been waited on"
+   - **Fix**: Integrated layout transitions into main rendering command buffer instead of using separate immediate submissions
+   - **File**: [src/rendering/Renderer.cpp](src/rendering/Renderer.cpp)
+
+### 📊 Phase 7.5 Statistics
+
+```
+Files Modified: 6
+- src/rendering/Renderer.cpp
+- src/rendering/RendererBridge.cpp
+- src/rhi/vulkan/VulkanRHICommandEncoder.cpp
+- src/rhi/vulkan/VulkanRHISwapchain.hpp
+- src/rhi/vulkan/VulkanRHISwapchain.cpp
+- src/rhi/vulkan/VulkanRHIPipeline.hpp
+
+Code Changes:
+- Lines added: ~80
+- Lines modified: ~20
+- Key additions:
+  - Image layout transition barriers
+  - Descriptor set binding implementation
+  - Synchronization improvements
+```
+
+### 🎯 Phase 7.5 Success Metrics
+
+| Metric | Target | Actual | Status |
+|--------|--------|--------|--------|
+| **Validation Errors** | 0 | 0 | ✅ Achieved |
+| **Application Crashes** | 0 | 0 | ✅ Achieved |
+| **Rendering Output** | Dark blue background | Dark blue background | ✅ Achieved |
+| **Build Success** | 0 errors | 0 errors | ✅ Achieved |
+
+### 🎉 Phase 7.5 Complete
+
+**Primary Goal**: Fix all RHI runtime validation errors and rendering issues
+**Status**: ✅ **FULLY ACHIEVED**
+
+**Evidence**:
+- ✅ Zero Vulkan validation errors
+- ✅ Application runs without crashes
+- ✅ Proper image layout transitions (no purple screen)
+- ✅ Correct semaphore synchronization
+- ✅ Descriptor sets properly bound
+- ✅ Command buffers properly synchronized
+
+**Recommendation**: **PHASE 7.5 COMPLETE** - Ready to proceed to Phase 8
 
 ---
 
 ## References
 
 - [PHASE6_SUMMARY.md](PHASE6_SUMMARY.md) - Previous phase
-- [RHI_MIGRATION_PRD.md](RHI_MIGRATION_PRD.md) - Overall project plan
+- [RHI_MIGRATION_PRD.md](RHI_MIGRATION_PRD.md) - Overall project plan (includes Phase 7.5)
 - [LEGACY_CODE_REFERENCE.md](LEGACY_CODE_REFERENCE.md) - Legacy code tracking
 - [RHI_TECHNICAL_GUIDE.md](RHI_TECHNICAL_GUIDE.md) - RHI API reference
 
 ---
 
-**Last Updated**: 2025-12-20
-**Status**: ✅ **COMPLETED**
-**Completion Date**: 2025-12-20
-**Next Steps**: Fix RHI runtime issues or proceed to Phase 8 - WebGPU Backend Implementation
+**Last Updated**: 2025-12-21
+**Status**: ✅ **FULLY COMPLETE** (Architecture + Runtime)
+**Completion Date**:
+- Phase 7 (Architecture): 2025-12-20
+- Phase 7.5 (Runtime Fixes): 2025-12-21
+**Next Steps**: **READY FOR PHASE 8** - WebGPU Backend Implementation

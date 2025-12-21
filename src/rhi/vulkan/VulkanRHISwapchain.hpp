@@ -34,7 +34,7 @@ public:
     VulkanRHISwapchain& operator=(VulkanRHISwapchain&&) = delete;
 
     // RHISwapchain interface
-    rhi::RHITextureView* acquireNextImage() override;
+    rhi::RHITextureView* acquireNextImage(rhi::RHISemaphore* signalSemaphore = nullptr) override;
     void present() override;
     void resize(uint32_t width, uint32_t height) override;
     uint32_t getWidth() const override { return m_extent.width; }
@@ -51,6 +51,12 @@ public:
 
     // Vulkan-specific accessors
     vk::SwapchainKHR getVkSwapchain() const { return *m_swapchain; }
+    vk::Image getCurrentVkImage() const {
+        if (m_currentImageIndex < m_images.size()) {
+            return m_images[m_currentImageIndex];
+        }
+        return VK_NULL_HANDLE;
+    }
 
 private:
     VulkanRHIDevice* m_device;
@@ -78,6 +84,9 @@ private:
     vk::SurfaceFormatKHR chooseSurfaceFormat(const std::vector<vk::SurfaceFormatKHR>& formats);
     vk::PresentModeKHR choosePresentMode(const std::vector<vk::PresentModeKHR>& modes, rhi::PresentMode preferred);
     vk::Extent2D chooseExtent(const vk::SurfaceCapabilitiesKHR& capabilities, uint32_t width, uint32_t height);
+
+    // Phase 7.5: Image layout transition helper
+    void transitionImageLayout(vk::Image image, vk::ImageLayout oldLayout, vk::ImageLayout newLayout);
 };
 
 } // namespace Vulkan

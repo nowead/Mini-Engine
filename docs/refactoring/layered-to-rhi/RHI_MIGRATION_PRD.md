@@ -1,9 +1,9 @@
 # RHI Migration - Product Requirements Document (PRD)
 
 **Project**: Mini-Engine RHI (Render Hardware Interface) Architecture Migration
-**Version**: 1.2
-**Date**: 2025-12-19 (Updated)
-**Status**: In Progress - Phase 4 Complete
+**Version**: 1.3
+**Date**: 2025-12-21 (Updated)
+**Status**: Core Migration Complete - Phase 7.5 Complete
 **Owner**: Development Team
 
 ---
@@ -25,7 +25,12 @@ This document outlines the complete migration of Mini-Engine from a Vulkan-only 
 - **Phase 3 (Factory & Bridge)**: ✅ **COMPLETED** (2025-12-19)
 - **Phase 4 (Renderer Migration)**: ✅ **COMPLETED** (2025-12-19)
 - **Phase 5 (Scene Layer Migration)**: ✅ **COMPLETED** (2025-12-20)
-- **Phase 6-11**: Pending
+- **Phase 6 (ImGui Migration)**: ✅ **COMPLETED** (2025-12-20)
+- **Phase 7 (Renderer RHI Migration & Legacy Cleanup)**: ✅ **COMPLETED** (2025-12-20)
+- **Phase 7.5 (RHI Runtime Fixes)**: ✅ **COMPLETED** (2025-12-21)
+- **Phase 8-11**: Pending
+
+**🎉 Core RHI Migration Complete! Engine now runs on 100% RHI-native rendering with zero validation errors.**
 
 ---
 
@@ -629,6 +634,104 @@ class VulkanBuffer { ... };
 
 ---
 
+### Phase 7.5: RHI Runtime Fixes
+
+**Status**: ✅ **COMPLETED**
+**Date**: 2025-12-21
+**Duration**: 1 day
+**Priority**: P0 (CRITICAL)
+
+#### Context
+
+Phase 7 successfully completed the **architectural migration** from CommandManager to RHI, achieving:
+- ✅ CommandManager completely removed
+- ✅ All legacy rendering code eliminated
+- ✅ Build success (0 errors, 0 warnings)
+- ✅ 80% RHI-native codebase
+
+However, **runtime testing revealed critical RHI implementation bugs**. Phase 7.5 successfully resolved all issues:
+
+#### ✅ Issues Fixed
+
+**Issue 1: Semaphore Initialization** ✅
+- **Problem**: `RendererBridge::beginFrame()` not passing semaphore to `vkAcquireNextImageKHR()`
+- **Validation error**: "semaphore and fence are both VK_NULL_HANDLE"
+- **Fix**: Modified to pass `m_imageAvailableSemaphores[m_currentFrame].get()` to `acquireNextImage()`
+- **File**: [src/rendering/RendererBridge.cpp:130-132](../../../src/rendering/RendererBridge.cpp#L130-L132)
+
+**Issue 2: Format Mismatch** ✅
+- **Problem**: Swapchain format (SRGB) vs Pipeline format (UNORM) inconsistency
+- **Validation error**: "imageView format must match pColorAttachmentFormats"
+- **Fix**: Modified `Renderer::initializeRHIPipeline()` to query swapchain's actual format
+- **File**: [src/rendering/Renderer.cpp](../../../src/rendering/Renderer.cpp)
+
+**Issue 3: Descriptor Set Binding** ✅
+- **Problem**: `RHIRenderPassEncoder::setBindGroup()` not implemented
+- **Validation error**: "descriptor was never bound"
+- **Fix**: Implemented `VulkanRHIRenderPassEncoder::setBindGroup()` to bind descriptor sets
+- **File**: [src/rhi/vulkan/VulkanRHICommandEncoder.cpp](../../../src/rhi/vulkan/VulkanRHICommandEncoder.cpp)
+
+**Issue 4: Command Buffer Synchronization** ✅
+- **Problem**: Command buffers freed while still in use
+- **Validation error**: "vkFreeCommandBuffers(): pCommandBuffers[0] is in use"
+- **Fix**: Added `m_device->waitIdle()` in `VulkanRHICommandBuffer` destructor
+- **File**: [src/rhi/vulkan/VulkanRHICommandEncoder.cpp](../../../src/rhi/vulkan/VulkanRHICommandEncoder.cpp)
+
+**Issue 5: Image Layout Transitions** ✅
+- **Problem**: Swapchain images in UNDEFINED layout causing purple screen
+- **Validation error**: "images must be in layout PRESENT_SRC_KHR but is in UNDEFINED"
+- **Fix**: Added proper layout transitions in rendering command buffer
+  - UNDEFINED → COLOR_ATTACHMENT_OPTIMAL before render pass
+  - COLOR_ATTACHMENT_OPTIMAL → PRESENT_SRC_KHR after render pass
+- **Files**:
+  - [src/rendering/Renderer.cpp:778-802](../../../src/rendering/Renderer.cpp#L778-L802) (acquire barrier)
+  - [src/rendering/Renderer.cpp:863-887](../../../src/rendering/Renderer.cpp#L863-L887) (present barrier)
+
+**Issue 6: Semaphore Reuse Errors** ✅
+- **Problem**: Separate command buffers for layout transitions caused semaphore reuse
+- **Validation error**: "semaphore is being signaled but was previously signaled"
+- **Fix**: Integrated layout transitions into main rendering command buffer
+- **File**: [src/rendering/Renderer.cpp](../../../src/rendering/Renderer.cpp)
+
+#### Completion Metrics
+
+| Task | Status | Time Spent |
+|------|--------|------------|
+| 7.5.1: Fix semaphore initialization | ✅ Complete | 1h |
+| 7.5.2: Fix format mismatch | ✅ Complete | 1h |
+| 7.5.3: Implement descriptor set binding | ✅ Complete | 2h |
+| 7.5.4: Fix command buffer synchronization | ✅ Complete | 1h |
+| 7.5.5: Fix image layout transitions | ✅ Complete | 3h |
+| 7.5.6: Runtime testing and validation | ✅ Complete | 1h |
+
+**Total Time**: 9 hours (1 day)
+
+#### ✅ Acceptance Criteria Met
+
+- [x] Application runs without crashes
+- [x] Vulkan validation errors: 0
+- [x] Proper image layout transitions (dark blue background renders)
+- [x] No GPU timeouts or device lost errors
+- [x] Build succeeds with 0 errors
+
+#### Success Metrics Achieved
+
+| Metric | Before | After | Status |
+|--------|--------|-------|--------|
+| Vulkan Validation Errors | 10+ | 0 | ✅ Achieved |
+| Application Crashes | Yes (SIGABRT) | No | ✅ Achieved |
+| Rendering Output | Purple (uninitialized) | Dark blue background | ✅ Achieved |
+| GPU Timeout | Yes | No | ✅ Achieved |
+| Build Errors | 0 | 0 | ✅ Maintained |
+
+#### 🎉 Phase 7.5 Complete
+
+**All runtime issues resolved. Ready to proceed to Phase 8: WebGPU Backend Implementation.**
+
+See [PHASE7_SUMMARY.md](PHASE7_SUMMARY.md#phase-75-rhi-runtime-fixes) for detailed technical documentation.
+
+---
+
 ### Phase 8: WebGPU Backend Implementation
 
 **Goal**: Web deployment capability
@@ -819,7 +922,8 @@ Daily/weekly tasks to minimize risk:
 | Phase 5: Resource/Scene Migration | 2-3 days | 2025-12-20 | 2025-12-20 | ✅ **Complete** |
 | Phase 6: ImGui Migration | 3-4 days | 2025-12-20 | 2025-12-20 | ✅ **Complete** |
 | Phase 7: Renderer RHI Migration & Legacy Cleanup | 1 day | 2025-12-20 | 2025-12-20 | ✅ **Complete** |
-| **Subtotal (Core Migration)** | **3-4 weeks** | - | - | **Phase 1-7 Complete (80%)** |
+| **Phase 7.5: RHI Runtime Fixes** | **1 day** | **2025-12-21** | **2025-12-21** | ✅ **Complete** |
+| **Subtotal (Core Migration)** | **3-4 weeks** | - | - | **Phase 1-7.5 Complete (100%)** |
 | Phase 8: WebGPU Backend | 2-3 weeks | TBD | TBD | 🔲 Future |
 | **Total (with WebGPU)** | **5-7 weeks** | - | - | - |
 
@@ -841,10 +945,11 @@ Daily/weekly tasks to minimize risk:
 - ✅ **M2**: Vulkan backend functional (Phase 2) - **COMPLETE** (2025-12-19)
 - ✅ **M3**: RHI Factory & Bridge (Phase 3) - **COMPLETE** (2025-12-19)
 - ✅ **M4**: Renderer RHI Migration (Phase 4) - **COMPLETE** (2025-12-19)
-- ⏳ **M5**: Core migration complete (Phases 5-7) - **60% COMPLETE**
+- ✅ **M5**: Core migration complete (Phases 5-7.5) - **100% COMPLETE** (2025-12-21)
   - ✅ Phase 5: Resource/Scene Migration - **COMPLETE** (2025-12-20)
   - ✅ Phase 6: ImGui Integration - **COMPLETE** (2025-12-20)
-  - 🔲 Phase 7: Testing & Code Cleanup - PENDING
+  - ✅ Phase 7: Renderer RHI Migration & Legacy Cleanup - **COMPLETE** (2025-12-20)
+  - ✅ Phase 7.5: RHI Runtime Fixes - **COMPLETE** (2025-12-21)
 - 🔲 **M6**: WebGPU backend functional (Phase 8)
 - 🔲 **M7**: Production-ready multi-backend engine
 

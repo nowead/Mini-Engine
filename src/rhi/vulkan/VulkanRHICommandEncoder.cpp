@@ -4,6 +4,7 @@
 #include "VulkanRHITexture.hpp"
 #include "VulkanRHIPipeline.hpp"
 #include "VulkanRHIBindGroup.hpp"
+#include <iostream>  // Phase 7.5: For std::cerr warning message
 
 namespace RHI {
 namespace Vulkan {
@@ -19,7 +20,12 @@ VulkanRHICommandBuffer::VulkanRHICommandBuffer(VulkanRHIDevice* device, vk::raii
 }
 
 VulkanRHICommandBuffer::~VulkanRHICommandBuffer() {
-    // RAII handles cleanup automatically
+    // Phase 7.5: Wait for device to be idle before freeing command buffer
+    // This prevents "command buffer in use" validation errors
+    if (m_device) {
+        m_device->waitIdle();
+    }
+    // RAII handles cleanup automatically after waitIdle
 }
 
 VulkanRHICommandBuffer::VulkanRHICommandBuffer(VulkanRHICommandBuffer&& other) noexcept
@@ -44,6 +50,7 @@ VulkanRHIRenderPassEncoder::VulkanRHIRenderPassEncoder(VulkanRHIDevice* device, 
     : m_device(device)
     , m_commandBuffer(cmdBuffer)
     , m_ended(false)
+    , m_currentPipelineLayout(nullptr)  // Phase 7.5: Initialize to nullptr
 {
     // Convert color attachments
     std::vector<vk::RenderingAttachmentInfo> colorAttachments;
@@ -108,17 +115,30 @@ VulkanRHIRenderPassEncoder::~VulkanRHIRenderPassEncoder() {
 void VulkanRHIRenderPassEncoder::setPipeline(rhi::RHIRenderPipeline* pipeline) {
     auto* vulkanPipeline = static_cast<VulkanRHIRenderPipeline*>(pipeline);
     m_commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, vulkanPipeline->getVkPipeline());
+
+    // Phase 7.5: Store pipeline layout for descriptor set binding
+    m_currentPipelineLayout = vulkanPipeline->getPipelineLayout();
 }
 
 void VulkanRHIRenderPassEncoder::setBindGroup(uint32_t index, rhi::RHIBindGroup* bindGroup, const std::vector<uint32_t>& dynamicOffsets) {
     auto* vulkanBindGroup = static_cast<VulkanRHIBindGroup*>(bindGroup);
 
-    // Note: We need the pipeline layout here, but it's not passed.
-    // For now, we'll skip this implementation detail.
-    // TODO: Store pipeline layout reference when setPipeline is called
+    // Phase 7.5: Use stored pipeline layout for descriptor set binding
+    if (!m_currentPipelineLayout) {
+        std::cerr << "[VulkanRHIRenderPassEncoder] Warning: setPipeline must be called before setBindGroup\n";
+        return;
+    }
 
-    // m_commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout,
-    //                                    index, vulkanBindGroup->getVkDescriptorSet(), dynamicOffsets);
+    auto* vulkanLayout = static_cast<VulkanRHIPipelineLayout*>(m_currentPipelineLayout);
+    vk::DescriptorSet descriptorSet = vulkanBindGroup->getVkDescriptorSet();
+
+    m_commandBuffer.bindDescriptorSets(
+        vk::PipelineBindPoint::eGraphics,
+        vulkanLayout->getVkPipelineLayout(),
+        index,
+        descriptorSet,
+        dynamicOffsets
+    );
 }
 
 void VulkanRHIRenderPassEncoder::setVertexBuffer(uint32_t slot, rhi::RHIBuffer* buffer, uint64_t offset) {

@@ -70,10 +70,12 @@ public:
 
     // Vulkan-specific accessors
     vk::Pipeline getVkPipeline() const { return *m_pipeline; }
+    RHIPipelineLayout* getPipelineLayout() const { return m_layout; }
 
 private:
     VulkanRHIDevice* m_device;
     vk::raii::Pipeline m_pipeline;
+    RHIPipelineLayout* m_layout;  // Phase 7.5: Store layout for descriptor set binding
 };
 
 /**

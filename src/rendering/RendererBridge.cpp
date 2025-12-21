@@ -125,9 +125,12 @@ bool RendererBridge::beginFrame() {
     // Wait for this frame's fence
     m_inFlightFences[m_currentFrame]->wait();
 
-    // Try to acquire next image
-    auto* imageView = m_swapchain->acquireNextImage();
-    
+    // Phase 7.5: Acquire next image with semaphore signaling
+    // The semaphore will be signaled when the image is ready to be rendered to
+    auto* imageView = m_swapchain->acquireNextImage(
+        m_imageAvailableSemaphores[m_currentFrame].get()
+    );
+
     if (!imageView) {
         // Failed to acquire - likely needs resize
         int width, height;

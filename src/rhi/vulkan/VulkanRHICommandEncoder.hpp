@@ -68,6 +68,7 @@ private:
     VulkanRHIDevice* m_device;
     vk::raii::CommandBuffer& m_commandBuffer;
     bool m_ended;
+    rhi::RHIPipelineLayout* m_currentPipelineLayout;  // Phase 7.5: Store for descriptor set binding
 };
 
 /**

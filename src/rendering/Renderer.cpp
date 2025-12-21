@@ -1,6 +1,7 @@
 #include "Renderer.hpp"
 #include "src/ui/ImGuiManager.hpp"
 #include "src/rhi/vulkan/VulkanRHICommandEncoder.hpp"
+#include "src/rhi/vulkan/VulkanRHISwapchain.hpp"  // Phase 7.5: For layout transitions
 
 #include <stdexcept>
 #include <iostream>
@@ -481,9 +482,14 @@ void Renderer::createRHIPipeline() {
     depthStencilState.format = rhi::TextureFormat::Depth32Float;
     pipelineDesc.depthStencil = &depthStencilState;
 
-    // Color target - swapchain format
+    // Phase 7.5: Color target - use actual swapchain format to avoid validation errors
     rhi::ColorTargetState colorTarget;
-    colorTarget.format = rhi::TextureFormat::BGRA8Unorm;  // Common swapchain format
+    auto* swapchain = rhiBridge->getSwapchain();
+    if (swapchain) {
+        colorTarget.format = swapchain->getFormat();  // Match swapchain format (SRGB or UNORM)
+    } else {
+        colorTarget.format = rhi::TextureFormat::BGRA8UnormSrgb;  // Default to SRGB
+    }
     colorTarget.blend.blendEnabled = false;
     pipelineDesc.colorTargets.push_back(colorTarget);
 
@@ -601,6 +607,10 @@ void Renderer::createRHIBuffers() {
                 auto fence = rhiDevice->createFence(false);
                 queue->submit(commandBuffer.get(), fence.get());
                 fence->wait();
+
+                // Phase 7.5: Wait for device idle to ensure command buffer is fully retired
+                // before it's destroyed (prevents "command buffer in use" error)
+                rhiDevice->waitIdle();
             }
         }
 
@@ -765,6 +775,32 @@ void Renderer::drawFrame() {
         return;
     }
 
+    // Phase 7.5: Transition swapchain image from UNDEFINED to COLOR_ATTACHMENT_OPTIMAL
+    // before starting the render pass
+    auto* vulkanSwapchain = static_cast<RHI::Vulkan::VulkanRHISwapchain*>(rhiBridge->getSwapchain());
+    auto* vulkanEncoder = static_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
+
+    vk::ImageMemoryBarrier acquireBarrier;
+    acquireBarrier.oldLayout = vk::ImageLayout::eUndefined;
+    acquireBarrier.newLayout = vk::ImageLayout::eColorAttachmentOptimal;
+    acquireBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    acquireBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    acquireBarrier.image = vulkanSwapchain->getCurrentVkImage();
+    acquireBarrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+    acquireBarrier.subresourceRange.baseMipLevel = 0;
+    acquireBarrier.subresourceRange.levelCount = 1;
+    acquireBarrier.subresourceRange.baseArrayLayer = 0;
+    acquireBarrier.subresourceRange.layerCount = 1;
+    acquireBarrier.srcAccessMask = vk::AccessFlagBits::eNone;
+    acquireBarrier.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+
+    vulkanEncoder->getCommandBuffer().pipelineBarrier(
+        vk::PipelineStageFlagBits::eTopOfPipe,
+        vk::PipelineStageFlagBits::eColorAttachmentOutput,
+        vk::DependencyFlags{},
+        nullptr, nullptr, acquireBarrier
+    );
+
     // Setup render pass
     rhi::RenderPassDesc renderPassDesc;
     renderPassDesc.width = rhiBridge->getSwapchain()->getWidth();
@@ -823,6 +859,31 @@ void Renderer::drawFrame() {
 
         renderPass->end();
     }
+
+    // Phase 7.5: Transition swapchain image from COLOR_ATTACHMENT_OPTIMAL to PRESENT_SRC
+    // This must be done before finishing the command buffer
+    // Reuse vulkanSwapchain and vulkanEncoder from above
+
+    vk::ImageMemoryBarrier presentBarrier;
+    presentBarrier.oldLayout = vk::ImageLayout::eColorAttachmentOptimal;
+    presentBarrier.newLayout = vk::ImageLayout::ePresentSrcKHR;
+    presentBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    presentBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    presentBarrier.image = vulkanSwapchain->getCurrentVkImage();
+    presentBarrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+    presentBarrier.subresourceRange.baseMipLevel = 0;
+    presentBarrier.subresourceRange.levelCount = 1;
+    presentBarrier.subresourceRange.baseArrayLayer = 0;
+    presentBarrier.subresourceRange.layerCount = 1;
+    presentBarrier.srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+    presentBarrier.dstAccessMask = vk::AccessFlagBits::eNone;
+
+    vulkanEncoder->getCommandBuffer().pipelineBarrier(
+        vk::PipelineStageFlagBits::eColorAttachmentOutput,
+        vk::PipelineStageFlagBits::eBottomOfPipe,
+        vk::DependencyFlags{},
+        nullptr, nullptr, presentBarrier
+    );
 
     // Finish command buffer
     auto commandBuffer = encoder->finish();

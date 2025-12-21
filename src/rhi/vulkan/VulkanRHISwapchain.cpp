@@ -1,6 +1,8 @@
 #include "VulkanRHISwapchain.hpp"
 #include "VulkanRHIDevice.hpp"
 #include "VulkanRHIQueue.hpp"
+#include "VulkanRHISync.hpp"  // Phase 7.5: For VulkanRHISemaphore
+#include "VulkanRHICommandEncoder.hpp"  // Phase 7.5: For command buffer creation
 #include <algorithm>
 #include <limits>
 
@@ -47,15 +49,19 @@ VulkanRHISwapchain::~VulkanRHISwapchain() {
 // RHISwapchain Interface Implementation
 // ============================================================================
 
-rhi::RHITextureView* VulkanRHISwapchain::acquireNextImage() {
-    // Acquire next image from swapchain
-    // Note: In a real implementation, we should use semaphores for synchronization
-    // For now, we'll use a simple fence-based approach
+rhi::RHITextureView* VulkanRHISwapchain::acquireNextImage(rhi::RHISemaphore* signalSemaphore) {
+    // Phase 7.5: Get Vulkan semaphore from RHI semaphore
+    vk::Semaphore vkSemaphore = VK_NULL_HANDLE;
+    if (signalSemaphore) {
+        auto* vulkanSemaphore = static_cast<VulkanRHISemaphore*>(signalSemaphore);
+        vkSemaphore = vulkanSemaphore->getVkSemaphore();
+    }
 
+    // Acquire next image from swapchain with proper synchronization
     auto [result, imageIndex] = m_swapchain.acquireNextImage(
-        UINT64_MAX,  // timeout
-        nullptr,     // semaphore (TODO: add synchronization)
-        nullptr      // fence
+        UINT64_MAX,     // timeout
+        vkSemaphore,    // semaphore to signal when image is ready
+        nullptr         // fence (optional)
     );
 
     if (result == vk::Result::eErrorOutOfDateKHR) {
@@ -65,7 +71,7 @@ rhi::RHITextureView* VulkanRHISwapchain::acquireNextImage() {
         // Try again
         auto [result2, imageIndex2] = m_swapchain.acquireNextImage(
             UINT64_MAX,
-            nullptr,
+            vkSemaphore,
             nullptr
         );
         result = result2;
@@ -77,10 +83,17 @@ rhi::RHITextureView* VulkanRHISwapchain::acquireNextImage() {
     }
 
     m_currentImageIndex = imageIndex;
+
+    // Phase 7.5: Layout transitions are now handled by the rendering command buffer
+    // No need for separate immediate transitions here
+
     return m_imageViews[m_currentImageIndex].get();
 }
 
 void VulkanRHISwapchain::present() {
+    // Phase 7.5: Layout transition to PRESENT_SRC is now handled in the rendering command buffer
+    // No need for separate transition here
+
     // Get the graphics queue for presentation
     auto* rhiQueue = m_device->getQueue(rhi::QueueType::Graphics);
     auto* vulkanQueue = static_cast<VulkanRHIQueue*>(rhiQueue);
@@ -280,6 +293,63 @@ vk::Extent2D VulkanRHISwapchain::chooseExtent(
                               capabilities.maxImageExtent.height);
 
     return extent;
+}
+
+void VulkanRHISwapchain::transitionImageLayout(
+    vk::Image image,
+    vk::ImageLayout oldLayout,
+    vk::ImageLayout newLayout)
+{
+    // Phase 7.5: Helper method to transition swapchain image layouts
+    // Create a one-time submit command buffer for the transition
+    auto encoder = m_device->createCommandEncoder();
+    if (!encoder) return;
+
+    vk::ImageMemoryBarrier barrier;
+    barrier.oldLayout = oldLayout;
+    barrier.newLayout = newLayout;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = image;
+    barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 1;
+
+    vk::PipelineStageFlags sourceStage;
+    vk::PipelineStageFlags destinationStage;
+
+    if (oldLayout == vk::ImageLayout::eUndefined && newLayout == vk::ImageLayout::eColorAttachmentOptimal) {
+        barrier.srcAccessMask = vk::AccessFlagBits::eNone;
+        barrier.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+        sourceStage = vk::PipelineStageFlagBits::eTopOfPipe;
+        destinationStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+    } else if (oldLayout == vk::ImageLayout::eColorAttachmentOptimal && newLayout == vk::ImageLayout::ePresentSrcKHR) {
+        barrier.srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+        barrier.dstAccessMask = vk::AccessFlagBits::eNone;
+        sourceStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+        destinationStage = vk::PipelineStageFlagBits::eBottomOfPipe;
+    } else {
+        throw std::runtime_error("Unsupported layout transition");
+    }
+
+    // Get Vulkan command encoder to access raw command buffer
+    auto* vulkanEncoder = static_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
+    vulkanEncoder->getCommandBuffer().pipelineBarrier(
+        sourceStage, destinationStage,
+        vk::DependencyFlags{},
+        nullptr, nullptr, barrier
+    );
+
+    // Submit immediately and wait
+    auto commandBuffer = encoder->finish();
+    if (commandBuffer) {
+        auto* queue = m_device->getQueue(rhi::QueueType::Graphics);
+        auto fence = m_device->createFence(false);
+        queue->submit(commandBuffer.get(), fence.get());
+        fence->wait();
+    }
 }
 
 } // namespace Vulkan
