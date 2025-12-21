@@ -28,7 +28,8 @@ This document outlines the complete migration of Mini-Engine from a Vulkan-only 
 - **Phase 6 (ImGui Migration)**: ✅ **COMPLETED** (2025-12-20)
 - **Phase 7 (Renderer RHI Migration & Legacy Cleanup)**: ✅ **COMPLETED** (2025-12-20)
 - **Phase 7.5 (RHI Runtime Fixes)**: ✅ **COMPLETED** (2025-12-21)
-- **Phase 8-11**: Pending
+- **Phase 8 (Directory Refactoring)**: 📋 **PLANNED**
+- **Phase 9-12**: Pending
 
 **🎉 Core RHI Migration Complete! Engine now runs on 100% RHI-native rendering with zero validation errors.**
 
@@ -726,13 +727,77 @@ However, **runtime testing revealed critical RHI implementation bugs**. Phase 7.
 
 #### 🎉 Phase 7.5 Complete
 
-**All runtime issues resolved. Ready to proceed to Phase 8: WebGPU Backend Implementation.**
+**All runtime issues resolved. Ready to proceed to Phase 8: Directory Refactoring.**
 
 See [PHASE7_SUMMARY.md](PHASE7_SUMMARY.md#phase-75-rhi-runtime-fixes) for detailed technical documentation.
 
 ---
 
-### Phase 8: WebGPU Backend Implementation
+### Phase 8: RHI Directory Refactoring - Modular Architecture
+
+**Goal**: Refactor RHI code into modular, industry-standard directory structure
+
+**Timeline**: 1-2 days
+
+**Motivation**:
+- Current structure has all files in single `src/rhi/` folder with no Public/Private separation
+- Header and implementation files mixed together
+- Difficult to add new backends (WebGPU, Metal, D3D12)
+
+**Target Architecture** (Unreal Engine Style):
+```
+src/
+├── rhi/                           # RHI Abstract Interface Module
+│   ├── include/rhi/               # Public headers
+│   │   ├── RHI.hpp
+│   │   ├── Device.hpp
+│   │   ├── Buffer.hpp
+│   │   └── ...
+│   ├── src/                       # Private implementation
+│   └── CMakeLists.txt
+│
+├── rhi-vulkan/                    # Vulkan Backend Module
+│   ├── include/rhi-vulkan/
+│   ├── src/
+│   └── CMakeLists.txt
+│
+└── rhi-webgpu/                    # WebGPU Backend Module (Phase 9+)
+```
+
+**Tasks**:
+
+| # | Task | Priority | Status |
+|---|------|----------|--------|
+| 8.1 | Create new directory structure | P0 | 🗓️ |
+| 8.2 | Move RHI interface headers to `rhi/include/rhi/` | P0 | 🗓️ |
+| 8.3 | Move Vulkan backend to `rhi-vulkan/src/` | P0 | 🗓️ |
+| 8.4 | Create Forward.hpp for forward declarations | P1 | 🗓️ |
+| 8.5 | Create `rhi/CMakeLists.txt` | P0 | 🗓️ |
+| 8.6 | Create `rhi-vulkan/CMakeLists.txt` | P0 | 🗓️ |
+| 8.7 | Update root CMakeLists.txt | P0 | 🗓️ |
+| 8.8 | Update all include statements | P0 | 🗓️ |
+| 8.9 | Build verification | P0 | 🗓️ |
+| 8.10 | Runtime verification | P0 | 🗓️ |
+| 8.11 | Cleanup old directories | P0 | 🗓️ |
+
+**Architecture Benefits**:
+- ✅ Same architecture pattern as Unreal Engine, Unity
+- ✅ Independent build/test for each module
+- ✅ Dependency Inversion Principle (DIP), Open-Closed Principle (OCP)
+- ✅ Adding new backends requires no changes to existing code
+
+**Acceptance Criteria**:
+- [ ] All RHI code compiles in new structure
+- [ ] Application runs identically to before
+- [ ] No Vulkan validation errors
+- [ ] Clear Public/Private separation
+- [ ] CMake builds both modules independently
+
+**Detailed Plan**: See [PHASE8_DIRECTORY_REFACTORING.md](PHASE8_DIRECTORY_REFACTORING.md)
+
+---
+
+### Phase 9: WebGPU Backend Implementation
 
 **Goal**: Web deployment capability
 
@@ -742,26 +807,26 @@ See [PHASE7_SUMMARY.md](PHASE7_SUMMARY.md#phase-75-rhi-runtime-fixes) for detail
 
 | # | Task | Estimated Lines | Priority |
 |---|------|----------------|----------|
-| 8.1 | Research Dawn vs wgpu-native | - | P0 |
-| 8.2 | Create WebGPU directory structure | - | P0 |
-| 8.3 | Integrate chosen WebGPU implementation | +200 | P0 |
-| 8.4 | Implement WebGPURHIDevice | +400 | P0 |
-| 8.5 | Implement WebGPURHIQueue | +100 | P0 |
-| 8.6 | Implement WebGPURHIBuffer | +200 | P0 |
-| 8.7 | Implement WebGPURHITexture | +250 | P0 |
-| 8.8 | Implement WebGPURHISampler | +80 | P1 |
-| 8.9 | Implement WebGPURHIShader + WGSL | +300 | P0 |
-| 8.10 | Implement WebGPURHIBindGroup | +200 | P0 |
-| 8.11 | Implement WebGPURHIPipeline | +300 | P0 |
-| 8.12 | Implement WebGPURHICommandEncoder | +350 | P0 |
-| 8.13 | Implement WebGPURHISwapchain | +150 | P0 |
-| 8.14 | SPIR-V to WGSL conversion (Naga/Tint) | +200 | P0 |
-| 8.15 | Handle async operations | +150 | P0 |
-| 8.16 | Emscripten build configuration | +100 | P0 |
-| 8.17 | Resource preloading for web | +50 | P1 |
-| 8.18 | Unit tests | +400 | P0 |
-| 8.19 | Browser testing (Chrome, Firefox) | - | P0 |
-| 8.20 | Web performance optimization | - | P1 |
+| 9.1 | Research Dawn vs wgpu-native | - | P0 |
+| 9.2 | Create `rhi-webgpu/` module structure | - | P0 |
+| 9.3 | Integrate chosen WebGPU implementation | +200 | P0 |
+| 9.4 | Implement WebGPURHIDevice | +400 | P0 |
+| 9.5 | Implement WebGPURHIQueue | +100 | P0 |
+| 9.6 | Implement WebGPURHIBuffer | +200 | P0 |
+| 9.7 | Implement WebGPURHITexture | +250 | P0 |
+| 9.8 | Implement WebGPURHISampler | +80 | P1 |
+| 9.9 | Implement WebGPURHIShader + WGSL | +300 | P0 |
+| 9.10 | Implement WebGPURHIBindGroup | +200 | P0 |
+| 9.11 | Implement WebGPURHIPipeline | +300 | P0 |
+| 9.12 | Implement WebGPURHICommandEncoder | +350 | P0 |
+| 9.13 | Implement WebGPURHISwapchain | +150 | P0 |
+| 9.14 | SPIR-V to WGSL conversion (Naga/Tint) | +200 | P0 |
+| 9.15 | Handle async operations | +150 | P0 |
+| 9.16 | Emscripten build configuration | +100 | P0 |
+| 9.17 | Resource preloading for web | +50 | P1 |
+| 9.18 | Unit tests | +400 | P0 |
+| 9.19 | Browser testing (Chrome, Firefox) | - | P0 |
+| 9.20 | Web performance optimization | - | P1 |
 
 **Revised Estimate**: ~3,430 lines (+72% over 2,000)
 
@@ -782,13 +847,13 @@ See [PHASE7_SUMMARY.md](PHASE7_SUMMARY.md#phase-75-rhi-runtime-fixes) for detail
 
 ---
 
-### Phase 9-11: Future Backends (Optional)
+### Phase 10-12: Future Backends (Optional)
 
-**Phase 9**: Direct3D 12 (Windows) - 2-3 weeks
-**Phase 10**: Metal (macOS/iOS) - 2-3 weeks
-**Phase 11**: Ray Tracing Extensions - 2-3 weeks
+**Phase 10**: Direct3D 12 (Windows) - 2-3 weeks
+**Phase 11**: Metal (macOS/iOS) - 2-3 weeks
+**Phase 12**: Ray Tracing Extensions - 2-3 weeks
 
-*Detailed planning deferred until Phases 1-8 complete*
+*Detailed planning deferred until Phases 1-9 complete*
 
 ---
 

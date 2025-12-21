@@ -1,15 +1,15 @@
-#include "VulkanRHIDevice.hpp"
-#include "VulkanRHIQueue.hpp"
-#include "VulkanRHIBuffer.hpp"
-#include "VulkanRHITexture.hpp"
-#include "VulkanRHICapabilities.hpp"
-#include "VulkanRHISampler.hpp"
-#include "VulkanRHIShader.hpp"
-#include "VulkanRHISync.hpp"
-#include "VulkanRHIBindGroup.hpp"
-#include "VulkanRHIPipeline.hpp"
-#include "VulkanRHICommandEncoder.hpp"
-#include "VulkanRHISwapchain.hpp"
+#include <rhi-vulkan/VulkanRHIDevice.hpp>
+#include <rhi-vulkan/VulkanRHIQueue.hpp>
+#include <rhi-vulkan/VulkanRHIBuffer.hpp>
+#include <rhi-vulkan/VulkanRHITexture.hpp>
+#include <rhi-vulkan/VulkanRHICapabilities.hpp>
+#include <rhi-vulkan/VulkanRHISampler.hpp>
+#include <rhi-vulkan/VulkanRHIShader.hpp>
+#include <rhi-vulkan/VulkanRHISync.hpp>
+#include <rhi-vulkan/VulkanRHIBindGroup.hpp>
+#include <rhi-vulkan/VulkanRHIPipeline.hpp>
+#include <rhi-vulkan/VulkanRHICommandEncoder.hpp>
+#include <rhi-vulkan/VulkanRHISwapchain.hpp>
 #include <iostream>
 #include <set>
 

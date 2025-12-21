@@ -57,6 +57,32 @@ The engine was built through a systematic 11-phase refactoring process, transfor
 
 ---
 
+#### RHI (Render Hardware Interface) Migration
+
+The engine is undergoing a major architectural upgrade to support multiple graphics backends through a hardware-agnostic RHI layer.
+
+**[RHI Migration PRD](refactoring/layered-to-rhi/RHI_MIGRATION_PRD.md)**
+- Complete migration plan (12 phases)
+- WebGPU-style API design
+- Multi-backend architecture (Vulkan, WebGPU, Metal, D3D12)
+
+**RHI Phase Documentation:**
+
+1. **[Phase 1: RHI Interface Design](refactoring/layered-to-rhi/PHASE1_SUMMARY.md)** ✅
+2. **[Phase 2: Vulkan Backend](refactoring/layered-to-rhi/PHASE2_SUMMARY.md)** ✅
+3. **[Phase 3: Factory & Bridge](refactoring/layered-to-rhi/PHASE3_SUMMARY.md)** ✅
+4. **[Phase 4: Renderer Migration](refactoring/layered-to-rhi/PHASE4_SUMMARY.md)** ✅
+5. **[Phase 5: Scene Layer Migration](refactoring/layered-to-rhi/PHASE5_SUMMARY.md)** ✅
+6. **[Phase 6: ImGui Migration](refactoring/layered-to-rhi/PHASE6_SUMMARY.md)** ✅
+7. **[Phase 7: Legacy Cleanup](refactoring/layered-to-rhi/PHASE7_SUMMARY.md)** ✅
+8. **[Phase 8: Directory Refactoring](refactoring/layered-to-rhi/PHASE8_DIRECTORY_REFACTORING.md)** 📋 PLANNED
+
+**Additional RHI Documentation:**
+- **[RHI Technical Guide](refactoring/layered-to-rhi/RHI_TECHNICAL_GUIDE.md)** - API usage and patterns
+- **[Legacy Code Reference](refactoring/layered-to-rhi/LEGACY_CODE_REFERENCE.md)** - Pre-RHI code archive
+
+---
+
 ## 🗂️ Documentation Structure
 
 ```
@@ -90,16 +116,16 @@ docs/
 ### For Different Audiences
 
 #### **Game Developers / Engineers**
-If you're evaluating this project for a technical interview or portfolio review:
+If you're evaluating this project's architecture:
 
 1. **Architecture understanding:**
    - Start with [Refactoring Overview](refactoring/monolith-to-layered/REFACTORING_OVERVIEW.md)
-   - Review key design decisions in main README
+   - Review [RHI Migration PRD](refactoring/layered-to-rhi/RHI_MIGRATION_PRD.md) for abstraction layer design
 
 2. **Technical depth:**
    - [Phase 3: Resource Management](refactoring/monolith-to-layered/PHASE3_RESOURCE_MANAGEMENT.md) - RAII implementation
    - [Phase 4: Rendering Layer](refactoring/monolith-to-layered/PHASE4_RENDERING_LAYER.md) - Synchronization and command management
-   - [Cross-Platform Rendering](CROSS_PLATFORM_RENDERING.md) - Platform abstraction
+   - [RHI Technical Guide](refactoring/layered-to-rhi/RHI_TECHNICAL_GUIDE.md) - Hardware abstraction design
 
 3. **Code quality:**
    - Check code metrics in each phase document

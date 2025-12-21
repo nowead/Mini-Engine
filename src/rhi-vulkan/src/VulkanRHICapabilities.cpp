@@ -1,4 +1,4 @@
-#include "VulkanRHICapabilities.hpp"
+#include <rhi-vulkan/VulkanRHICapabilities.hpp>
 
 namespace RHI {
 namespace Vulkan {

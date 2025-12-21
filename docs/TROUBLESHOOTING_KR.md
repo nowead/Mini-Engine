@@ -774,6 +774,228 @@ static constexpr bool ENABLE_VALIDATION = true;
 
 ---
 
+## RHI (Render Hardware Interface) 문제
+
+### Linux: Dynamic Rendering 미지원 (VK_KHR_dynamic_rendering)
+
+**오류:**
+```
+Validation Error: [ VUID-vkCmdBeginRendering-dynamicRendering-06446 ]
+vkCmdBeginRendering requires VK_KHR_dynamic_rendering or Vulkan 1.3
+```
+
+또는:
+
+```
+Assertion `("dynamicRendering is not enabled on the device", false)` failed.
+```
+
+**원인:**
+- Linux (특히 WSL2의 lavapipe/llvmpipe)는 Vulkan 1.1 사용
+- Dynamic rendering (`vkCmdBeginRendering`/`vkCmdEndRendering`)은 Vulkan 1.3 기능
+- macOS (MoltenVK)와 최신 GPU가 있는 Windows는 Vulkan 1.3 지원
+- lavapipe (소프트웨어 렌더러)는 Vulkan 1.1만 지원
+
+**해결 방법:**
+
+Linux에서 전통적인 render pass 사용:
+
+**1. VulkanRHICommandEncoder - 플랫폼별 render pass 사용:**
+
+```cpp
+// VulkanRHICommandEncoder.cpp
+void VulkanRHICommandEncoder::beginRenderPass(const RenderPassDesc& desc) {
+#ifdef __linux__
+    // Linux (Vulkan 1.1): 전통적인 render pass 사용
+    if (desc.nativeRenderPass && desc.nativeFramebuffer) {
+        vk::RenderPassBeginInfo renderPassInfo{};
+        renderPassInfo.renderPass = static_cast<vk::RenderPass>(
+            reinterpret_cast<VkRenderPass>(desc.nativeRenderPass));
+        renderPassInfo.framebuffer = static_cast<vk::Framebuffer>(
+            reinterpret_cast<VkFramebuffer>(desc.nativeFramebuffer));
+        renderPassInfo.renderArea.offset = vk::Offset2D{0, 0};
+        renderPassInfo.renderArea.extent = vk::Extent2D{desc.width, desc.height};
+
+        std::array<vk::ClearValue, 2> clearValues{};
+        clearValues[0].color = vk::ClearColorValue{...};
+        clearValues[1].depthStencil = vk::ClearDepthStencilValue{1.0f, 0};
+        renderPassInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
+        renderPassInfo.pClearValues = clearValues.data();
+
+        m_commandBuffer.beginRenderPass(renderPassInfo, vk::SubpassContents::eInline);
+        m_usesTraditionalRenderPass = true;
+    }
+#else
+    // macOS/Windows (Vulkan 1.3): dynamic rendering 사용
+    vk::RenderingInfo renderingInfo{...};
+    m_commandBuffer.beginRendering(renderingInfo);
+#endif
+}
+
+void VulkanRHICommandEncoder::endRenderPass() {
+#ifdef __linux__
+    if (m_usesTraditionalRenderPass) {
+        m_commandBuffer.endRenderPass();
+        m_usesTraditionalRenderPass = false;
+        return;
+    }
+#endif
+    m_commandBuffer.endRendering();
+}
+```
+
+**2. RenderPassDesc에 nativeRenderPass/nativeFramebuffer 추가:**
+
+```cpp
+// RHIRenderPass.hpp
+struct RenderPassDesc {
+    // ... 기존 필드 ...
+    void* nativeRenderPass = nullptr;   // Linux: VkRenderPass
+    void* nativeFramebuffer = nullptr;  // Linux: VkFramebuffer
+};
+```
+
+**3. VulkanRHISwapchain에서 framebuffer 생성:**
+
+```cpp
+// VulkanRHISwapchain.cpp
+void VulkanRHISwapchain::createFramebuffers() {
+    m_framebuffers.resize(m_imageViews.size());
+    for (size_t i = 0; i < m_imageViews.size(); i++) {
+        std::array<vk::ImageView, 2> attachments = {
+            m_imageViews[i],
+            m_depthImageView
+        };
+        vk::FramebufferCreateInfo framebufferInfo{};
+        framebufferInfo.renderPass = m_renderPass;
+        framebufferInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+        framebufferInfo.pAttachments = attachments.data();
+        framebufferInfo.width = m_extent.width;
+        framebufferInfo.height = m_extent.height;
+        framebufferInfo.layers = 1;
+        m_framebuffers[i] = m_device.createFramebuffer(framebufferInfo);
+    }
+}
+```
+
+---
+
+### Linux: renderPass = NULL로 파이프라인 생성
+
+**오류:**
+```
+Validation Error: [ VUID-VkGraphicsPipelineCreateInfo-dynamicRendering-06576 ]
+If the dynamicRendering feature is not enabled, renderPass must not be VK_NULL_HANDLE
+```
+
+**원인:**
+- Linux에서 파이프라인 생성 시 유효한 VkRenderPass 필요
+- dynamic rendering이 있는 macOS/Windows는 `renderPass = VK_NULL_HANDLE` 사용 가능
+- lavapipe는 dynamic rendering을 지원하지 않아 전통적인 render pass 필요
+
+**해결 방법:**
+
+**1. RenderPipelineDesc에 nativeRenderPass 추가:**
+
+```cpp
+// RHIPipeline.hpp
+struct RenderPipelineDesc {
+    // ... 기존 필드 ...
+    void* nativeRenderPass = nullptr;  // Linux: 파이프라인 생성용 VkRenderPass
+};
+```
+
+**2. 조건부 파이프라인 생성:**
+
+```cpp
+// VulkanRHIPipeline.cpp
+void VulkanRHIPipeline::createGraphicsPipeline(const RenderPipelineDesc& desc) {
+    vk::GraphicsPipelineCreateInfo pipelineInfo{};
+    // ... 파이프라인 스테이지, 레이아웃 등 설정 ...
+
+#ifdef __linux__
+    // Linux: 전통적인 render pass 사용
+    if (desc.nativeRenderPass) {
+        pipelineInfo.renderPass = static_cast<vk::RenderPass>(
+            reinterpret_cast<VkRenderPass>(desc.nativeRenderPass));
+        pipelineInfo.subpass = 0;
+    }
+#else
+    // macOS/Windows: dynamic rendering 사용
+    vk::PipelineRenderingCreateInfo renderingInfo{};
+    renderingInfo.colorAttachmentCount = 1;
+    renderingInfo.pColorAttachmentFormats = &swapchainFormat;
+    renderingInfo.depthAttachmentFormat = vk::Format::eD32Sfloat;
+    pipelineInfo.pNext = &renderingInfo;
+    pipelineInfo.renderPass = nullptr;
+#endif
+
+    m_pipeline = m_device.createGraphicsPipeline(pipelineCache, pipelineInfo).value;
+}
+```
+
+**3. 파이프라인 생성 전에 스왑체인 먼저 생성:**
+
+```cpp
+// Renderer.cpp
+void Renderer::createRHIPipeline() {
+    // 스왑체인 먼저 생성 (Linux에서 render pass 필요)
+    if (!m_rhiSwapchain) {
+        createSwapchain();
+    }
+
+    rhi::RenderPipelineDesc desc{};
+    // ... 파이프라인 설명 설정 ...
+
+#ifdef __linux__
+    auto* vulkanSwapchain = dynamic_cast<VulkanRHISwapchain*>(m_rhiSwapchain.get());
+    if (vulkanSwapchain) {
+        desc.nativeRenderPass = reinterpret_cast<void*>(
+            static_cast<VkRenderPass>(vulkanSwapchain->getRenderPass()));
+    }
+#endif
+
+    m_rhiPipeline = m_rhiDevice->createRenderPipeline(desc);
+}
+```
+
+---
+
+### Linux: 이미지 레이아웃 전환 오류
+
+**오류:**
+```
+Validation Error: [ VUID-VkImageMemoryBarrier-oldLayout-01197 ]
+oldLayout must be VK_IMAGE_LAYOUT_UNDEFINED or the current layout of the image
+```
+
+**원인:**
+- 수동 이미지 레이아웃 배리어가 render pass의 자동 전환과 충돌
+- 전통적인 render pass (`initialLayout`/`finalLayout`)가 레이아웃 전환을 자동으로 처리
+- 명시적 `pipelineBarrier` 추가 시 중복/충돌 전환 발생
+
+**해결 방법:**
+
+전통적인 render pass 사용 시 Linux에서 수동 배리어 건너뛰기:
+
+```cpp
+// VulkanRHICommandEncoder.cpp
+void VulkanRHICommandEncoder::pipelineBarrier(...) {
+#ifdef __linux__
+    // Linux의 전통적인 render pass에서는 레이아웃 전환이
+    // renderPass의 initialLayout/finalLayout에 의해 자동으로 처리됨
+    // 충돌을 피하기 위해 수동 배리어 건너뛰기
+    return;
+#endif
+    // macOS/Windows: 배리어 정상 적용
+    m_commandBuffer.pipelineBarrier(...);
+}
+```
+
+**참고:** 이는 임시 해결책입니다. 더 견고한 솔루션은 활성 render pass를 추적하고 충돌하는 배리어만 건너뛰는 것입니다.
+
+---
+
 ## 추가 도움 받기
 
 이러한 해결 방법으로 문제가 해결되지 않으면:
@@ -795,4 +1017,4 @@ static constexpr bool ENABLE_VALIDATION = true;
 
 ---
 
-*마지막 업데이트: 2025-11-21*
+*마지막 업데이트: 2025-12-22*

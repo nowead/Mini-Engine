@@ -11,7 +11,8 @@
  * 6. Queue submission (Phase 4)
  */
 
-#include "src/rhi/RHI.hpp"
+#include <rhi/RHI.hpp>
+#include "RHIFactory.hpp"
 #include "src/rendering/RendererBridge.hpp"
 #include <GLFW/glfw3.h>
 #include <iostream>

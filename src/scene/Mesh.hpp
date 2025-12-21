@@ -1,7 +1,7 @@
 #pragma once
 
 #include "src/utils/Vertex.hpp"
-#include "src/rhi/RHI.hpp"
+#include <rhi/RHI.hpp>
 
 #include <vector>
 #include <string>

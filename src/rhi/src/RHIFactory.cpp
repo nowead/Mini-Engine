@@ -2,11 +2,11 @@
 
 // Backend implementations
 #ifdef RHI_BACKEND_VULKAN
-#include "vulkan/VulkanRHIDevice.hpp"
+#include <rhi-vulkan/VulkanRHIDevice.hpp>
 #endif
 
 #ifdef RHI_BACKEND_WEBGPU
-// #include "webgpu/WebGPURHIDevice.hpp"  // Future
+// #include <rhi-webgpu/WebGPURHIDevice.hpp>  // Future
 #endif
 
 #include <stdexcept>

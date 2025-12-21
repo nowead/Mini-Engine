@@ -1,8 +1,8 @@
-#include "VulkanRHISwapchain.hpp"
-#include "VulkanRHIDevice.hpp"
-#include "VulkanRHIQueue.hpp"
-#include "VulkanRHISync.hpp"  // Phase 7.5: For VulkanRHISemaphore
-#include "VulkanRHICommandEncoder.hpp"  // Phase 7.5: For command buffer creation
+#include <rhi-vulkan/VulkanRHISwapchain.hpp>
+#include <rhi-vulkan/VulkanRHIDevice.hpp>
+#include <rhi-vulkan/VulkanRHIQueue.hpp>
+#include <rhi-vulkan/VulkanRHISync.hpp>  // Phase 7.5: For VulkanRHISemaphore
+#include <rhi-vulkan/VulkanRHICommandEncoder.hpp>  // Phase 7.5: For command buffer creation
 #include <algorithm>
 #include <limits>
 
@@ -350,6 +350,102 @@ void VulkanRHISwapchain::transitionImageLayout(
         queue->submit(commandBuffer.get(), fence.get());
         fence->wait();
     }
+}
+
+// ============================================================================
+// Linux Compatibility: Render Pass and Framebuffers (Vulkan 1.1)
+// ============================================================================
+
+void VulkanRHISwapchain::createRenderPass() {
+    // Already created - skip
+    if (*m_renderPass) {
+        return;
+    }
+
+    // Color attachment
+    vk::AttachmentDescription colorAttachment;
+    colorAttachment.format = m_surfaceFormat.format;
+    colorAttachment.samples = vk::SampleCountFlagBits::e1;
+    colorAttachment.loadOp = vk::AttachmentLoadOp::eClear;       // Clear for main rendering
+    colorAttachment.storeOp = vk::AttachmentStoreOp::eStore;
+    colorAttachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+    colorAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+    colorAttachment.initialLayout = vk::ImageLayout::eUndefined;
+    colorAttachment.finalLayout = vk::ImageLayout::ePresentSrcKHR;
+
+    // Depth attachment
+    vk::AttachmentDescription depthAttachment;
+    depthAttachment.format = vk::Format::eD32Sfloat;
+    depthAttachment.samples = vk::SampleCountFlagBits::e1;
+    depthAttachment.loadOp = vk::AttachmentLoadOp::eClear;
+    depthAttachment.storeOp = vk::AttachmentStoreOp::eDontCare;
+    depthAttachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+    depthAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+    depthAttachment.initialLayout = vk::ImageLayout::eUndefined;
+    depthAttachment.finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
+    vk::AttachmentReference colorAttachmentRef;
+    colorAttachmentRef.attachment = 0;
+    colorAttachmentRef.layout = vk::ImageLayout::eColorAttachmentOptimal;
+
+    vk::AttachmentReference depthAttachmentRef;
+    depthAttachmentRef.attachment = 1;
+    depthAttachmentRef.layout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
+    vk::SubpassDescription subpass;
+    subpass.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorAttachmentRef;
+    subpass.pDepthStencilAttachment = &depthAttachmentRef;
+
+    vk::SubpassDependency dependency;
+    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependency.dstSubpass = 0;
+    dependency.srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
+    dependency.dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
+    dependency.srcAccessMask = vk::AccessFlagBits::eNone;
+    dependency.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+
+    std::array<vk::AttachmentDescription, 2> attachments = { colorAttachment, depthAttachment };
+
+    vk::RenderPassCreateInfo renderPassInfo;
+    renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+    renderPassInfo.pAttachments = attachments.data();
+    renderPassInfo.subpassCount = 1;
+    renderPassInfo.pSubpasses = &subpass;
+    renderPassInfo.dependencyCount = 1;
+    renderPassInfo.pDependencies = &dependency;
+
+    m_renderPass = vk::raii::RenderPass(m_device->getVkDevice(), renderPassInfo);
+}
+
+void VulkanRHISwapchain::createFramebuffers(vk::ImageView depthImageView) {
+    m_framebuffers.clear();
+
+    for (size_t i = 0; i < m_imageViews.size(); ++i) {
+        std::vector<vk::ImageView> attachments;
+        attachments.push_back(m_imageViews[i]->getVkImageView());
+        if (depthImageView) {
+            attachments.push_back(depthImageView);
+        }
+
+        vk::FramebufferCreateInfo framebufferInfo;
+        framebufferInfo.renderPass = *m_renderPass;
+        framebufferInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+        framebufferInfo.pAttachments = attachments.data();
+        framebufferInfo.width = m_extent.width;
+        framebufferInfo.height = m_extent.height;
+        framebufferInfo.layers = 1;
+
+        m_framebuffers.emplace_back(m_device->getVkDevice(), framebufferInfo);
+    }
+}
+
+vk::Framebuffer VulkanRHISwapchain::getFramebuffer(uint32_t index) const {
+    if (index < m_framebuffers.size()) {
+        return *m_framebuffers[index];
+    }
+    return VK_NULL_HANDLE;
 }
 
 } // namespace Vulkan

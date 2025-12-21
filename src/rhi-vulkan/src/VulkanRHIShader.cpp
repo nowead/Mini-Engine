@@ -1,5 +1,5 @@
-#include "VulkanRHIShader.hpp"
-#include "VulkanRHIDevice.hpp"
+#include <rhi-vulkan/VulkanRHIShader.hpp>
+#include <rhi-vulkan/VulkanRHIDevice.hpp>
 
 namespace RHI {
 namespace Vulkan {

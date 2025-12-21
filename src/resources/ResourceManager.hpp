@@ -1,6 +1,6 @@
 #pragma once
 
-#include "src/rhi/RHI.hpp"
+#include <rhi/RHI.hpp>
 
 #include <memory>
 #include <string>

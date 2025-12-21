@@ -1,6 +1,6 @@
 #include "ImGuiVulkanBackend.hpp"
 #include "src/core/PlatformConfig.hpp"
-#include "src/rhi/vulkan/VulkanRHICommandEncoder.hpp"
+#include <rhi-vulkan/VulkanRHICommandEncoder.hpp>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
@@ -52,7 +52,11 @@ void ImGuiVulkanBackend::init(GLFWwindow* window,
     initInfo.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
 
 #ifdef __linux__
-    // Linux: Use render pass
+    // Linux: Use render pass (Vulkan 1.1 compatibility)
+    // Create render pass if not already created
+    if (vulkanSwapchain->getRenderPass() == VK_NULL_HANDLE) {
+        vulkanSwapchain->createRenderPass();
+    }
     initInfo.RenderPass = static_cast<VkRenderPass>(vulkanSwapchain->getRenderPass());
     initInfo.UseDynamicRendering = false;
 #else

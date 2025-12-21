@@ -64,6 +64,12 @@ struct RenderPassDesc {
 
     const char* label = nullptr;  // Optional debug label
 
+    // Platform-specific render pass objects (for Linux traditional rendering)
+    // On Vulkan: VkRenderPass and VkFramebuffer cast to void*
+    // Can be nullptr for dynamic rendering (macOS/Windows)
+    void* nativeRenderPass = nullptr;
+    void* nativeFramebuffer = nullptr;
+
     RenderPassDesc() = default;
 };
 

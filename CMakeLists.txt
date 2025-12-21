@@ -34,6 +34,52 @@ message(STATUS "VULKAN_LIBRARY: ${VULKAN_LIBRARY}")
 message(STATUS "VULKAN_SDK (env var from CMake): $ENV{VULKAN_SDK}")
 message(STATUS "-------------------------")
 
+# =============================================================================
+# set up Vulkan C++ module (must be before RHI modules)
+add_library(VulkanCppModule)
+add_library(Vulkan::cppm ALIAS VulkanCppModule)
+
+target_compile_definitions(VulkanCppModule PUBLIC
+        VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
+        VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1
+)
+
+# Suppress Vulkan C++ module warnings
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+    target_compile_options(VulkanCppModule PRIVATE -Wno-missing-declarations)
+endif()
+target_include_directories(VulkanCppModule
+        PRIVATE
+        "${Vulkan_INCLUDE_DIR}"
+)
+target_link_libraries(VulkanCppModule
+        PUBLIC
+        Vulkan::Vulkan
+)
+
+set_target_properties(VulkanCppModule PROPERTIES
+    CXX_STANDARD 20
+    CXX_SCAN_FOR_MODULES ON
+)
+
+target_sources(VulkanCppModule
+        PUBLIC
+        FILE_SET cxx_modules TYPE CXX_MODULES
+        BASE_DIRS
+        "${Vulkan_INCLUDE_DIR}"
+        FILES
+        "${Vulkan_INCLUDE_DIR}/vulkan/vulkan.cppm"
+)
+
+# Add RHI modules
+add_subdirectory(src/rhi)
+add_subdirectory(src/rhi-vulkan)
+
+# Link rhi_factory to backend implementations (after both are defined)
+if(RHI_BACKEND_VULKAN)
+    target_link_libraries(rhi_factory PUBLIC rhi::vulkan)
+endif()
+
 add_executable(vulkanGLFW
     src/main.cpp
     # Application layer
@@ -79,37 +125,6 @@ add_executable(vulkanGLFW
     src/ui/ImGuiVulkanBackend.cpp
     src/ui/ImGuiManager.cpp
     src/ui/ImGuiManager.hpp
-    # RHI Vulkan Backend
-    src/rhi/vulkan/VulkanCommon.hpp
-    src/rhi/vulkan/VulkanCommon.cpp
-    src/rhi/vulkan/VulkanRHIDevice.hpp
-    src/rhi/vulkan/VulkanRHIDevice.cpp
-    src/rhi/vulkan/VulkanRHIQueue.hpp
-    src/rhi/vulkan/VulkanRHIQueue.cpp
-    src/rhi/vulkan/VulkanRHIBuffer.hpp
-    src/rhi/vulkan/VulkanRHIBuffer.cpp
-    src/rhi/vulkan/VulkanRHITexture.hpp
-    src/rhi/vulkan/VulkanRHITexture.cpp
-    src/rhi/vulkan/VulkanRHICapabilities.hpp
-    src/rhi/vulkan/VulkanRHICapabilities.cpp
-    src/rhi/vulkan/VulkanRHISampler.hpp
-    src/rhi/vulkan/VulkanRHISampler.cpp
-    src/rhi/vulkan/VulkanRHIShader.hpp
-    src/rhi/vulkan/VulkanRHIShader.cpp
-    src/rhi/vulkan/VulkanRHISync.hpp
-    src/rhi/vulkan/VulkanRHISync.cpp
-    src/rhi/vulkan/VulkanRHIBindGroup.hpp
-    src/rhi/vulkan/VulkanRHIBindGroup.cpp
-    src/rhi/vulkan/VulkanRHIPipeline.hpp
-    src/rhi/vulkan/VulkanRHIPipeline.cpp
-    src/rhi/vulkan/VulkanRHICommandEncoder.hpp
-    src/rhi/vulkan/VulkanRHICommandEncoder.cpp
-    src/rhi/vulkan/VulkanRHISwapchain.hpp
-    src/rhi/vulkan/VulkanRHISwapchain.cpp
-    src/rhi/vulkan/VulkanMemoryAllocator.cpp
-    # RHI Factory
-    src/rhi/RHIFactory.hpp
-    src/rhi/RHIFactory.cpp
     # Utility headers (header-only)
     src/utils/VulkanCommon.hpp
     src/utils/Vertex.hpp
@@ -131,6 +146,8 @@ target_link_libraries(vulkanGLFW PRIVATE
     Vulkan::cppm
     tinyobjloader::tinyobjloader
     imgui::imgui
+    rhi::factory
+    rhi::vulkan
 )
 
 # Force ImGui to NOT use volk - use standard Vulkan headers
@@ -146,44 +163,6 @@ endif()
 if(RHI_BACKEND_WEBGPU)
     target_compile_definitions(vulkanGLFW PRIVATE RHI_BACKEND_WEBGPU=1)
 endif()
-
-find_package (Vulkan REQUIRED)
-
-# set up Vulkan C++ module
-add_library(VulkanCppModule)
-add_library(Vulkan::cppm ALIAS VulkanCppModule)
-
-target_compile_definitions(VulkanCppModule PUBLIC
-        VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
-        VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1
-)
-
-# Suppress Vulkan C++ module warnings
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "GNU")
-    target_compile_options(VulkanCppModule PRIVATE -Wno-missing-declarations)
-endif()
-target_include_directories(VulkanCppModule
-        PRIVATE
-        "${Vulkan_INCLUDE_DIR}"
-)
-target_link_libraries(VulkanCppModule
-        PUBLIC
-        Vulkan::Vulkan
-)
-
-set_target_properties(VulkanCppModule PROPERTIES
-    CXX_STANDARD 20
-    CXX_SCAN_FOR_MODULES ON
-)
-
-target_sources(VulkanCppModule
-        PUBLIC
-        FILE_SET cxx_modules TYPE CXX_MODULES
-        BASE_DIRS
-        "${Vulkan_INCLUDE_DIR}"
-        FILES
-        "${Vulkan_INCLUDE_DIR}/vulkan/vulkan.cppm"
-)
 
 find_program(SLANGC_EXECUTABLE slangc HINTS $ENV{VULKAN_SDK}/bin REQUIRED)
 set(SHADER_SLANG_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shader.slang)
@@ -267,40 +246,9 @@ add_dependencies(vulkanGLFW foo)
 # =============================================================================
 add_executable(rhi_smoke_test
     tests/rhi_smoke_test.cpp
-    # RHI Factory
-    src/rhi/RHIFactory.hpp
-    src/rhi/RHIFactory.cpp
     # Renderer Bridge
     src/rendering/RendererBridge.hpp
     src/rendering/RendererBridge.cpp
-    # RHI Vulkan Backend (link same sources as main executable)
-    src/rhi/vulkan/VulkanCommon.hpp
-    src/rhi/vulkan/VulkanCommon.cpp
-    src/rhi/vulkan/VulkanRHIDevice.hpp
-    src/rhi/vulkan/VulkanRHIDevice.cpp
-    src/rhi/vulkan/VulkanRHIQueue.hpp
-    src/rhi/vulkan/VulkanRHIQueue.cpp
-    src/rhi/vulkan/VulkanRHIBuffer.hpp
-    src/rhi/vulkan/VulkanRHIBuffer.cpp
-    src/rhi/vulkan/VulkanRHITexture.hpp
-    src/rhi/vulkan/VulkanRHITexture.cpp
-    src/rhi/vulkan/VulkanRHICapabilities.hpp
-    src/rhi/vulkan/VulkanRHICapabilities.cpp
-    src/rhi/vulkan/VulkanRHISampler.hpp
-    src/rhi/vulkan/VulkanRHISampler.cpp
-    src/rhi/vulkan/VulkanRHIShader.hpp
-    src/rhi/vulkan/VulkanRHIShader.cpp
-    src/rhi/vulkan/VulkanRHISync.hpp
-    src/rhi/vulkan/VulkanRHISync.cpp
-    src/rhi/vulkan/VulkanRHIBindGroup.hpp
-    src/rhi/vulkan/VulkanRHIBindGroup.cpp
-    src/rhi/vulkan/VulkanRHIPipeline.hpp
-    src/rhi/vulkan/VulkanRHIPipeline.cpp
-    src/rhi/vulkan/VulkanRHICommandEncoder.hpp
-    src/rhi/vulkan/VulkanRHICommandEncoder.cpp
-    src/rhi/vulkan/VulkanRHISwapchain.hpp
-    src/rhi/vulkan/VulkanRHISwapchain.cpp
-    src/rhi/vulkan/VulkanMemoryAllocator.cpp
 )
 
 target_include_directories(rhi_smoke_test BEFORE PRIVATE
@@ -314,6 +262,8 @@ target_link_libraries(rhi_smoke_test PRIVATE
     Vulkan::Vulkan
     GPUOpen::VulkanMemoryAllocator
     Vulkan::cppm
+    rhi::factory
+    rhi::vulkan
 )
 
 target_compile_definitions(rhi_smoke_test PRIVATE

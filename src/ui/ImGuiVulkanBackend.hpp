@@ -1,8 +1,8 @@
 #pragma once
 
 #include "ImGuiBackend.hpp"
-#include "src/rhi/vulkan/VulkanRHIDevice.hpp"
-#include "src/rhi/vulkan/VulkanRHISwapchain.hpp"
+#include <rhi-vulkan/VulkanRHIDevice.hpp>
+#include <rhi-vulkan/VulkanRHISwapchain.hpp>
 #include <vulkan/vulkan_raii.hpp>
 
 namespace ui {

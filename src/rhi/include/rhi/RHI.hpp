@@ -41,12 +41,12 @@
 // Device interface
 #include "RHIDevice.hpp"
 
-// Factory for creating devices
-#include "RHIFactory.hpp"
-
 /**
  * @namespace rhi
  * @brief RHI (Render Hardware Interface) namespace
  *
  * All RHI types and interfaces are defined within this namespace.
+ * 
+ * To create a device, include <RHIFactory.hpp> separately and use
+ * rhi::RHIFactory::createDevice(backendType, window).
  */

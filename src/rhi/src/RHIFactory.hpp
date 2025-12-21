@@ -1,7 +1,7 @@
 #pragma once
 
-#include "RHIDevice.hpp"
-#include "RHITypes.hpp"
+#include <rhi/RHIDevice.hpp>
+#include <rhi/RHITypes.hpp>
 #include <memory>
 #include <vector>
 #include <string>

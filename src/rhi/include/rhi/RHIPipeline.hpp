@@ -166,6 +166,11 @@ struct RenderPipelineDesc {
     // Debug label
     const char* label = nullptr;
 
+    // Platform-specific render pass (optional, for Linux traditional render pass)
+    // On Vulkan: VkRenderPass cast to void*
+    // Can be nullptr for dynamic rendering (macOS/Windows)
+    void* nativeRenderPass = nullptr;
+
     RenderPipelineDesc() = default;
 };
 

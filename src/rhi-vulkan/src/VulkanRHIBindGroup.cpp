@@ -1,8 +1,8 @@
-#include "VulkanRHIBindGroup.hpp"
-#include "VulkanRHIDevice.hpp"
-#include "VulkanRHIBuffer.hpp"
-#include "VulkanRHITexture.hpp"
-#include "VulkanRHISampler.hpp"
+#include <rhi-vulkan/VulkanRHIBindGroup.hpp>
+#include <rhi-vulkan/VulkanRHIDevice.hpp>
+#include <rhi-vulkan/VulkanRHIBuffer.hpp>
+#include <rhi-vulkan/VulkanRHITexture.hpp>
+#include <rhi-vulkan/VulkanRHISampler.hpp>
 #include <map>
 
 namespace RHI {

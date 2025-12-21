@@ -1,9 +1,9 @@
-#include "VulkanRHICommandEncoder.hpp"
-#include "VulkanRHIDevice.hpp"
-#include "VulkanRHIBuffer.hpp"
-#include "VulkanRHITexture.hpp"
-#include "VulkanRHIPipeline.hpp"
-#include "VulkanRHIBindGroup.hpp"
+#include <rhi-vulkan/VulkanRHICommandEncoder.hpp>
+#include <rhi-vulkan/VulkanRHIDevice.hpp>
+#include <rhi-vulkan/VulkanRHIBuffer.hpp>
+#include <rhi-vulkan/VulkanRHITexture.hpp>
+#include <rhi-vulkan/VulkanRHIPipeline.hpp>
+#include <rhi-vulkan/VulkanRHIBindGroup.hpp>
 #include <iostream>  // Phase 7.5: For std::cerr warning message
 
 namespace RHI {
@@ -50,8 +50,50 @@ VulkanRHIRenderPassEncoder::VulkanRHIRenderPassEncoder(VulkanRHIDevice* device, 
     : m_device(device)
     , m_commandBuffer(cmdBuffer)
     , m_ended(false)
+    , m_usesTraditionalRenderPass(false)
     , m_currentPipelineLayout(nullptr)  // Phase 7.5: Initialize to nullptr
 {
+#ifdef __linux__
+    // Linux: Use traditional render pass (Vulkan 1.1)
+    if (desc.nativeRenderPass && desc.nativeFramebuffer) {
+        vk::RenderPass renderPass = reinterpret_cast<VkRenderPass>(desc.nativeRenderPass);
+        vk::Framebuffer framebuffer = reinterpret_cast<VkFramebuffer>(desc.nativeFramebuffer);
+
+        // Build clear values
+        std::vector<vk::ClearValue> clearValues;
+        for (const auto& attachment : desc.colorAttachments) {
+            vk::ClearValue clearValue;
+            clearValue.color = vk::ClearColorValue(
+                std::array<float, 4>{
+                    attachment.clearValue.float32[0],
+                    attachment.clearValue.float32[1],
+                    attachment.clearValue.float32[2],
+                    attachment.clearValue.float32[3]
+                });
+            clearValues.push_back(clearValue);
+        }
+        if (desc.depthStencilAttachment) {
+            vk::ClearValue depthClear;
+            depthClear.depthStencil = vk::ClearDepthStencilValue(
+                desc.depthStencilAttachment->depthClearValue,
+                desc.depthStencilAttachment->stencilClearValue);
+            clearValues.push_back(depthClear);
+        }
+
+        vk::RenderPassBeginInfo renderPassInfo;
+        renderPassInfo.renderPass = renderPass;
+        renderPassInfo.framebuffer = framebuffer;
+        renderPassInfo.renderArea = vk::Rect2D({0, 0}, {desc.width, desc.height});
+        renderPassInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
+        renderPassInfo.pClearValues = clearValues.data();
+
+        m_commandBuffer.beginRenderPass(renderPassInfo, vk::SubpassContents::eInline);
+        m_usesTraditionalRenderPass = true;
+        return;
+    }
+#endif
+
+    // macOS/Windows or Linux fallback: Use dynamic rendering (Vulkan 1.3)
     // Convert color attachments
     std::vector<vk::RenderingAttachmentInfo> colorAttachments;
     for (const auto& attachment : desc.colorAttachments) {
@@ -184,7 +226,11 @@ void VulkanRHIRenderPassEncoder::drawIndexedIndirect(rhi::RHIBuffer* indirectBuf
 
 void VulkanRHIRenderPassEncoder::end() {
     if (!m_ended) {
-        m_commandBuffer.endRendering();
+        if (m_usesTraditionalRenderPass) {
+            m_commandBuffer.endRenderPass();
+        } else {
+            m_commandBuffer.endRendering();
+        }
         m_ended = true;
     }
 }

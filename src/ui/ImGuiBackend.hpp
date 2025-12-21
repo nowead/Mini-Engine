@@ -1,6 +1,6 @@
 #pragma once
 
-#include "src/rhi/RHI.hpp"
+#include <rhi/RHI.hpp>
 #include <GLFW/glfw3.h>
 
 namespace ui {

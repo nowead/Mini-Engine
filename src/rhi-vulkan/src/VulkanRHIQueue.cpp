@@ -1,7 +1,7 @@
-#include "VulkanRHIQueue.hpp"
-#include "VulkanRHIDevice.hpp"
-#include "VulkanRHICommandEncoder.hpp"
-#include "VulkanRHISync.hpp"
+#include <rhi-vulkan/VulkanRHIQueue.hpp>
+#include <rhi-vulkan/VulkanRHIDevice.hpp>
+#include <rhi-vulkan/VulkanRHICommandEncoder.hpp>
+#include <rhi-vulkan/VulkanRHISync.hpp>
 
 namespace RHI {
 namespace Vulkan {

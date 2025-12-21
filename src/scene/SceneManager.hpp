@@ -1,7 +1,7 @@
 #pragma once
 
 #include "src/scene/Mesh.hpp"
-#include "src/rhi/RHI.hpp"
+#include <rhi/RHI.hpp>
 
 #include <memory>
 #include <vector>

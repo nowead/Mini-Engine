@@ -1,7 +1,7 @@
-#include "VulkanRHIPipeline.hpp"
-#include "VulkanRHIDevice.hpp"
-#include "VulkanRHIShader.hpp"
-#include "VulkanRHIBindGroup.hpp"
+#include <rhi-vulkan/VulkanRHIPipeline.hpp>
+#include <rhi-vulkan/VulkanRHIDevice.hpp>
+#include <rhi-vulkan/VulkanRHIShader.hpp>
+#include <rhi-vulkan/VulkanRHIBindGroup.hpp>
 
 namespace RHI {
 namespace Vulkan {
@@ -189,7 +189,33 @@ VulkanRHIRenderPipeline::VulkanRHIRenderPipeline(VulkanRHIDevice* device, const 
     dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
     dynamicState.pDynamicStates = dynamicStates.data();
 
-    // Dynamic rendering info (Vulkan 1.3)
+    // Platform-specific rendering setup
+#ifdef __linux__
+    // Linux: Use traditional render pass (lavapipe/Vulkan 1.1 doesn't support dynamic rendering)
+    vk::RenderPass renderPass = VK_NULL_HANDLE;
+    if (desc.nativeRenderPass) {
+        // Convert void* back to VkRenderPass
+        renderPass = reinterpret_cast<VkRenderPass>(desc.nativeRenderPass);
+    }
+
+    // Pipeline create info
+    vk::GraphicsPipelineCreateInfo pipelineInfo;
+    pipelineInfo.pNext = nullptr;  // No dynamic rendering on Linux
+    pipelineInfo.stageCount = static_cast<uint32_t>(shaderStages.size());
+    pipelineInfo.pStages = shaderStages.data();
+    pipelineInfo.pVertexInputState = &vertexInputInfo;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pDepthStencilState = desc.depthStencil ? &depthStencil : nullptr;
+    pipelineInfo.pColorBlendState = &colorBlending;
+    pipelineInfo.pDynamicState = &dynamicState;
+    pipelineInfo.layout = vulkanLayout->getVkPipelineLayout();
+    pipelineInfo.renderPass = renderPass;  // Traditional render pass
+    pipelineInfo.subpass = 0;
+#else
+    // macOS/Windows: Use dynamic rendering (Vulkan 1.3)
     std::vector<vk::Format> colorFormats;
     for (const auto& target : desc.colorTargets) {
         colorFormats.push_back(ToVkFormat(target.format));
@@ -219,6 +245,7 @@ VulkanRHIRenderPipeline::VulkanRHIRenderPipeline(VulkanRHIDevice* device, const 
     pipelineInfo.layout = vulkanLayout->getVkPipelineLayout();
     pipelineInfo.renderPass = nullptr;  // Using dynamic rendering
     pipelineInfo.subpass = 0;
+#endif
 
     m_pipeline = vk::raii::Pipeline(m_device->getVkDevice(), nullptr, pipelineInfo);
 }

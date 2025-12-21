@@ -1,5 +1,5 @@
-#include "VulkanRHITexture.hpp"
-#include "VulkanRHIDevice.hpp"
+#include <rhi-vulkan/VulkanRHITexture.hpp>
+#include <rhi-vulkan/VulkanRHIDevice.hpp>
 
 namespace RHI {
 namespace Vulkan {

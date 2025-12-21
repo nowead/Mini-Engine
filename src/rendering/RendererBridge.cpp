@@ -1,4 +1,5 @@
 #include "RendererBridge.hpp"
+#include "RHIFactory.hpp"
 #include <GLFW/glfw3.h>
 #include <stdexcept>
 #include <iostream>

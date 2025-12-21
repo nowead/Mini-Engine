@@ -276,7 +276,7 @@ slangc shaders/fdf.slang -o shaders/fdf.spv -target spirv
 
 ## License
 
-This project is created for educational and portfolio purposes.  
+This project is created for educational purposes.  
 Free to use for learning - please provide attribution when using.
 
 ---

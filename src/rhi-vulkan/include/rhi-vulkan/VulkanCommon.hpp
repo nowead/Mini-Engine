@@ -15,7 +15,7 @@
 #include <vk_mem_alloc.h>
 
 // RHI interface headers
-#include "../RHI.hpp"
+#include <rhi/RHI.hpp>
 
 // Standard library
 #include <memory>

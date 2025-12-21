@@ -1,5 +1,5 @@
-#include "VulkanRHISampler.hpp"
-#include "VulkanRHIDevice.hpp"
+#include <rhi-vulkan/VulkanRHISampler.hpp>
+#include <rhi-vulkan/VulkanRHIDevice.hpp>
 
 namespace RHI {
 namespace Vulkan {

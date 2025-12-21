@@ -1,7 +1,7 @@
 #include "Renderer.hpp"
 #include "src/ui/ImGuiManager.hpp"
-#include "src/rhi/vulkan/VulkanRHICommandEncoder.hpp"
-#include "src/rhi/vulkan/VulkanRHISwapchain.hpp"  // Phase 7.5: For layout transitions
+#include <rhi-vulkan/VulkanRHICommandEncoder.hpp>
+#include <rhi-vulkan/VulkanRHISwapchain.hpp>  // Phase 7.5: For layout transitions
 
 #include <stdexcept>
 #include <iostream>
@@ -416,6 +416,13 @@ void Renderer::createRHIPipeline() {
         return;
     }
 
+    // Phase 8: Ensure swapchain is created before pipeline (needed for render pass on Linux)
+    if (!rhiBridge->getSwapchain()) {
+        int width, height;
+        glfwGetFramebufferSize(window, &width, &height);
+        rhiBridge->createSwapchain(static_cast<uint32_t>(width), static_cast<uint32_t>(height), true);
+    }
+
     // Select shader path based on mode
     std::string shaderPath = fdfMode ? "shaders/fdf.spv" : "shaders/slang.spv";
 
@@ -494,6 +501,31 @@ void Renderer::createRHIPipeline() {
     pipelineDesc.colorTargets.push_back(colorTarget);
 
     pipelineDesc.label = "RHI Main Pipeline";
+
+    // Phase 8: Linux requires traditional render pass (no dynamic rendering)
+#ifdef __linux__
+    if (swapchain) {
+        auto* vulkanSwapchain = dynamic_cast<RHI::Vulkan::VulkanRHISwapchain*>(swapchain);
+        if (vulkanSwapchain) {
+            // Ensure render pass is created
+            vulkanSwapchain->createRenderPass();
+
+            // Create framebuffers with depth image view
+            if (rhiDepthImageView) {
+                auto* vulkanDepthView = dynamic_cast<RHI::Vulkan::VulkanRHITextureView*>(rhiDepthImageView.get());
+                if (vulkanDepthView) {
+                    vulkanSwapchain->createFramebuffers(vulkanDepthView->getVkImageView());
+                }
+            } else {
+                vulkanSwapchain->createFramebuffers();
+            }
+
+            // Cast VkRenderPass handle to void*
+            VkRenderPass vkPass = static_cast<VkRenderPass>(vulkanSwapchain->getRenderPass());
+            pipelineDesc.nativeRenderPass = reinterpret_cast<void*>(vkPass);
+        }
+    }
+#endif
 
     // Create pipeline
     rhiPipeline = rhiBridge->createRenderPipeline(pipelineDesc);
@@ -775,11 +807,13 @@ void Renderer::drawFrame() {
         return;
     }
 
-    // Phase 7.5: Transition swapchain image from UNDEFINED to COLOR_ATTACHMENT_OPTIMAL
-    // before starting the render pass
     auto* vulkanSwapchain = static_cast<RHI::Vulkan::VulkanRHISwapchain*>(rhiBridge->getSwapchain());
     auto* vulkanEncoder = static_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
 
+#ifndef __linux__
+    // Phase 7.5: Transition swapchain image from UNDEFINED to COLOR_ATTACHMENT_OPTIMAL
+    // before starting the render pass (only needed for dynamic rendering on macOS/Windows)
+    // Linux uses traditional render pass which handles layout transitions automatically
     vk::ImageMemoryBarrier acquireBarrier;
     acquireBarrier.oldLayout = vk::ImageLayout::eUndefined;
     acquireBarrier.newLayout = vk::ImageLayout::eColorAttachmentOptimal;
@@ -800,6 +834,7 @@ void Renderer::drawFrame() {
         vk::DependencyFlags{},
         nullptr, nullptr, acquireBarrier
     );
+#endif
 
     // Setup render pass
     rhi::RenderPassDesc renderPassDesc;
@@ -824,6 +859,18 @@ void Renderer::drawFrame() {
         depthAttachment.depthClearValue = 1.0f;
         renderPassDesc.depthStencilAttachment = &depthAttachment;
     }
+
+    // Phase 8: Linux requires traditional render pass (no dynamic rendering)
+#ifdef __linux__
+    auto* rhiVulkanSwapchain = dynamic_cast<RHI::Vulkan::VulkanRHISwapchain*>(rhiBridge->getSwapchain());
+    if (rhiVulkanSwapchain) {
+        uint32_t currentImageIndex = rhiBridge->getCurrentImageIndex();
+        VkRenderPass vkPass = static_cast<VkRenderPass>(rhiVulkanSwapchain->getRenderPass());
+        VkFramebuffer vkFramebuffer = static_cast<VkFramebuffer>(rhiVulkanSwapchain->getFramebuffer(currentImageIndex));
+        renderPassDesc.nativeRenderPass = reinterpret_cast<void*>(vkPass);
+        renderPassDesc.nativeFramebuffer = reinterpret_cast<void*>(vkFramebuffer);
+    }
+#endif
 
     // Record commands
     auto renderPass = encoder->beginRenderPass(renderPassDesc);
@@ -860,10 +907,11 @@ void Renderer::drawFrame() {
         renderPass->end();
     }
 
+#ifndef __linux__
     // Phase 7.5: Transition swapchain image from COLOR_ATTACHMENT_OPTIMAL to PRESENT_SRC
     // This must be done before finishing the command buffer
-    // Reuse vulkanSwapchain and vulkanEncoder from above
-
+    // Only needed for dynamic rendering on macOS/Windows
+    // Linux uses traditional render pass which handles layout transitions automatically
     vk::ImageMemoryBarrier presentBarrier;
     presentBarrier.oldLayout = vk::ImageLayout::eColorAttachmentOptimal;
     presentBarrier.newLayout = vk::ImageLayout::ePresentSrcKHR;
@@ -884,6 +932,7 @@ void Renderer::drawFrame() {
         vk::DependencyFlags{},
         nullptr, nullptr, presentBarrier
     );
+#endif
 
     // Finish command buffer
     auto commandBuffer = encoder->finish();

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ImGuiBackend.hpp"
-#include "src/rhi/RHI.hpp"
+#include <rhi/RHI.hpp>
 #include "src/scene/Camera.hpp"
 
 #include <GLFW/glfw3.h>

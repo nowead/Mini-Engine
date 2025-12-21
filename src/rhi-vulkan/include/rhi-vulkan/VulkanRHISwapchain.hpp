@@ -58,6 +58,14 @@ public:
         return VK_NULL_HANDLE;
     }
 
+    // Linux compatibility: Render pass for ImGui (Vulkan 1.1)
+    vk::RenderPass getRenderPass() const { return *m_renderPass ? *m_renderPass : VK_NULL_HANDLE; }
+    void createRenderPass();
+
+    // Linux compatibility: Framebuffers (Vulkan 1.1 traditional rendering)
+    vk::Framebuffer getFramebuffer(uint32_t index) const;
+    void createFramebuffers(vk::ImageView depthImageView = VK_NULL_HANDLE);
+
 private:
     VulkanRHIDevice* m_device;
     GLFWwindow* m_window;
@@ -73,6 +81,12 @@ private:
 
     uint32_t m_currentImageIndex = 0;
     uint32_t m_bufferCount;
+
+    // Linux compatibility: Render pass for ImGui (Vulkan 1.1)
+    vk::raii::RenderPass m_renderPass = nullptr;
+
+    // Linux compatibility: Framebuffers (Vulkan 1.1)
+    std::vector<vk::raii::Framebuffer> m_framebuffers;
 
     // Initialization methods
     void createSwapchain();

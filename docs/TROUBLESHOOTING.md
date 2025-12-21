@@ -872,6 +872,226 @@ void createVmaAllocator() {
 
 ---
 
+### Linux: Dynamic Rendering Not Supported (VK_KHR_dynamic_rendering)
+
+**Error:**
+```
+Validation Error: [ VUID-vkCmdBeginRendering-dynamicRendering-06446 ]
+vkCmdBeginRendering requires VK_KHR_dynamic_rendering or Vulkan 1.3
+```
+
+or:
+
+```
+Assertion `("dynamicRendering is not enabled on the device", false)` failed.
+```
+
+**Cause:**
+- Linux (especially WSL2 with lavapipe/llvmpipe) uses Vulkan 1.1
+- Dynamic rendering (`vkCmdBeginRendering`/`vkCmdEndRendering`) is a Vulkan 1.3 feature
+- macOS (MoltenVK) and Windows with modern GPUs support Vulkan 1.3
+- lavapipe (software renderer) only supports Vulkan 1.1
+
+**Solution:**
+
+Use traditional render pass on Linux:
+
+**1. VulkanRHICommandEncoder - Use platform-specific render pass:**
+
+```cpp
+// VulkanRHICommandEncoder.cpp
+void VulkanRHICommandEncoder::beginRenderPass(const RenderPassDesc& desc) {
+#ifdef __linux__
+    // Linux (Vulkan 1.1): Use traditional render pass
+    if (desc.nativeRenderPass && desc.nativeFramebuffer) {
+        vk::RenderPassBeginInfo renderPassInfo{};
+        renderPassInfo.renderPass = static_cast<vk::RenderPass>(
+            reinterpret_cast<VkRenderPass>(desc.nativeRenderPass));
+        renderPassInfo.framebuffer = static_cast<vk::Framebuffer>(
+            reinterpret_cast<VkFramebuffer>(desc.nativeFramebuffer));
+        renderPassInfo.renderArea.offset = vk::Offset2D{0, 0};
+        renderPassInfo.renderArea.extent = vk::Extent2D{desc.width, desc.height};
+
+        std::array<vk::ClearValue, 2> clearValues{};
+        clearValues[0].color = vk::ClearColorValue{...};
+        clearValues[1].depthStencil = vk::ClearDepthStencilValue{1.0f, 0};
+        renderPassInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
+        renderPassInfo.pClearValues = clearValues.data();
+
+        m_commandBuffer.beginRenderPass(renderPassInfo, vk::SubpassContents::eInline);
+        m_usesTraditionalRenderPass = true;
+    }
+#else
+    // macOS/Windows (Vulkan 1.3): Use dynamic rendering
+    vk::RenderingInfo renderingInfo{...};
+    m_commandBuffer.beginRendering(renderingInfo);
+#endif
+}
+
+void VulkanRHICommandEncoder::endRenderPass() {
+#ifdef __linux__
+    if (m_usesTraditionalRenderPass) {
+        m_commandBuffer.endRenderPass();
+        m_usesTraditionalRenderPass = false;
+        return;
+    }
+#endif
+    m_commandBuffer.endRendering();
+}
+```
+
+**2. Add nativeRenderPass/nativeFramebuffer to RenderPassDesc:**
+
+```cpp
+// RHIRenderPass.hpp
+struct RenderPassDesc {
+    // ... existing fields ...
+    void* nativeRenderPass = nullptr;   // Linux: VkRenderPass
+    void* nativeFramebuffer = nullptr;  // Linux: VkFramebuffer
+};
+```
+
+**3. Create framebuffers in VulkanRHISwapchain:**
+
+```cpp
+// VulkanRHISwapchain.cpp
+void VulkanRHISwapchain::createFramebuffers() {
+    m_framebuffers.resize(m_imageViews.size());
+    for (size_t i = 0; i < m_imageViews.size(); i++) {
+        std::array<vk::ImageView, 2> attachments = {
+            m_imageViews[i],
+            m_depthImageView
+        };
+        vk::FramebufferCreateInfo framebufferInfo{};
+        framebufferInfo.renderPass = m_renderPass;
+        framebufferInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+        framebufferInfo.pAttachments = attachments.data();
+        framebufferInfo.width = m_extent.width;
+        framebufferInfo.height = m_extent.height;
+        framebufferInfo.layers = 1;
+        m_framebuffers[i] = m_device.createFramebuffer(framebufferInfo);
+    }
+}
+```
+
+---
+
+### Linux: Pipeline Creation with renderPass = NULL
+
+**Error:**
+```
+Validation Error: [ VUID-VkGraphicsPipelineCreateInfo-dynamicRendering-06576 ]
+If the dynamicRendering feature is not enabled, renderPass must not be VK_NULL_HANDLE
+```
+
+**Cause:**
+- Pipeline creation on Linux requires a valid VkRenderPass
+- macOS/Windows with dynamic rendering can use `renderPass = VK_NULL_HANDLE`
+- lavapipe doesn't support dynamic rendering, so it requires traditional render pass
+
+**Solution:**
+
+**1. Add nativeRenderPass to RenderPipelineDesc:**
+
+```cpp
+// RHIPipeline.hpp
+struct RenderPipelineDesc {
+    // ... existing fields ...
+    void* nativeRenderPass = nullptr;  // Linux: VkRenderPass for pipeline creation
+};
+```
+
+**2. Use conditional pipeline creation:**
+
+```cpp
+// VulkanRHIPipeline.cpp
+void VulkanRHIPipeline::createGraphicsPipeline(const RenderPipelineDesc& desc) {
+    vk::GraphicsPipelineCreateInfo pipelineInfo{};
+    // ... setup pipeline stages, layout, etc ...
+
+#ifdef __linux__
+    // Linux: Use traditional render pass
+    if (desc.nativeRenderPass) {
+        pipelineInfo.renderPass = static_cast<vk::RenderPass>(
+            reinterpret_cast<VkRenderPass>(desc.nativeRenderPass));
+        pipelineInfo.subpass = 0;
+    }
+#else
+    // macOS/Windows: Use dynamic rendering
+    vk::PipelineRenderingCreateInfo renderingInfo{};
+    renderingInfo.colorAttachmentCount = 1;
+    renderingInfo.pColorAttachmentFormats = &swapchainFormat;
+    renderingInfo.depthAttachmentFormat = vk::Format::eD32Sfloat;
+    pipelineInfo.pNext = &renderingInfo;
+    pipelineInfo.renderPass = nullptr;
+#endif
+
+    m_pipeline = m_device.createGraphicsPipeline(pipelineCache, pipelineInfo).value;
+}
+```
+
+**3. Ensure swapchain is created before pipeline:**
+
+```cpp
+// Renderer.cpp
+void Renderer::createRHIPipeline() {
+    // Create swapchain first (needed for render pass on Linux)
+    if (!m_rhiSwapchain) {
+        createSwapchain();
+    }
+
+    rhi::RenderPipelineDesc desc{};
+    // ... setup pipeline desc ...
+
+#ifdef __linux__
+    auto* vulkanSwapchain = dynamic_cast<VulkanRHISwapchain*>(m_rhiSwapchain.get());
+    if (vulkanSwapchain) {
+        desc.nativeRenderPass = reinterpret_cast<void*>(
+            static_cast<VkRenderPass>(vulkanSwapchain->getRenderPass()));
+    }
+#endif
+
+    m_rhiPipeline = m_rhiDevice->createRenderPipeline(desc);
+}
+```
+
+---
+
+### Linux: Image Layout Transition Errors
+
+**Error:**
+```
+Validation Error: [ VUID-VkImageMemoryBarrier-oldLayout-01197 ]
+oldLayout must be VK_IMAGE_LAYOUT_UNDEFINED or the current layout of the image
+```
+
+**Cause:**
+- Manual image layout barriers conflict with render pass automatic transitions
+- Traditional render pass (`initialLayout`/`finalLayout`) handles layout transitions automatically
+- Adding explicit `pipelineBarrier` causes redundant/conflicting transitions
+
+**Solution:**
+
+Skip manual barriers on Linux when using traditional render pass:
+
+```cpp
+// VulkanRHICommandEncoder.cpp
+void VulkanRHICommandEncoder::pipelineBarrier(...) {
+#ifdef __linux__
+    // On Linux with traditional render pass, layout transitions are handled
+    // automatically by renderPass initialLayout/finalLayout
+    // Skip manual barriers to avoid conflicts
+    return;
+#endif
+    // macOS/Windows: Apply barriers normally
+    m_commandBuffer.pipelineBarrier(...);
+}
+```
+
+**Note:** This is a temporary workaround. A more robust solution would track which render pass is active and skip only conflicting barriers.
+
+---
+
 ### Swapchain Window Handle is Null
 
 **Error:**
@@ -923,4 +1143,4 @@ If none of these solutions work:
 
 ---
 
-*Last Updated: 2025-12-19*
+*Last Updated: 2025-12-22*
