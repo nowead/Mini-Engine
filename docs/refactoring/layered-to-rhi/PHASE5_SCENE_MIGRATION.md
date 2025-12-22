@@ -1,10 +1,7 @@
-# Phase 5: Scene Layer RHI Migration - Summary
+# Phase 5: Scene & Resource Layer Migration
 
 **Phase**: Phase 5 of 11
 **Status**: ✅ **COMPLETE**
-**Started**: 2025-12-20
-**Completed**: 2025-12-20
-**Duration**: 1 day
 **Actual LOC**: ~205 lines (89% of estimate)
 
 ---

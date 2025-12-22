@@ -1,66 +1,61 @@
-# RHI Migration - Product Requirements Document (PRD)
+# RHI Migration - Product Requirements Document
 
 **Project**: Mini-Engine RHI (Render Hardware Interface) Architecture Migration
-**Version**: 2.0
-**Date**: 2025-12-21 (Updated)
-**Status**: ✅ **Core Migration Complete - Phase 1-8 Complete**
-**Owner**: Development Team
+**Version**: 3.0
+**Status**: ✅ **Core Migration Complete (Phase 1-8)**
 
 ---
 
 ## Executive Summary
 
-This document outlines the complete migration of Mini-Engine from a Vulkan-only layered architecture to a multi-backend RHI (Render Hardware Interface) architecture. The migration enables cross-platform graphics API support including Vulkan, WebGPU, Direct3D 12, and Metal while maintaining performance and code quality.
+This document outlines the migration of Mini-Engine from a Vulkan-only layered architecture to a multi-backend RHI (Render Hardware Interface) architecture. The migration enables cross-platform graphics API support while maintaining performance and code quality.
 
-### Key Objectives
-- ✅ **Multi-Backend Support**: Enable Vulkan, WebGPU, D3D12, and Metal backends
-- ✅ **Platform Independence**: Abstract graphics API from upper layers
-- ✅ **Web Deployment**: Enable browser execution via WebGPU/WebAssembly
-- ✅ **Zero-Cost Abstraction**: Maintain performance overhead < 5%
-- ✅ **Maintainability**: Improve code organization and extensibility
+### Project Goals
+
+- **Multi-Backend Support**: Enable Vulkan, WebGPU, D3D12, and Metal backends
+- **Platform Independence**: Abstract graphics API from application layers
+- **Web Deployment**: Enable browser execution via WebGPU/WebAssembly
+- **Zero-Cost Abstraction**: Maintain performance overhead < 5%
+- **Clean Architecture**: Follow industry patterns (Unreal Engine, Unity)
 
 ### Current Status
-- **Phase 1 (RHI Interface Design)**: ✅ **COMPLETED** (2025-12-19)
-- **Phase 2 (Vulkan Backend)**: ✅ **COMPLETED** (2025-12-19)
-- **Phase 3 (Factory & Bridge)**: ✅ **COMPLETED** (2025-12-19)
-- **Phase 4 (Renderer Migration)**: ✅ **COMPLETED** (2025-12-19)
-- **Phase 5 (Scene Layer Migration)**: ✅ **COMPLETED** (2025-12-20)
-- **Phase 6 (ImGui Migration)**: ✅ **COMPLETED** (2025-12-20)
-- **Phase 7 (Renderer RHI Migration)**: ✅ **COMPLETED** (2025-12-20)
-- **Phase 7.5 (RHI Runtime Fixes)**: ✅ **COMPLETED** (2025-12-21)
-- **Phase 8 (Legacy Code Cleanup & Directory Refactoring)**: ✅ **COMPLETED** (2025-12-21)
-- **Phase 9+ (WebGPU Backend, Advanced Features)**: 📋 **PLANNED**
 
-**🎉 Phase 1-8 Complete! 100% RHI-native rendering with zero legacy code and zero validation errors.**
+| Phase | Status | Description |
+|-------|--------|-------------|
+| **Phase 1** | ✅ Complete | RHI Interface Design & Specification |
+| **Phase 2** | ✅ Complete | Vulkan Backend Implementation |
+| **Phase 3** | ✅ Complete | Factory Pattern & Integration Bridge |
+| **Phase 4** | ✅ Complete | Renderer Core Migration |
+| **Phase 5** | ✅ Complete | Scene & Resource Layer Migration |
+| **Phase 6** | ✅ Complete | ImGui Adapter Integration |
+| **Phase 7** | ✅ Complete | Complete Renderer Migration & Cleanup |
+| **Phase 8** | ✅ Complete | Legacy Cleanup & Modular Architecture |
+| **Phase 9+** | 📋 Planned | WebGPU Backend & Advanced Features |
 
-### Phase 8 Achievements (2025-12-21)
-
-- ✅ ~890 LOC legacy code deleted (VulkanBuffer, VulkanImage, VulkanPipeline, VulkanSwapchain, SyncManager)
+**🎉 Achievements:**
 - ✅ 100% RHI-native rendering pipeline
-- ✅ Directory structure refactored to `src/rhi/` and `src/rhi-vulkan/`
-- ✅ Initialization order bugs fixed
-- ✅ Semaphore synchronization warnings resolved
-- ✅ Complete documentation (PHASE8_SUMMARY.md, ARCHITECTURE.md)
+- ✅ ~890 LOC legacy code removed
+- ✅ Modular architecture (src/rhi/ + src/rhi-vulkan/)
+- ✅ Zero Vulkan validation errors
+- ✅ Cross-platform support (Linux Vulkan 1.1 + macOS/Windows Vulkan 1.3)
 
 ---
 
 ## Table of Contents
 
-1. [Project Objectives](#project-objectives)
+1. [Project Overview](#project-overview)
 2. [Success Criteria](#success-criteria)
 3. [Phase Breakdown](#phase-breakdown)
-4. [Acceptance Criteria](#acceptance-criteria)
-5. [Dependencies](#dependencies)
+4. [Dependencies](#dependencies)
+5. [Quality Metrics](#quality-metrics)
 6. [Risk Management](#risk-management)
-7. [Quality Metrics](#quality-metrics)
-8. [Timeline](#timeline)
-9. [Rollback Procedures](#rollback-procedures)
 
 ---
 
-## Project Objectives
+## Project Overview
 
 ### Primary Objectives
+
 1. **Multi-Backend Architecture**
    - Support Vulkan as primary backend
    - Add WebGPU for web deployment
@@ -69,7 +64,7 @@ This document outlines the complete migration of Mini-Engine from a Vulkan-only 
 2. **API Independence**
    - Upper layers (Renderer, ResourceManager, SceneManager) become API-agnostic
    - Graphics API details isolated to backend implementations
-   - Clean separation of concerns
+   - Clean separation of concerns following DIP and OCP principles
 
 3. **Performance Maintenance**
    - Virtual function overhead < 5%
@@ -77,13 +72,14 @@ This document outlines the complete migration of Mini-Engine from a Vulkan-only 
    - Optimize hot paths with compile-time dispatch options
 
 4. **Code Quality**
-   - Comprehensive documentation (Doxygen)
+   - Comprehensive documentation
    - Type-safe interfaces with modern C++17/20 features
    - RAII pattern throughout
 
 ### Secondary Objectives
+
 1. Web deployment capability via Emscripten + WebGPU
-2. Plugin-like backend architecture for easy addition of new APIs
+2. Plugin-like backend architecture for easy API addition
 3. Shader cross-compilation pipeline (SPIR-V as IR)
 4. Automated testing and CI/CD pipeline
 
@@ -91,831 +87,7 @@ This document outlines the complete migration of Mini-Engine from a Vulkan-only 
 
 ## Success Criteria
 
-### Phase 1: RHI Interface Design ✅ COMPLETE
-- [x] 14+ header files created in `src/rhi/`
-- [x] All interfaces documented with Doxygen comments
-- [x] WebGPU-style API design implemented
-- [x] Compilation successful with no errors
-- [x] Code review passed
-
-**Actual Results:**
-- ✅ 15 header files created (14 planned + 1 convenience header)
-- ✅ 2,125 lines of code (vs 1,200 estimated)
-- ✅ Comprehensive documentation
-- ✅ Type-safe with operator overloads
-
-### Phase 2: Vulkan Backend Implementation ✅ COMPLETE
-- [x] All Vulkan RHI implementations complete (12 core classes)
-- [x] VMA integrated for memory management
-- [x] Existing Vulkan code wrapped successfully (wrapper pattern)
-- [ ] Unit tests pass for each component (deferred to Phase 7)
-- [ ] No Vulkan validation errors
-
-**Completion Status**: 2025-12-19 ✅
-- 12 Vulkan RHI implementations created
-- ~3,650 lines of code
-- VMA integration complete
-- Wrapper pattern successfully applied to:
-  - VulkanDevice (wrapped existing code)
-  - VulkanSwapchain (wrapped existing code)
-  - VulkanPipeline (wrapped existing code)
-  - VulkanBuffer (re-implemented with VMA)
-  - VulkanImage (re-implemented with VMA)
-
-**Strategy Used**: Wrapper Pattern + Selective Re-implementation
-- See: RHI_TECHNICAL_GUIDE.md § "Leveraging Existing RAII Vulkan Code"
-
-### Phase 3: RHI Factory & Integration Bridge ✅ COMPLETE
-- [x] RHIFactory created with backend selection
-- [x] RendererBridge for legacy/RHI coexistence
-- [x] Smoke test passing
-
-### Phase 4: Renderer Migration ✅ COMPLETE
-- [x] Resource creation via RHI (buffers, textures, bind groups)
-- [x] Command encoding via RHI
-- [x] Sync primitives (fence, semaphore) working
-- [x] Queue submission working
-- [x] Pipeline creation via RHI
-- [x] Vertex/Index buffer upload via staging buffers
-- [x] Full render loop integration (drawFrameRHI)
-- [x] Smoke tests: 6/6 passing
-- [x] Application test: RHI buffers uploaded (742KB vertices, 369KB indices)
-
-### Phase 5-8: Core Migration ✅ COMPLETE
-
-- [x] ResourceManager, SceneManager migrated (Phase 5)
-- [x] ImGui integration working (Phase 6)
-- [x] All existing functionality preserved (Phase 7)
-- [x] Legacy code cleanup complete (Phase 8)
-- [x] Directory refactoring complete (Phase 8)
-- [x] Zero validation errors (Phase 8)
-
-### Phase 9+: Advanced Features
-
-- [ ] WebGPU backend functional
-- [ ] Browser deployment working
-- [ ] Optional: D3D12, Metal backends
-- [ ] VulkanDevice removal (full RHI independence)
-- [ ] Ray tracing abstraction
-
----
-
-## Phase Breakdown
-
-### Phase 1: RHI Interface Design ✅ COMPLETED
-
-**Goal**: Define platform-independent abstract interfaces
-
-**Status**: ✅ **COMPLETED** (2025-12-19)
-
-**Actual Deliverables**:
-| File | Lines | Status | Notes |
-|------|-------|--------|-------|
-| RHITypes.hpp | 455 | ✅ Complete | Enums, flags, structures |
-| RHICapabilities.hpp | 154 | ✅ Complete | Feature queries |
-| RHISync.hpp | 51 | ✅ Complete | Fence, Semaphore |
-| RHIBuffer.hpp | 80 | ✅ Complete | Buffer abstraction |
-| RHITexture.hpp | 124 | ✅ Complete | Texture + TextureView |
-| RHISampler.hpp | 58 | ✅ Complete | Sampler abstraction |
-| RHIShader.hpp | 87 | ✅ Complete | Multi-language shader support |
-| RHIBindGroup.hpp | 141 | ✅ Complete | Resource binding |
-| RHIPipeline.hpp | 210 | ✅ Complete | Graphics/Compute pipelines |
-| RHIRenderPass.hpp | 67 | ✅ Complete | Render pass descriptor |
-| RHICommandBuffer.hpp | 279 | ✅ Complete | Command encoding |
-| RHISwapchain.hpp | 94 | ✅ Complete | Swapchain abstraction |
-| RHIQueue.hpp | 70 | ✅ Complete | Queue management |
-| RHIDevice.hpp | 206 | ✅ Complete | Main device interface |
-| RHI.hpp | 49 | ✅ Complete | Convenience header |
-| **Total** | **2,125** | ✅ | **+77% over estimate** |
-
-**Lessons Learned**:
-- Documentation adds significant line count but is essential
-- Type safety (operator overloads) worth the extra code
-- Interface dependencies require careful ordering
-- Convenience headers improve developer experience
-
----
-
-### Phase 2: Vulkan Backend Implementation
-
-**Goal**: Convert existing Vulkan code to RHI interface implementations
-
-**Timeline**: 2-3 weeks (estimated)
-
-**Tasks**:
-
-| # | Task | Estimated Lines | Priority | Dependencies |
-|---|------|----------------|----------|--------------|
-| 2.1 | Create directory structure | - | P0 | Phase 1 |
-| 2.2 | Move existing Vulkan code to internal/ | 0 | P0 | - |
-| 2.3 | Integrate VMA (Vulkan Memory Allocator) | +200 | P0 | - |
-| 2.4 | Implement VulkanRHIDevice | +400 | P0 | 2.1 |
-| 2.5 | Implement VulkanRHIQueue | +150 | P0 | 2.4 |
-| 2.6 | Implement VulkanRHIBuffer | +200 | P0 | 2.3, 2.4 |
-| 2.7 | Implement VulkanRHITexture | +250 | P0 | 2.4 |
-| 2.8 | Implement VulkanRHISampler | +100 | P1 | 2.4 |
-| 2.9 | Implement VulkanRHIShader | +150 | P0 | 2.4 |
-| 2.10 | Implement VulkanRHIBindGroup | +300 | P0 | 2.4, 2.6, 2.7 |
-| 2.11 | Implement VulkanRHIPipeline | +350 | P0 | 2.9, 2.10 |
-| 2.12 | Implement VulkanRHICommandEncoder | +400 | P0 | 2.4, 2.11 |
-| 2.13 | Implement VulkanRHISwapchain | +200 | P0 | 2.4, 2.7 |
-| 2.14 | Implement VulkanRHISync | +100 | P0 | 2.4 |
-| 2.15 | Implement VulkanRHICapabilities | +150 | P1 | 2.4 |
-| 2.16 | Add Vulkan extension methods | +50 | P2 | All above |
-| 2.17 | Unit tests for each component | +500 | P0 | All above |
-
-**Revised Estimate**: ~3,500 lines (+40% buffer over original 2,500)
-
-**Acceptance Criteria**:
-- [ ] All RHI interfaces implemented for Vulkan
-- [ ] VMA successfully integrated
-- [ ] Descriptor pool management working
-- [ ] Command buffer recording functional
-- [ ] Swapchain presentation working
-- [ ] No Vulkan validation layer errors
-- [ ] Unit tests achieve >80% code coverage
-- [ ] Memory leaks: 0 (verified with Valgrind/ASAN)
-
-**Verification Steps**:
-1. Build with Vulkan backend only
-2. Run existing demo application
-3. Verify identical rendering output
-4. Check validation layers (should be clean)
-5. Profile for memory leaks
-6. Run unit test suite
-
----
-
-### Phase 3: RHI Factory & Integration Bridge ✅ COMPLETED
-
-**Goal**: 
-1. Create RHI factory pattern for backend instantiation
-2. Build integration bridge for coexistence of legacy and RHI code
-
-**Status**: ✅ **COMPLETED** (2025-12-19)
-
-**Timeline**: 2-3 days (estimated) → **Actual: 1 day**
-
-**Prerequisites** (Completed in Phase 2):
-- ✅ VulkanRHIDevice fully implemented
-- ✅ VulkanRHISwapchain presentation working
-- ✅ All factory methods implemented
-
-**Deliverables**:
-
-| File | Lines | Status | Notes |
-|------|-------|--------|-------|
-| RHIFactory.hpp | ~70 | ✅ | Factory interface + DeviceCreateInfo |
-| RHIFactory.cpp | ~120 | ✅ | Vulkan backend creation |
-| RendererBridge.hpp | ~90 | ✅ | Bridge header |
-| RendererBridge.cpp | ~200 | ✅ | Bridge implementation |
-| rhi_smoke_test.cpp | ~270 | ✅ | Integration tests |
-
-**Acceptance Criteria** (All Met):
-- [x] `RHIFactory::createDevice(Vulkan)` works correctly
-- [x] Can run alongside legacy Renderer
-- [x] Smoke test: Device creation, resource creation, command encoding
-- [x] macOS MoltenVK portability handled
-};
-} // namespace rhi
-
-// RendererBridge - Bridge legacy code with RHI (optional)
-class RendererBridge {
-    std::unique_ptr<rhi::RHIDevice> m_rhiDevice;
-    std::unique_ptr<rhi::RHISwapchain> m_rhiSwapchain;
-public:
-    // Can be used alongside legacy Renderer
-    rhi::RHIDevice* getDevice() { return m_rhiDevice.get(); }
-};
-```
-
-**Acceptance Criteria**:
-- [ ] `RHIFactory::createDevice(Vulkan)` works correctly
-- [ ] Can run alongside legacy Renderer (concurrent operation)
-- [ ] Backend selection via CMake options
-- [ ] Smoke test: Triangle rendering via RHI
-
-**Rollback Point**: Phase 3 시작 전 git tag 생성
-
----
-
-### Phase 4: Renderer Layer RHI Migration (Incremental) ✅ COMPLETE
-
-**Goal**: Incrementally migrate Renderer to RHI-based implementation
-
-**Status**: ✅ **COMPLETE** (2025-12-19)
-
-**Timeline**: 5-7 days (estimated) → **Actual: 1 day**
-
-**Strategy**: **Incremental Migration** (No Big Bang)
-- Create git tag after each Sub-Phase completion
-- Rollback to previous Sub-Phase if issues arise
-- Legacy and new code can coexist
-
-#### Sub-Phase 4.1: Resource Creation ✅ COMPLETE
-
-**Status**: ✅ Completed (2025-12-19)
-
-| # | Task | Status |
-|---|------|--------|
-| 4.1.1 | UniformBuffer → RHIBuffer | ✅ |
-| 4.1.2 | DepthImage → RHITexture | ✅ |
-| 4.1.3 | BindGroup creation | ✅ |
-| 4.1.4 | Smoke test: verify resource creation | ✅ |
-
-#### Sub-Phase 4.2: Command Recording ✅ COMPLETE
-
-**Status**: ✅ Completed (2025-12-19)
-
-| # | Task | Status |
-|---|------|--------|
-| 4.2.1 | RHICommandEncoder integration | ✅ |
-| 4.2.2 | RendererBridge command encoding | ✅ |
-| 4.2.3 | Smoke test: command encoding | ✅ |
-
-#### Sub-Phase 4.3: Synchronization & Presentation ✅ COMPLETE
-
-**Status**: ✅ Completed (2025-12-19)
-
-| # | Task | Status |
-|---|------|--------|
-| 4.3.1 | RHIFence/Semaphore creation | ✅ |
-| 4.3.2 | RHIQueue submission with sync | ✅ |
-| 4.3.3 | Swapchain integration | ✅ |
-| 4.3.4 | Smoke test: queue submission | ✅ |
-
-#### Sub-Phase 4.4: Pipeline Creation ✅ COMPLETE
-
-**Status**: ✅ Completed (2025-12-19)
-
-| # | Task | Status |
-|---|------|--------|
-| 4.4.1 | RHI shader creation from SPIR-V | ✅ |
-| 4.4.2 | RHI pipeline layout | ✅ |
-| 4.4.3 | RHI render pipeline creation | ✅ |
-| 4.4.4 | Smoke test: pipeline creation | ✅ |
-
-#### Sub-Phase 4.5: Buffer Upload ✅ COMPLETE
-
-**Status**: ✅ Completed (2025-12-19)
-
-| # | Task | Status |
-|---|------|--------|
-| 4.5.1 | Mesh raw data accessor | ✅ |
-| 4.5.2 | Staging buffer creation | ✅ |
-| 4.5.3 | GPU buffer data upload | ✅ |
-| 4.5.4 | drawFrameRHI() integration | ✅ |
-
-**Smoke Test Results** (2025-12-19):
-```
-╔════════════════════════════════════════╗
-║          Test Results                  ║
-╠════════════════════════════════════════╣
-║ RHI Factory:        ✓ PASS              ║
-║ Renderer Bridge:    ✓ PASS              ║
-║ Resource Creation:  ✓ PASS              ║
-║ Command Encoding:   ✓ PASS              ║
-║ Queue Submission:   ✓ PASS              ║
-║ Pipeline Creation:  ✓ PASS              ║
-╚════════════════════════════════════════╝
-```
-
-**Application Test Results**:
-```
-[Renderer] RHI Pipeline created successfully
-[Renderer] RHI buffers uploaded: 23200 vertices (742400 bytes), 92168 indices (368672 bytes)
-```
-
-**Issues Resolved**:
-1. **macOS MoltenVK Portability** - Added `eEnumeratePortabilityKHR` flag
-2. **VMA Segfault** - Changed to static Vulkan functions
-3. **Depth ImageView aspect** - Auto-detect aspect from format
-3. **Swapchain Window Handle** - Fixed null handle in RendererBridge
-
-**Acceptance Criteria**:
-- [x] Renderer uses RHI interfaces for resources
-- [x] Command encoding via RHI
-- [x] Synchronization via RHI
-- [ ] Full render loop integration (4.4)
-- [ ] Performance overhead < 5%
-- [ ] All existing features work (OBJ, FDF, ImGui)
-
----
-
-### Phase 5: Scene Layer RHI Migration ✅ COMPLETE
-
-**Goal**: Migrate scene layer (Mesh, ResourceManager, SceneManager) to RHI
-
-**Timeline**: 2-3 days
-**Actual Time**: 1 day (2025-12-20) ✅
-
-**Key Insights**: 
-- OBJLoader, FDFLoader perform CPU-only data processing → **No changes needed**
-- Phase 4 already created `rhiVertexBuffer`/`rhiIndexBuffer` in Renderer (temporary duplication)
-- Mesh class needs internal buffer migration to RHI
-- TextureLoader.hpp is empty - actual texture loading is in `ResourceManager::uploadTexture()`
-- Material migration is optional (can defer to Phase 7+)
-
-**Current State Analysis**:
-| Component | Current | Target | Notes |
-|-----------|---------|--------|-------|
-| Mesh | VulkanBuffer (internal) | RHIBuffer | Primary task |
-| Renderer | rhiVertexBuffer (duplicate) | Use Mesh buffers | Remove duplication |
-| ResourceManager | VulkanImage cache | RHITexture cache | Texture migration |
-| TextureLoader | Empty file | Keep as-is or remove | Not actually used |
-
-**Tasks**:
-
-| # | Task | Estimated Changes | Priority | Status |
-|---|------|------------------|----------|--------|
-| 5.1 | Mesh: VulkanBuffer → RHIBuffer | ~60 lines | P0 | ✅ Complete |
-| 5.2 | Mesh: Accept RHIDevice in constructor | ~30 lines | P0 | ✅ Complete |
-| 5.3 | Renderer: Remove duplicate rhiVertexBuffer/rhiIndexBuffer | ~40 lines | P0 | ✅ Complete |
-| 5.4 | ResourceManager: VulkanImage → RHITexture | ~80 lines | P0 | ✅ Complete |
-| 5.5 | SceneManager: Update to use RHI types | ~20 lines | P1 | ✅ Complete |
-| 5.6 | CommandManager: Complete Removal | ~90 lines | P0 | 🔲 Deferred to Phase 6 |
-| 5.7 | Integration test | - | P0 | ✅ Complete |
-
-**Completion Status**: 2025-12-20 ✅
-- 6 / 7 tasks completed (86%)
-- 1 task deferred to Phase 6 (CommandManager - due to ImGui dependency)
-- ~205 lines of code changed
-- Build: ✅ SUCCESS
-- Runtime: ✅ VERIFIED WORKING
-- See: [PHASE5_PROGRESS.md](PHASE5_PROGRESS.md) for detailed log
-
-**CommandManager Decision** (2025-12-20):
-- **Selected**: Choice 1 - Complete Removal
-- **Rationale**: Prefer direct RHI usage for simplicity, consistency, and full abstraction
-- **Impact**: Delete CommandManager.hpp/cpp, update 3 usage sites (Mesh, ResourceManager, ImGuiManager)
-- **Alternative Considered**: RHI Wrapper (rejected due to added complexity)
-
-**Code Example**:
-```cpp
-// Mesh.hpp BEFORE
-class Mesh {
-    VulkanDevice& device;
-    std::unique_ptr<VulkanBuffer> vertexBuffer;
-    std::unique_ptr<VulkanBuffer> indexBuffer;
-};
-
-// Mesh.hpp AFTER
-class Mesh {
-    rhi::RHIDevice* rhiDevice;
-    std::unique_ptr<rhi::RHIBuffer> vertexBuffer;
-    std::unique_ptr<rhi::RHIBuffer> indexBuffer;
-public:
-    rhi::RHIBuffer* getVertexBuffer() const;
-    rhi::RHIBuffer* getIndexBuffer() const;
-};
-```
-
-**Acceptance Criteria**:
-- [ ] Mesh uses RHIBuffer internally
-- [ ] No duplicate buffers in Renderer
-- [ ] ResourceManager uses RHITexture for caching
-- [ ] OBJ model loading works
-- [ ] FDF wireframe loading works
-- [ ] No memory leaks
-
----
-
-### Phase 6: ImGuiManager RHI Migration
-
-**Goal**: Integrate ImGui with RHI abstraction layer
-
-**Timeline**: 3-4 days (extended for ImGui integration complexity)
-
-**Challenge**: 
-ImGui's Vulkan backend (`imgui_impl_vulkan`) uses Vulkan API directly
-→ Full RHI abstraction is difficult
-→ Solve with **Adapter Pattern**
-
-**Strategy**: Backend-specific ImGui adapters
-
-**Tasks**:
-
-| # | Task | Estimated Changes | Priority | Notes |
-|---|------|------------------|----------|-------|
-| 6.1 | Define ImGuiBackend interface | +50 lines | P0 | Abstract interface |
-| 6.2 | Implement ImGuiVulkanBackend | +100 lines | P0 | Wrap imgui_impl_vulkan |
-| 6.3 | Refactor ImGuiManager | ~80 lines | P0 | Use backend abstraction |
-| 6.4 | Integrate ImGui in RHI render pass | ~50 lines | P0 | Command buffer integration |
-| 6.5 | Native handle extraction utility | +30 lines | P0 | RHI → Vulkan handle |
-| 6.6 | Verify ImGui input handling | - | P0 | Mouse/keyboard |
-| 6.7 | WebGPU ImGui backend (stub) | +20 lines | P2 | For future extension |
-
-**Architecture**:
-```cpp
-// ImGuiBackend.hpp - Abstract interface
-class ImGuiBackend {
-public:
-    virtual ~ImGuiBackend() = default;
-    virtual void init(rhi::RHIDevice* device, rhi::RHISwapchain* swapchain) = 0;
-    virtual void newFrame() = 0;
-    virtual void render(rhi::RHICommandEncoder* encoder) = 0;
-    virtual void shutdown() = 0;
-};
-
-// ImGuiVulkanBackend.hpp - Vulkan implementation
-class ImGuiVulkanBackend : public ImGuiBackend {
-    // Wrap imgui_impl_vulkan
-    // Extract native Vulkan handle from RHI
-    void init(rhi::RHIDevice* device, rhi::RHISwapchain* swapchain) override {
-        auto* vkDevice = static_cast<VulkanRHIDevice*>(device);
-        // Initialize imgui_impl_vulkan
-    }
-};
-
-// ImGuiManager.hpp - Integration
-class ImGuiManager {
-    std::unique_ptr<ImGuiBackend> m_backend;
-public:
-    void init(rhi::RHIDevice* device, rhi::RHISwapchain* swapchain) {
-        if (device->getBackendType() == rhi::RHIBackendType::Vulkan) {
-            m_backend = std::make_unique<ImGuiVulkanBackend>();
-        }
-        m_backend->init(device, swapchain);
-    }
-};
-```
-
-**Acceptance Criteria**:
-- [ ] ImGui UI renders correctly
-- [ ] ImGui and 3D scene render simultaneously
-- [ ] Mouse click/drag works
-- [ ] Keyboard input works
-- [ ] ImGui works correctly on window resize
-- [ ] Backend switching infrastructure complete
-
----
-
-### Phase 7: Testing, Verification & Code Cleanup
-
-**Goal**: Comprehensive verification and legacy code cleanup
-
-**Timeline**: 1-2 weeks (extended for testing + cleanup)
-
-#### 7.A: Legacy Code Cleanup
-
-**Goal**: Clean up and organize legacy Vulkan code
-
-| # | Task | Priority | Notes |
-|---|------|----------|-------|
-| 7.A.1 | Check VulkanDevice usage | P0 | Search references with grep |
-| 7.A.2 | Mark VulkanBuffer/Image deprecated | P1 | Add `[[deprecated]]` |
-| 7.A.3 | Remove unused code or move to internal/ | P2 | Optional |
-| 7.A.4 | Cleanup CMakeLists.txt | P1 | Remove unnecessary sources |
-
-**Code Example**:
-```cpp
-// VulkanBuffer.hpp
-[[deprecated("Use rhi::RHIBuffer instead. See RHI_MIGRATION_PRD.md Phase 7")]]
-class VulkanBuffer { ... };
-```
-
-#### 7.B: Unit Tests (Deferred from Phase 2)
-
-**Goal**: Extend smoke tests and add unit tests for RHI implementation
-
-**Note**: Existing smoke tests (6/6 passing) provide good coverage. Extend rather than rewrite.
-
-| # | Task | Priority | Coverage Target |
-|---|------|----------|-----------------|
-| 7.B.1 | Extend smoke tests for edge cases | P0 | - |
-| 7.B.2 | RHIBuffer tests (create, map, destroy) | P1 | 80%+ |
-| 7.B.3 | RHITexture tests (formats, mipmaps) | P1 | 80%+ |
-| 7.B.4 | RHIPipeline tests (shader variants) | P2 | 70%+ |
-| 7.B.5 | Full rendering integration test | P0 | - |
-
-#### 7.C: Performance Verification
-
-**Goal**: Verify performance criteria are met
-
-| # | Task | Target | Priority |
-|---|------|--------|----------|
-| 7.C.1 | Compare frame time | < 5% increase | P0 |
-| 7.C.2 | Compare memory usage | < 1% increase | P0 |
-| 7.C.3 | Compare startup time | < 10% increase | P1 |
-| 7.C.4 | Profiling (hot path) | - | P1 |
-
-#### 7.D: Functional Tests
-
-| Category | Tests | Priority |
-|----------|-------|----------|
-| **Model Loading** | OBJ, FDF loading and rendering | P0 |
-| **UI** | ImGui overlay, interaction | P0 |
-| **Camera** | Orbit, Pan, Zoom | P0 |
-| **Texture** | Loading, mipmaps, sampling | P0 |
-| **Resize** | Window resize | P0 |
-| **Multi-mesh** | Multiple meshes rendering | P1 |
-
-#### 7.E: Platform & Build Tests
-
-| # | Task | Priority | Notes |
-|---|------|----------|-------|
-| 7.E.1 | Linux (Ubuntu 22.04+) build and run | P0 | Primary target |
-| 7.E.2 | macOS (12.0+) build and run | P0 | Current dev platform |
-| 7.E.3 | Windows (10/11) build and run | P2 | Deferred (vcpkg arm64-osx only) |
-| 7.E.4 | Clean build from scratch | P0 | Verify no hidden deps |
-| 7.E.5 | CMake backend options validation | P1 | Backend selection |
-
-#### 7.F: Validation & Memory
-
-| # | Task | Target | Priority |
-|---|------|--------|----------|
-| 7.F.1 | Vulkan Validation Layer | 0 errors | P0 |
-| 7.F.2 | AddressSanitizer | 0 errors | P0 |
-| 7.F.3 | Valgrind/LeakSanitizer | 0 leaks | P0 |
-| 7.F.4 | Use-after-free 검증 | 0 errors | P0 |
-
-#### 7.G: Documentation
-
-| # | Task | Priority |
-|---|------|----------|
-| 7.G.1 | README.md RHI 아키텍처 설명 추가 | P0 |
-| 7.G.2 | 빌드 가이드 업데이트 | P0 |
-| 7.G.3 | Doxygen API 문서 생성 | P1 |
-| 7.G.4 | 마이그레이션 가이드 완성 | P1 |
-
-**Acceptance Criteria**:
-- [ ] 유닛 테스트 커버리지 > 80%
-- [ ] 모든 기능 테스트 통과
-- [ ] 성능 오버헤드 < 5%
-- [ ] 메모리 누수 0
-- [ ] Vulkan validation 에러 0
-- [ ] 크로스 플랫폼 빌드 성공
-- [ ] 문서화 완료
-- [ ] 기존 Vulkan 코드 deprecated 마킹 완료
-
----
-
-### Phase 7.5: RHI Runtime Fixes
-
-**Status**: ✅ **COMPLETED**
-**Date**: 2025-12-21
-**Duration**: 1 day
-**Priority**: P0 (CRITICAL)
-
-#### Context
-
-Phase 7 successfully completed the **architectural migration** from CommandManager to RHI, achieving:
-- ✅ CommandManager completely removed
-- ✅ All legacy rendering code eliminated
-- ✅ Build success (0 errors, 0 warnings)
-- ✅ 80% RHI-native codebase
-
-However, **runtime testing revealed critical RHI implementation bugs**. Phase 7.5 successfully resolved all issues:
-
-#### ✅ Issues Fixed
-
-**Issue 1: Semaphore Initialization** ✅
-- **Problem**: `RendererBridge::beginFrame()` not passing semaphore to `vkAcquireNextImageKHR()`
-- **Validation error**: "semaphore and fence are both VK_NULL_HANDLE"
-- **Fix**: Modified to pass `m_imageAvailableSemaphores[m_currentFrame].get()` to `acquireNextImage()`
-- **File**: [src/rendering/RendererBridge.cpp:130-132](../../../src/rendering/RendererBridge.cpp#L130-L132)
-
-**Issue 2: Format Mismatch** ✅
-- **Problem**: Swapchain format (SRGB) vs Pipeline format (UNORM) inconsistency
-- **Validation error**: "imageView format must match pColorAttachmentFormats"
-- **Fix**: Modified `Renderer::initializeRHIPipeline()` to query swapchain's actual format
-- **File**: [src/rendering/Renderer.cpp](../../../src/rendering/Renderer.cpp)
-
-**Issue 3: Descriptor Set Binding** ✅
-- **Problem**: `RHIRenderPassEncoder::setBindGroup()` not implemented
-- **Validation error**: "descriptor was never bound"
-- **Fix**: Implemented `VulkanRHIRenderPassEncoder::setBindGroup()` to bind descriptor sets
-- **File**: [src/rhi/vulkan/VulkanRHICommandEncoder.cpp](../../../src/rhi/vulkan/VulkanRHICommandEncoder.cpp)
-
-**Issue 4: Command Buffer Synchronization** ✅
-- **Problem**: Command buffers freed while still in use
-- **Validation error**: "vkFreeCommandBuffers(): pCommandBuffers[0] is in use"
-- **Fix**: Added `m_device->waitIdle()` in `VulkanRHICommandBuffer` destructor
-- **File**: [src/rhi/vulkan/VulkanRHICommandEncoder.cpp](../../../src/rhi/vulkan/VulkanRHICommandEncoder.cpp)
-
-**Issue 5: Image Layout Transitions** ✅
-- **Problem**: Swapchain images in UNDEFINED layout causing purple screen
-- **Validation error**: "images must be in layout PRESENT_SRC_KHR but is in UNDEFINED"
-- **Fix**: Added proper layout transitions in rendering command buffer
-  - UNDEFINED → COLOR_ATTACHMENT_OPTIMAL before render pass
-  - COLOR_ATTACHMENT_OPTIMAL → PRESENT_SRC_KHR after render pass
-- **Files**:
-  - [src/rendering/Renderer.cpp:778-802](../../../src/rendering/Renderer.cpp#L778-L802) (acquire barrier)
-  - [src/rendering/Renderer.cpp:863-887](../../../src/rendering/Renderer.cpp#L863-L887) (present barrier)
-
-**Issue 6: Semaphore Reuse Errors** ✅
-- **Problem**: Separate command buffers for layout transitions caused semaphore reuse
-- **Validation error**: "semaphore is being signaled but was previously signaled"
-- **Fix**: Integrated layout transitions into main rendering command buffer
-- **File**: [src/rendering/Renderer.cpp](../../../src/rendering/Renderer.cpp)
-
-#### Completion Metrics
-
-| Task | Status | Time Spent |
-|------|--------|------------|
-| 7.5.1: Fix semaphore initialization | ✅ Complete | 1h |
-| 7.5.2: Fix format mismatch | ✅ Complete | 1h |
-| 7.5.3: Implement descriptor set binding | ✅ Complete | 2h |
-| 7.5.4: Fix command buffer synchronization | ✅ Complete | 1h |
-| 7.5.5: Fix image layout transitions | ✅ Complete | 3h |
-| 7.5.6: Runtime testing and validation | ✅ Complete | 1h |
-
-**Total Time**: 9 hours (1 day)
-
-#### ✅ Acceptance Criteria Met
-
-- [x] Application runs without crashes
-- [x] Vulkan validation errors: 0
-- [x] Proper image layout transitions (dark blue background renders)
-- [x] No GPU timeouts or device lost errors
-- [x] Build succeeds with 0 errors
-
-#### Success Metrics Achieved
-
-| Metric | Before | After | Status |
-|--------|--------|-------|--------|
-| Vulkan Validation Errors | 10+ | 0 | ✅ Achieved |
-| Application Crashes | Yes (SIGABRT) | No | ✅ Achieved |
-| Rendering Output | Purple (uninitialized) | Dark blue background | ✅ Achieved |
-| GPU Timeout | Yes | No | ✅ Achieved |
-| Build Errors | 0 | 0 | ✅ Maintained |
-
-#### 🎉 Phase 7.5 Complete
-
-**All runtime issues resolved. Ready to proceed to Phase 8: Directory Refactoring.**
-
-See [PHASE7_SUMMARY.md](PHASE7_SUMMARY.md#phase-75-rhi-runtime-fixes) for detailed technical documentation.
-
----
-
-### Phase 8: Legacy Code Cleanup & Directory Refactoring ✅ COMPLETED
-
-**Goal**: Remove all legacy Vulkan wrapper classes and refactor to modular directory structure
-
-**Status**: ✅ **COMPLETED** (2025-12-21)
-
-**Timeline**: 1-2 days (estimated) → **Actual: 1 day**
-
-#### Part 1: Legacy Code Deletion
-
-**Motivation**:
-
-- Duplicate resource management (legacy + RHI versions)
-- ~890 lines of obsolete wrapper classes
-- Memory overhead from maintaining two parallel systems
-
-**Deleted Components**:
-
-| Component        | Files                | Lines Deleted | Replacement             |
-|------------------|----------------------|---------------|-------------------------|
-| **VulkanBuffer** | VulkanBuffer.hpp/cpp | ~250          | rhi::RHIBuffer          |
-| **VulkanImage**  | VulkanImage.hpp/cpp  | ~200          | rhi::RHITexture         |
-| **VulkanPipeline** | VulkanPipeline.hpp/cpp | ~75       | rhi::RHIRenderPipeline  |
-| **VulkanSwapchain** | VulkanSwapchain.hpp/cpp | ~86    | rhi::RHISwapchain       |
-| **SyncManager**  | SyncManager.hpp/cpp  | ~140          | RHI internal sync       |
-| **CommandManager** | CommandManager.hpp/cpp | ~140      | RHI command encoding    |
-| **Total**        | **10 files**         | **~890**      | **100% RHI**            |
-
-#### Part 2: Directory Refactoring
-
-**Target Architecture** (Achieved):
-```
-src/
-├── rhi/                           # ✅ RHI Abstract Interface Module
-│   ├── include/rhi/               # Public headers (15 files)
-│   │   ├── RHI.hpp
-│   │   ├── RHIDevice.hpp
-│   │   ├── RHIBuffer.hpp
-│   │   └── ... (12 more)
-│   ├── src/                       # Factory implementation
-│   │   └── RHIFactory.cpp
-│   └── CMakeLists.txt
-│
-├── rhi-vulkan/                    # ✅ Vulkan Backend Module
-│   ├── include/rhi-vulkan/        # Vulkan implementations
-│   │   └── VulkanRHI*.hpp (12 files)
-│   ├── src/                       # Implementation
-│   │   └── VulkanRHI*.cpp (12 files)
-│   └── CMakeLists.txt
-│
-└── rhi-webgpu/                    # 🔲 WebGPU Backend (Phase 9+)
-```
-
-**Tasks Completed**:
-
-| #    | Task                           | Priority | Status | Notes                     |
-|------|--------------------------------|----------|--------|---------------------------|
-| 8.1  | Create new directory structure | P0       | ✅     | src/rhi/, src/rhi-vulkan/ |
-| 8.2 | Move RHI interface headers | P0 | ✅ | 15 headers → rhi/include/rhi/ |
-| 8.3 | Move Vulkan backend | P0 | ✅ | 12 implementations → rhi-vulkan/ |
-| 8.4 | Delete legacy wrapper classes | P0 | ✅ | ~890 LOC removed |
-| 8.5 | Create `rhi/CMakeLists.txt` | P0 | ✅ | Static library: rhi_factory |
-| 8.6 | Create `rhi-vulkan/CMakeLists.txt` | P0 | ✅ | Static library: rhi_vulkan |
-| 8.7 | Update root CMakeLists.txt | P0 | ✅ | Link libraries updated |
-| 8.8 | Update all include statements | P0 | ✅ | #include "rhi/RHI*.hpp" |
-| 8.9 | Fix initialization order bugs | P0 | ✅ | Swapchain before depth |
-| 8.10 | Fix semaphore synchronization | P0 | ✅ | Fence wait before acquire |
-| 8.11 | Build verification | P0 | ✅ | Clean build, 0 errors |
-| 8.12 | Runtime verification | P0 | ✅ | 0 validation errors |
-| 8.13 | Documentation | P0 | ✅ | PHASE8_SUMMARY.md, ARCHITECTURE.md |
-
-**Critical Fixes**:
-
-1. **Initialization Order** ([src/rendering/Renderer.cpp:29-32](../../../src/rendering/Renderer.cpp#L29-L32)):
-   - Fixed: Swapchain created before depth resources
-   - Prevented segmentation fault from null depth attachment
-
-2. **Semaphore Synchronization** ([src/rendering/RendererBridge.cpp:126-129](../../../src/rendering/RendererBridge.cpp#L126-L129)):
-   - Fixed: Fence wait before image acquisition
-   - Eliminated validation warnings
-
-**Architecture Benefits Achieved**:
-
-- ✅ Same pattern as Unreal Engine, Unity
-- ✅ Independent build/test for each module
-- ✅ Dependency Inversion Principle (DIP)
-- ✅ Open-Closed Principle (OCP)
-- ✅ Zero legacy code remaining
-
-#### ✅ Phase 8 Acceptance Criteria Met
-
-- [x] All RHI code compiles in new structure
-- [x] Application runs identically to before
-- [x] No Vulkan validation errors (0 errors)
-- [x] Clear Public/Private separation (include/ vs src/)
-- [x] CMake builds both modules independently
-- [x] Legacy wrapper classes completely removed (~890 LOC)
-- [x] Initialization order bugs fixed
-- [x] Semaphore synchronization issues resolved
-- [x] Documentation complete (PHASE8_SUMMARY.md, ARCHITECTURE.md, TROUBLESHOOTING.md)
-
-**Detailed Plan**: See [PHASE8_DIRECTORY_REFACTORING.md](PHASE8_DIRECTORY_REFACTORING.md)
-
----
-
-### Phase 9: WebGPU Backend Implementation
-
-**Goal**: Web deployment capability
-
-**Timeline**: 2-3 weeks
-
-**Tasks**:
-
-| # | Task | Estimated Lines | Priority |
-|---|------|----------------|----------|
-| 9.1 | Research Dawn vs wgpu-native | - | P0 |
-| 9.2 | Create `rhi-webgpu/` module structure | - | P0 |
-| 9.3 | Integrate chosen WebGPU implementation | +200 | P0 |
-| 9.4 | Implement WebGPURHIDevice | +400 | P0 |
-| 9.5 | Implement WebGPURHIQueue | +100 | P0 |
-| 9.6 | Implement WebGPURHIBuffer | +200 | P0 |
-| 9.7 | Implement WebGPURHITexture | +250 | P0 |
-| 9.8 | Implement WebGPURHISampler | +80 | P1 |
-| 9.9 | Implement WebGPURHIShader + WGSL | +300 | P0 |
-| 9.10 | Implement WebGPURHIBindGroup | +200 | P0 |
-| 9.11 | Implement WebGPURHIPipeline | +300 | P0 |
-| 9.12 | Implement WebGPURHICommandEncoder | +350 | P0 |
-| 9.13 | Implement WebGPURHISwapchain | +150 | P0 |
-| 9.14 | SPIR-V to WGSL conversion (Naga/Tint) | +200 | P0 |
-| 9.15 | Handle async operations | +150 | P0 |
-| 9.16 | Emscripten build configuration | +100 | P0 |
-| 9.17 | Resource preloading for web | +50 | P1 |
-| 9.18 | Unit tests | +400 | P0 |
-| 9.19 | Browser testing (Chrome, Firefox) | - | P0 |
-| 9.20 | Web performance optimization | - | P1 |
-
-**Revised Estimate**: ~3,430 lines (+72% over 2,000)
-
-**Acceptance Criteria**:
-- [ ] WebGPU backend compiles and links
-- [ ] Rendering works in native WebGPU
-- [ ] Emscripten build succeeds
-- [ ] Application runs in Chrome
-- [ ] Application runs in Firefox
-- [ ] Acceptable web performance (30+ FPS)
-- [ ] WGSL shader conversion works
-
-**Known Challenges**:
-- Async API handling (buffer mapping)
-- SPIR-V to WGSL conversion fidelity
-- Browser shader compilation performance
-- WebAssembly memory constraints
-
----
-
-### Phase 10-12: Future Backends (Optional)
-
-**Phase 10**: Direct3D 12 (Windows) - 2-3 weeks
-**Phase 11**: Metal (macOS/iOS) - 2-3 weeks
-**Phase 12**: Ray Tracing Extensions - 2-3 weeks
-
-*Detailed planning deferred until Phases 1-9 complete*
-
----
-
-## Acceptance Criteria
-
-### Overall Project Acceptance
+### Overall Project Success
 
 The migration is considered complete when:
 
@@ -924,12 +96,286 @@ The migration is considered complete when:
 3. **Quality**: Zero critical bugs, zero memory leaks
 4. **Documentation**: Complete API docs + migration guide
 5. **Testing**: >80% code coverage, all tests passing
-6. **Backends**: At minimum Vulkan + WebGPU working
+6. **Backends**: Minimum Vulkan + WebGPU working
 7. **Platforms**: Linux, macOS, Windows builds successful
 
-### Phase-Specific Acceptance
+### Phase 1-8 Achievements
 
-Each phase must meet its specific acceptance criteria before proceeding to the next phase. See individual phase sections for detailed criteria.
+**Phase 1-2: Foundation** ✅
+- 15 RHI interface headers (2,125 LOC)
+- 12 Vulkan backend implementations (3,650 LOC)
+- VMA (Vulkan Memory Allocator) integration
+- Type-safe WebGPU-style API design
+
+**Phase 3-4: Integration** ✅
+- RHI Factory pattern for backend selection
+- RendererBridge for gradual migration
+- Full render loop via RHI
+- 6/6 smoke tests passing
+
+**Phase 5-6: Upper Layers** ✅
+- ResourceManager, SceneManager migrated to RHI
+- Mesh class using RHI buffers
+- ImGui adapter pattern integration
+- CommandManager removed
+
+**Phase 7-8: Consolidation** ✅
+- All legacy Vulkan wrappers removed (~890 LOC deleted)
+- Directory refactored to modular structure
+- Initialization order bugs fixed
+- Zero validation errors achieved
+
+---
+
+## Phase Breakdown
+
+### Phase 1: RHI Interface Design & Specification ✅
+
+**Goal**: Define platform-independent abstract interfaces
+
+**Deliverables**:
+- 15 header files (RHITypes, RHIDevice, RHIBuffer, RHITexture, etc.)
+- 2,125 lines of interface code
+- Comprehensive Doxygen documentation
+- WebGPU-style API design
+
+**Key Insights**:
+- Type safety via operator overloads improves API usability
+- Interface dependencies require careful ordering
+- Convenience headers enhance developer experience
+
+**Reference**: [PHASE1_INTERFACE_DESIGN.md](PHASE1_INTERFACE_DESIGN.md)
+
+---
+
+### Phase 2: Vulkan Backend Implementation ✅
+
+**Goal**: Convert existing Vulkan code to RHI implementations
+
+**Deliverables**:
+- 12 Vulkan RHI implementation classes (3,650 LOC)
+- VMA integration for unified memory management
+- Wrapper pattern applied to existing RAII Vulkan code
+
+**Implementation Classes**:
+| Class | Purpose | Lines |
+|-------|---------|-------|
+| VulkanRHIDevice | Device management | ~400 |
+| VulkanRHIQueue | Queue submission | ~150 |
+| VulkanRHIBuffer | Buffer abstraction | ~200 |
+| VulkanRHITexture | Texture abstraction | ~250 |
+| VulkanRHISampler | Sampler abstraction | ~100 |
+| VulkanRHIShader | Shader management | ~150 |
+| VulkanRHIBindGroup | Resource binding | ~300 |
+| VulkanRHIPipeline | Pipeline creation | ~350 |
+| VulkanRHICommandEncoder | Command recording | ~400 |
+| VulkanRHISwapchain | Swapchain presentation | ~200 |
+| VulkanRHISync | Synchronization | ~100 |
+| VulkanRHICapabilities | Feature queries | ~150 |
+
+**Key Patterns**:
+- Wrapper pattern for code reuse (80-90% reuse rate)
+- VMA for all buffer/texture memory management
+- RAII preservation throughout
+
+**Reference**: [PHASE2_VULKAN_BACKEND.md](PHASE2_VULKAN_BACKEND.md)
+
+---
+
+### Phase 3: Factory Pattern & Integration Bridge ✅
+
+**Goal**: Create backend selection and gradual migration infrastructure
+
+**Deliverables**:
+- RHIFactory for backend instantiation
+- RendererBridge for legacy/RHI coexistence
+- Smoke tests for integration verification
+
+**Architecture**:
+```cpp
+// Backend selection via factory
+auto device = rhi::RHIFactory::createDevice(rhi::RHIBackendType::Vulkan, createInfo);
+
+// Bridge for gradual migration
+class RendererBridge {
+    std::unique_ptr<rhi::RHIDevice> m_rhiDevice;
+    std::unique_ptr<rhi::RHISwapchain> m_rhiSwapchain;
+public:
+    rhi::RHIDevice* getDevice();
+    rhi::RHISwapchain* getSwapchain();
+};
+```
+
+**Reference**: [PHASE3_FACTORY_BRIDGE.md](PHASE3_FACTORY_BRIDGE.md)
+
+---
+
+### Phase 4: Renderer Core Migration ✅
+
+**Goal**: Incrementally migrate Renderer to RHI-based implementation
+
+**Strategy**: Incremental migration with rollback points after each sub-phase
+
+**Sub-Phases**:
+1. Resource creation (buffers, textures, bind groups)
+2. Command recording via RHI
+3. Synchronization primitives (fences, semaphores)
+4. Pipeline creation
+5. Buffer upload via staging buffers
+
+**Results**:
+- Full render loop integration (drawFrameRHI)
+- 6/6 smoke tests passing
+- Application test: 742KB vertices, 369KB indices uploaded
+
+**Reference**: [PHASE4_RENDERER_MIGRATION.md](PHASE4_RENDERER_MIGRATION.md)
+
+---
+
+### Phase 5: Scene & Resource Layer Migration ✅
+
+**Goal**: Migrate scene layer (Mesh, ResourceManager, SceneManager) to RHI
+
+**Key Changes**:
+- Mesh: VulkanBuffer → rhi::RHIBuffer
+- ResourceManager: VulkanImage → rhi::RHITexture cache
+- SceneManager: Updated to use RHI types
+- Removed duplicate buffers in Renderer
+
+**Code Impact**: ~205 lines modified (89% of estimate)
+
+**Reference**: [PHASE5_SCENE_MIGRATION.md](PHASE5_SCENE_MIGRATION.md)
+
+---
+
+### Phase 6: ImGui Adapter Integration ✅
+
+**Goal**: Integrate ImGui with RHI abstraction layer
+
+**Strategy**: Adapter pattern for backend-specific ImGui implementations
+
+**Architecture**:
+```cpp
+// Abstract backend interface
+class ImGuiBackend {
+public:
+    virtual void init(rhi::RHIDevice*, rhi::RHISwapchain*) = 0;
+    virtual void render(rhi::RHICommandEncoder*) = 0;
+};
+
+// Vulkan-specific implementation
+class ImGuiVulkanBackend : public ImGuiBackend {
+    // Wraps imgui_impl_vulkan
+};
+```
+
+**Code Impact**: ~600 lines (+450 new, ~250 modified, ~100 removed)
+
+**Reference**: [PHASE6_IMGUI_INTEGRATION.md](PHASE6_IMGUI_INTEGRATION.md)
+
+---
+
+### Phase 7: Complete Renderer Migration & Cleanup ✅
+
+**Goal**: Complete RHI migration and remove CommandManager
+
+**Achievements**:
+- Migrated drawFrame() to use drawFrameRHI()
+- Deleted CommandManager completely
+- Removed LegacyCommandBufferAdapter
+- Achieved ~80% RHI-native codebase
+
+**Code Impact**: +22 lines added, -440 lines deleted (net: -418 lines)
+
+**Phase 7.5: RHI Runtime Fixes** ✅
+- Fixed semaphore initialization
+- Fixed format mismatch (SRGB vs UNORM)
+- Implemented descriptor set binding
+- Fixed command buffer synchronization
+- Fixed image layout transitions
+- Resolved semaphore reuse errors
+
+**Reference**: [PHASE7_RENDERER_CLEANUP.md](PHASE7_RENDERER_CLEANUP.md)
+
+---
+
+### Phase 8: Legacy Cleanup & Modular Architecture ✅
+
+**Goal**: Remove all legacy Vulkan wrappers and refactor to modular structure
+
+**Part 1: Legacy Code Deletion**
+
+| Component | Files | Lines Deleted | Replacement |
+|-----------|-------|---------------|-------------|
+| VulkanBuffer | .hpp/.cpp | ~250 | rhi::RHIBuffer |
+| VulkanImage | .hpp/.cpp | ~200 | rhi::RHITexture |
+| VulkanPipeline | .hpp/.cpp | ~75 | rhi::RHIRenderPipeline |
+| VulkanSwapchain | .hpp/.cpp | ~86 | rhi::RHISwapchain |
+| SyncManager | .hpp/.cpp | ~140 | RHI internal sync |
+| CommandManager | .hpp/.cpp | ~140 | RHI command encoding |
+| **Total** | **10 files** | **~890** | **100% RHI** |
+
+**Part 2: Directory Refactoring**
+
+```
+src/
+├── rhi/                           # RHI Abstract Interface Module
+│   ├── include/rhi/               # 15 public headers
+│   ├── src/RHIFactory.cpp         # Factory implementation
+│   └── CMakeLists.txt             # rhi_interface + rhi_factory
+│
+├── rhi-vulkan/                    # Vulkan Backend Module
+│   ├── include/rhi-vulkan/        # 12 Vulkan implementations
+│   ├── src/                       # Implementation files
+│   └── CMakeLists.txt             # rhi_vulkan library
+│
+└── rhi-webgpu/                    # WebGPU Backend (Phase 9+)
+```
+
+**Critical Fixes**:
+1. Initialization order: Swapchain created before depth resources
+2. Semaphore synchronization: Fence wait before image acquisition
+
+**Benefits**:
+- Industry-standard pattern (Unreal Engine, Unity)
+- Independent module build/test
+- Clear dependency inversion (DIP)
+- Easy backend addition (OCP)
+
+**Reference**: [PHASE8_MODULAR_ARCHITECTURE.md](PHASE8_MODULAR_ARCHITECTURE.md)
+
+---
+
+### Phase 9: WebGPU Backend Implementation 📋
+
+**Goal**: Web deployment capability
+
+**Tasks**:
+- Research Dawn vs wgpu-native
+- Create src/rhi-webgpu/ module structure
+- Implement 12 WebGPU RHI classes
+- SPIR-V to WGSL conversion (Naga/Tint)
+- Handle async operations
+- Emscripten build configuration
+- Browser testing (Chrome, Firefox)
+
+**Estimated Lines**: ~3,430 lines
+
+**Acceptance Criteria**:
+- WebGPU backend compiles and links
+- Application runs in Chrome and Firefox
+- Acceptable web performance (30+ FPS)
+- WGSL shader conversion works
+
+---
+
+### Phase 10-11: Future Backends (Optional) 📋
+
+**Phase 10**: Direct3D 12 (Windows)
+**Phase 11**: Metal (macOS/iOS)
+**Phase 12**: Ray Tracing Extensions
+
+*Detailed planning deferred until Phase 9 complete*
 
 ---
 
@@ -937,18 +383,17 @@ Each phase must meet its specific acceptance criteria before proceeding to the n
 
 ### External Libraries
 
-| Library | Phase | Purpose | Version | License |
-|---------|-------|---------|---------|---------|
-| **Vulkan SDK** | 2 | Vulkan backend | 1.3.x | Apache 2.0 |
-| **VMA** | 2 | Vulkan memory management | 3.0.1+ | MIT |
-| **SPIRV-Cross** | 2, 8-10 | Shader cross-compilation | Latest | Apache 2.0 |
-| **Dawn** or **wgpu-native** | 8 | WebGPU implementation | Latest | Apache 2.0 / MPL |
-| **Naga** or **Tint** | 8 | SPIR-V to WGSL | Latest | Apache 2.0 |
-| **Emscripten** | 8 | WebAssembly compilation | 3.1.x+ | MIT |
-| **D3D12MA** | 9 | D3D12 memory management | 2.0.1+ | MIT |
-| **Slang** (optional) | All | Unified shader language | Latest | MIT |
+| Library | Purpose | Version | License |
+|---------|---------|---------|---------|
+| **Vulkan SDK** | Vulkan backend | 1.3.x | Apache 2.0 |
+| **VMA** | Vulkan memory management | 3.0.1+ | MIT |
+| **SPIRV-Cross** | Shader cross-compilation | Latest | Apache 2.0 |
+| **Dawn / wgpu-native** | WebGPU implementation | Latest | Apache 2.0 / MPL |
+| **Naga / Tint** | SPIR-V to WGSL | Latest | Apache 2.0 |
+| **Emscripten** | WebAssembly compilation | 3.1.x+ | MIT |
+| **D3D12MA** | D3D12 memory management | 2.0.1+ | MIT |
 
-### Build System
+### Build Requirements
 
 - **CMake**: 3.20+
 - **C++ Compiler**: C++17 or later
@@ -956,45 +401,9 @@ Each phase must meet its specific acceptance criteria before proceeding to the n
 
 ### Platform Requirements
 
-- **Linux**: Ubuntu 22.04+, Fedora 36+, or equivalent
+- **Linux**: Ubuntu 22.04+, Fedora 36+
 - **macOS**: macOS 12.0+ (Monterey)
-- **Windows**: Windows 10/11 with latest updates
-
----
-
-## Risk Management
-
-### High-Priority Risks
-
-| Risk | Probability | Impact | Mitigation Strategy | Contingency Plan |
-|------|------------|--------|---------------------|------------------|
-| **Performance degradation > 5%** | Medium | High | Profile early and often; optimize hot paths; consider compile-time dispatch | Accept higher overhead or add fast-path specializations |
-| **API semantic mismatches** | High | High | Study WebGPU/D3D12/Metal thoroughly; prototype early | Design extension interfaces for backend-specific features |
-| **Shader cross-compilation issues** | Medium | High | Test SPIRV-Cross extensively; maintain SPIR-V as IR | Use backend-native shaders as fallback |
-| **WebGPU async API complexity** | Medium | Medium | Study Dawn/wgpu examples; design async-friendly API | Simplify WebGPU implementation, defer advanced features |
-| **Timeline overrun** | Medium | Medium | Phased approach with checkpoints | Defer optional backends (D3D12, Metal, RT) |
-| **Regression bugs** | Low | High | Comprehensive test suite; pixel comparisons | Quick rollback to previous phase |
-
-### Medium-Priority Risks
-
-| Risk | Probability | Impact | Mitigation | Contingency |
-|------|------------|--------|------------|-------------|
-| **Descriptor management complexity** | Medium | Medium | Study Vulkan descriptor best practices | Use simple fixed-size pools initially |
-| **Resource lifetime management** | Low | Medium | RAII everywhere; shared_ptr where needed | Manual reference counting fallback |
-| **Build system complexity** | Low | Low | Modular CMake; clear backend separation | Simplify build options |
-
-### Risk Mitigation Checklist
-
-Daily/weekly tasks to minimize risk:
-
-- [ ] Profile performance after each phase to ensure <5% overhead
-- [ ] Run regression tests after each phase
-- [ ] Document all API changes and design decisions
-- [ ] Create unit tests for each backend implementation
-- [ ] Set up CI/CD pipeline for automated testing
-- [ ] Maintain backward compatibility where possible
-- [ ] Keep existing Vulkan code as reference during migration
-- [ ] Regular code reviews for architecture consistency
+- **Windows**: Windows 10/11
 
 ---
 
@@ -1004,7 +413,7 @@ Daily/weekly tasks to minimize risk:
 
 - **Documentation Coverage**: 100% of public APIs
 - **Code Review**: 100% of changes reviewed
-- **Static Analysis**: Zero critical warnings (cppcheck, clang-tidy)
+- **Static Analysis**: Zero critical warnings
 - **Compilation**: Zero warnings with `-Wall -Wextra -Wpedantic`
 
 ### Testing
@@ -1023,246 +432,141 @@ Daily/weekly tasks to minimize risk:
 
 ### Security
 
-- **Validation Layers**: Zero errors in Vulkan validation
+- **Vulkan Validation**: Zero errors
 - **Buffer Overflows**: Zero detected by ASAN
 - **Use-After-Free**: Zero detected by ASAN
 - **Memory Leaks**: Zero detected by Valgrind/ASAN
 
 ---
 
-## Timeline
+## Risk Management
 
-### Detailed Schedule (Updated 2025-12-19)
+### High-Priority Risks
 
-| Phase | Duration | Start | End | Status |
-|-------|----------|-------|-----|--------|
-| Phase 1: RHI Interface Design | 1 day | 2025-12-19 | 2025-12-19 | ✅ **Complete** |
-| Phase 2: Vulkan Backend | 1 day | 2025-12-19 | 2025-12-19 | ✅ **Complete** |
-| Phase 3: RHI Factory & Bridge | 1 day | 2025-12-19 | 2025-12-19 | ✅ **Complete** |
-| Phase 4: Renderer Migration | 1 day | 2025-12-19 | 2025-12-19 | ✅ **Complete** |
-| Phase 5: Resource/Scene Migration | 2-3 days | 2025-12-20 | 2025-12-20 | ✅ **Complete** |
-| Phase 6: ImGui Migration | 3-4 days | 2025-12-20 | 2025-12-20 | ✅ **Complete** |
-| Phase 7: Renderer RHI Migration & Legacy Cleanup | 1 day | 2025-12-20 | 2025-12-20 | ✅ **Complete** |
-| **Phase 7.5: RHI Runtime Fixes** | **1 day** | **2025-12-21** | **2025-12-21** | ✅ **Complete** |
-| **Subtotal (Core Migration)** | **3-4 weeks** | - | - | **Phase 1-7.5 Complete (100%)** |
-| Phase 8: WebGPU Backend | 2-3 weeks | TBD | TBD | 🔲 Future |
-| **Total (with WebGPU)** | **5-7 weeks** | - | - | - |
+| Risk | Probability | Impact | Mitigation Strategy |
+|------|------------|--------|---------------------|
+| **Performance degradation > 5%** | Medium | High | Profile early and often; optimize hot paths |
+| **API semantic mismatches** | High | High | Study WebGPU/D3D12/Metal thoroughly; prototype early |
+| **Shader cross-compilation issues** | Medium | High | Test SPIRV-Cross extensively; maintain SPIR-V as IR |
+| **WebGPU async API complexity** | Medium | Medium | Study Dawn/wgpu examples; design async-friendly API |
+| **Timeline overrun** | Medium | Medium | Phased approach with checkpoints |
+| **Regression bugs** | Low | High | Comprehensive test suite; pixel comparisons |
 
-### Timeline Changes from Original
+### Risk Mitigation Checklist
 
-| Phase | Original Estimate | Revised Estimate | Change | Reason |
-|-------|------------------|------------------|--------|--------|
-| Phase 1 | 1-2 weeks | 1 day | ⬇️ -85% | Focused implementation, rapid completion |
-| Phase 2 | 2-3 weeks | 1 day | ⬇️ -95% | Parallel work + leveraging existing code |
-| Phase 3 | 3-5 days | 1 day | ⬇️ -80% | Efficient integration |
-| Phase 4 | 3-5 days | 1 day | ⬇️ -80% | Incremental strategy worked well |
-| Phase 5 | 2-3 days | 2-3 days | ➡️ Maintained | Reasonable estimate |
-| Phase 6 | 2-3 days | 3-4 days | ⬆️ +33% | ImGui integration complexity |
-| Phase 7 | 1 week | 1-2 weeks | ⬆️ +50% | Testing + code cleanup added |
-
-### Milestones
-
-- ✅ **M1**: RHI interfaces designed (Phase 1) - **COMPLETE** (2025-12-19)
-- ✅ **M2**: Vulkan backend functional (Phase 2) - **COMPLETE** (2025-12-19)
-- ✅ **M3**: RHI Factory & Bridge (Phase 3) - **COMPLETE** (2025-12-19)
-- ✅ **M4**: Renderer RHI Migration (Phase 4) - **COMPLETE** (2025-12-19)
-- ✅ **M5**: Core migration complete (Phases 5-7.5) - **100% COMPLETE** (2025-12-21)
-  - ✅ Phase 5: Resource/Scene Migration - **COMPLETE** (2025-12-20)
-  - ✅ Phase 6: ImGui Integration - **COMPLETE** (2025-12-20)
-  - ✅ Phase 7: Renderer RHI Migration & Legacy Cleanup - **COMPLETE** (2025-12-20)
-  - ✅ Phase 7.5: RHI Runtime Fixes - **COMPLETE** (2025-12-21)
-- 🔲 **M6**: WebGPU backend functional (Phase 8)
-- 🔲 **M7**: Production-ready multi-backend engine
+- Profile performance after each phase
+- Run regression tests after each phase
+- Document all API changes and design decisions
+- Create unit tests for each backend implementation
+- Set up CI/CD pipeline for automated testing
+- Maintain backward compatibility where possible
+- Regular code reviews for architecture consistency
 
 ---
 
-## Rollback Procedures
+## Appendix A: Architecture Patterns
 
-### Per-Phase Rollback
-
-Each phase maintains a rollback capability:
-
-1. **Version Control**: Tag before starting each phase
-2. **Branch Strategy**: Feature branch per phase
-3. **Rollback Trigger**: Critical bug or > 2 days blocked
-4. **Rollback Process**:
-   - Revert to phase start tag
-   - Document issues in postmortem
-   - Revise approach before retry
-
-### Emergency Rollback
-
-If critical issues arise affecting project viability:
-
-1. **Immediate**: Revert to last stable tag
-2. **Within 24h**: Root cause analysis
-3. **Within 48h**: Decision to continue or abort migration
-4. **Within 1 week**: Revised plan or migration cancellation
-
-### Rollback Criteria
-
-Trigger rollback if:
-- Performance degradation > 10%
-- Critical functionality broken > 2 days
-- Memory leaks cannot be resolved
-- Cross-platform builds fail consistently
-- Team consensus to abort
-
----
-
-## Progress Tracking
-
-### Phase 1 Status: ✅ COMPLETE
-
-**Completion Date**: 2025-12-19
-
-**Deliverables**:
-- ✅ 15 header files (2,125 lines of code)
-- ✅ All interfaces documented
-- ✅ Type-safe with modern C++ features
-- ✅ Code review passed
-- ✅ Compiles without errors
-
-**Variance from Plan**:
-- **Line Count**: +77% (2,125 vs 1,200 planned)
-  - *Reason*: Comprehensive documentation, operator overloads, helper functions
-  - *Impact*: Positive - Better code quality
-- **Files**: +1 (15 vs 14 planned)
-  - *Reason*: Added RHI.hpp convenience header
-  - *Impact*: Positive - Improved developer experience
-
-**Lessons Learned**:
-1. Documentation adds significant value but increases line count
-2. Type safety (operator overloads) is worth the extra code
-3. Interface dependencies require careful implementation order
-4. Convenience headers improve usability
-
-### Phase 2 Status: ✅ COMPLETE
-
-**Completion Date**: 2025-01
-
-**Deliverables**:
-- ✅ 12 Vulkan RHI implementation classes (3,650 lines of code)
-- ✅ VulkanRHIDevice, VulkanRHIQueue, VulkanRHIBuffer, VulkanRHITexture
-- ✅ VulkanRHIPipeline, VulkanRHISwapchain, VulkanRHICommandEncoder
-- ✅ VulkanRHISync, VulkanRHISampler, VulkanRHIShader, VulkanRHIBindGroup
-- ✅ VulkanRHIRenderPassEncoder
-- ✅ VMA (Vulkan Memory Allocator) integration
-- ✅ Wrapper pattern applied to existing RAII Vulkan code
-
-**Variance from Plan**:
-- **Line Count**: +4% (3,650 vs 3,500 revised estimate)
-  - *Reason*: VMA integration and error handling code added
-  - *Impact*: Neutral - within expected range
-- **Existing Code Reuse Rate**: 80-90%
-  - *Reason*: Leveraged existing RAII code via wrapper pattern
-  - *Impact*: Positive - accelerated development
-
-**Key Implementation Patterns**:
-1. **Wrapper Pattern**: Wrapped existing VulkanBuffer, VulkanImage into RHI interfaces
-2. **VMA Integration**: Unified all buffer/texture memory management with VMA
-3. **RAII Preservation**: Maintained existing RAII patterns and ownership model
-
-**Lessons Learned**:
-1. Wrapper pattern is highly effective for leveraging existing code
-2. VMA integration significantly reduces memory management complexity
-3. Interface-implementation separation improves testability
-
-**Next Steps**:
-- Begin Phase 3: RHI Factory & Integration Bridge
-- RendererBridge 클래스로 점진적 마이그레이션 기반 구축
-
----
-
-## Document History
-
-| Version | Date | Changes | Author |
-|---------|------|---------|--------|
-| 1.0 | 2025-12-19 | Initial PRD creation | Development Team |
-| 1.0 | 2025-12-19 | Phase 1 completion update | Development Team |
-| 1.1 | 2025-12-19 | Merged MIGRATION_TASKS.md into PRD; Added Risk Mitigation Checklist | Development Team |
-| 1.2 | 2025-12-19 | Phase 2 completion; Phase 3-7 plans improved with incremental migration strategy | Development Team |
-
----
-
-## Appendix A: Revised Estimates
-
-Based on Phase 1-2 completion, updated estimates for remaining phases:
-
-| Phase | Original Estimate | Revised Estimate | Actual | Variance |
-|-------|------------------|------------------|--------|----------|
-| Phase 1 | 1,200 lines | - | 2,125 lines | +77% |
-| Phase 2 | 2,500 lines | 3,500 lines | 3,650 lines | +4% |
-| Phase 3 | 300 lines | 325 lines | TBD | - |
-| Phase 4 | 100 lines | 200-300 lines | TBD | - |
-| Phase 5 | 50 lines | 100 lines | TBD | - |
-| Phase 6 | 100 lines | 150-200 lines | TBD | - |
-| Phase 7 | 500 lines | 100-200 lines (tests) | TBD | - |
-| Phase 8 | 2,000 lines | 3,000-3,500 lines | TBD | - |
-
-**Completed**: Phase 1-2 (5,775 lines)
-**Remaining**: Phase 3-7 (~1,000-1,300 lines) + Phase 8 (~3,000-3,500 lines)
-**Total Project Estimate**: ~10,000-10,500 lines
-
----
-
-## Appendix B: Interface Dependency Graph
+### RHI Interface Hierarchy
 
 ```
 RHITypes.hpp (foundation)
     ↓
-RHICapabilities.hpp
-RHISync.hpp
+RHICapabilities, RHISync
     ↓
-RHIBuffer.hpp
-RHITexture.hpp ← RHITextureView
-RHISampler.hpp
-RHIShader.hpp
+RHIBuffer, RHITexture, RHISampler, RHIShader
     ↓
-RHIBindGroup.hpp ← RHIBindGroupLayout
+RHIBindGroup ← RHIBindGroupLayout
     ↓
-RHIPipeline.hpp ← RHIPipelineLayout
-RHIRenderPass.hpp
+RHIPipeline ← RHIPipelineLayout
+RHIRenderPass
     ↓
-RHICommandBuffer.hpp ← RHICommandEncoder, RHIRenderPassEncoder, RHIComputePassEncoder
-RHISwapchain.hpp
+RHICommandBuffer ← RHICommandEncoder, RHIRenderPassEncoder
+RHISwapchain
     ↓
-RHIQueue.hpp
+RHIQueue
     ↓
-RHIDevice.hpp (aggregates all)
+RHIDevice (aggregates all)
     ↓
-RHI.hpp (convenience)
+RHI.hpp (convenience header)
+```
+
+### Backend Dependency Graph
+
+```
+┌─────────────────────────────────────────────────────┐
+│              Application Layer                      │
+│         (Application, ImGuiManager)                 │
+└────────────────────┬────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────┐
+│           High-Level Rendering                      │
+│   (Renderer, ResourceManager, SceneManager)         │
+└────────────────────┬────────────────────────────────┘
+                     │ depends on
+                     ▼
+            ┌────────────────┐
+            │      rhi       │  ← Abstract Interface Only
+            │ (Pure Virtual) │
+            └────────┬───────┘
+                     │ implemented by
+      ┌──────────────┼──────────────┐
+      ▼              ▼              ▼
+┌──────────┐  ┌──────────┐  ┌──────────┐
+│rhi-vulkan│  │rhi-webgpu│  │rhi-metal │
+└────┬─────┘  └────┬─────┘  └────┬─────┘
+     │             │             │
+     ▼             ▼             ▼
+┌──────────┐  ┌──────────┐  ┌──────────┐
+│Vulkan SDK│  │WebGPUImpl│  │Metal SDK │
+└──────────┘  └──────────┘  └──────────┘
 ```
 
 ---
 
-## Appendix C: Success Metrics Dashboard
+## Appendix B: Migration Metrics
 
-*Updated after Phase 2 completion*
+### Code Statistics
 
-| Metric | Target | Phase 1 | Phase 2 | Phase 3 | Phase 4 | Phase 5 | Phase 6 | Phase 7 |
-|--------|--------|---------|---------|---------|---------|---------|---------|---------|
-| Line Count | Estimate | 2,125 ✅ | 3,650 ✅ | TBD | TBD | TBD | TBD | TBD |
-| Compilation | Clean | ✅ Pass | ✅ Pass | - | - | - | - | - |
-| Documentation | 100% | ✅ 100% | ✅ 100% | ✅ 100% | ✅ 100% | - | - | - |
-| Code Review | Pass | ✅ Pass | ✅ Pass | ✅ Pass | ✅ Pass | - | - | - |
-| Performance | < 5% overhead | N/A | ✅ 0% (wrapper) | ✅ 0% | ✅ 0% | - | - | - |
-| Memory Leaks | Zero | N/A | ✅ VMA managed | ✅ VMA | ✅ VMA | - | - | - |
-| RAII Reuse | > 70% | N/A | ✅ 80-90% | ✅ 90% | ✅ 90% | - | - | - |
+| Metric | Before Migration | After Phase 8 | Change |
+|--------|-----------------|---------------|--------|
+| Total Lines | ~12,900 | ~12,010 | -890 (-7%) |
+| Legacy Classes | 6 wrappers | 0 | -100% |
+| Duplicate Resources | 4 | 0 | -100% |
+| RHI Coverage | 0% | 100% | +100% |
+| Modules | 1 monolithic | 2 independent | +100% |
+| Validation Errors | Variable | 0 | ✅ |
 
-### Phase Completion Summary
+### Performance Impact
 
-```
-Phase 1 (Interfaces)  ████████████████████ 100% ✅
-Phase 2 (Vulkan)      ████████████████████ 100% ✅
-Phase 3 (Factory)     ████████████████████ 100% ✅
-Phase 4 (Renderer)    ████████████████████ 100% ✅
-Phase 5 (Resources)   ░░░░░░░░░░░░░░░░░░░░   0%
-Phase 6 (ImGui)       ░░░░░░░░░░░░░░░░░░░░   0%
-Phase 7 (Testing)     ░░░░░░░░░░░░░░░░░░░░   0%
-───────────────────────────────────────────────
-Overall Progress      ███████████░░░░░░░░░  57%
-```
+| Metric | Target | Actual | Status |
+|--------|--------|--------|--------|
+| Frame Time Overhead | < 5% | ~1-2% | ✅ Exceeded |
+| Memory Overhead | < 1% | ~0.5% | ✅ Exceeded |
+| GPU Memory Savings | N/A | ~8.5 MB | ✅ Bonus |
+| Startup Time | < 10% | < 5% | ✅ Exceeded |
+
+---
+
+## Appendix C: Documentation References
+
+### Phase Documentation
+- [PHASE1_INTERFACE_DESIGN.md](PHASE1_INTERFACE_DESIGN.md) - RHI interface design
+- [PHASE2_VULKAN_BACKEND.md](PHASE2_VULKAN_BACKEND.md) - Vulkan implementation
+- [PHASE3_FACTORY_BRIDGE.md](PHASE3_FACTORY_BRIDGE.md) - Factory pattern
+- [PHASE4_RENDERER_MIGRATION.md](PHASE4_RENDERER_MIGRATION.md) - Renderer migration
+- [PHASE5_SCENE_MIGRATION.md](PHASE5_SCENE_MIGRATION.md) - Scene layer migration
+- [PHASE6_IMGUI_INTEGRATION.md](PHASE6_IMGUI_INTEGRATION.md) - ImGui integration
+- [PHASE7_RENDERER_CLEANUP.md](PHASE7_RENDERER_CLEANUP.md) - Final cleanup
+- [PHASE8_MODULAR_ARCHITECTURE.md](PHASE8_MODULAR_ARCHITECTURE.md) - Architecture refactoring
+
+### Technical Guides
+- [RHI_TECHNICAL_GUIDE.md](RHI_TECHNICAL_GUIDE.md) - Technical implementation details
+- [ARCHITECTURE.md](../../ARCHITECTURE.md) - System architecture overview
+- [TROUBLESHOOTING.md](../../TROUBLESHOOTING.md) - Known issues and solutions
+
+### Strategy Documents
+- [RHI_MIGRATION_STRATEGY_EN.md](RHI_MIGRATION_STRATEGY_EN.md) - Migration strategy overview
 
 ---
 
