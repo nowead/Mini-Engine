@@ -16,11 +16,9 @@
 
 **핵심 성과**:
 
-- **RHI (Render Hardware Interface) 아키텍처 마이그레이션 완료** (Phase 1-8, 2025-12-21)
-- **레거시 코드 완전 제거** - 100% RHI 네이티브 렌더링 파이프라인
-- 그래픽스 API 추상화 계층으로 멀티 백엔드 지원 (Vulkan, WebGPU 준비 완료)
+- **RHI (Render Hardware Interface) 아키텍처 마이그레이션 완료**
+- 그래픽스 API 추상화 계층으로 멀티 백엔드 지원 (Vulkan 준비 완료)
 - 4계층 객체지향 아키텍처 + RAII 패턴 적용
-- 체계적인 리팩토링 과정 문서화 (~890 LOC 레거시 제거)
 
 **현재 기능**: FDF Wireframe, OBJ Model Loading, ImGui UI, Camera Controls, 100% RHI-Native Rendering
 
@@ -246,7 +244,7 @@ src/
 **Migration Status**:
 
 - [COMPLETE] **Phase 1-7**: RHI architecture implementation complete
-- [COMPLETE] **Phase 8**: Legacy code cleanup complete (~890 LOC removed)
+- [COMPLETE] **Phase 8**: Legacy code cleanup complete
   - Deleted: VulkanBuffer, VulkanImage, VulkanPipeline, VulkanSwapchain, SyncManager
   - 100% RHI-native rendering
   - Zero Vulkan validation errors
