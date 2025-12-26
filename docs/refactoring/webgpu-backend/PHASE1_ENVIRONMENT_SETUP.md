@@ -16,10 +16,12 @@ Phase 1 establishes the foundation for WebGPU backend development by creating th
 ## Objectives
 
 - [x] Create WebGPU backend directory structure
-- [x] Set up CMake build system with Dawn dependency
-- [x] Configure Emscripten toolchain for WASM builds
-- [x] Create build scripts for native and web deployment
+- [x] Set up CMake build system for Emscripten (WASM) builds
+- [x] Configure Emscripten toolchain
+- [x] Create Makefile targets for web deployment
 - [x] Integrate WebGPU backend into main CMake build
+
+**Note**: Native desktop builds use Vulkan backend. WebGPU backend is web-only by design.
 
 ---
 

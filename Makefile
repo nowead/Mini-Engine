@@ -59,7 +59,7 @@ COLOR_BLUE := \033[0;34m
 COLOR_YELLOW := \033[0;33m
 COLOR_RESET := \033[0m
 
-.PHONY: all configure build run clean re help info
+.PHONY: all configure build run clean re help info wasm configure-wasm build-wasm serve-wasm clean-wasm setup-emscripten
 
 # Default target
 all: build
@@ -130,7 +130,7 @@ install-deps:
 
 # Display help
 help:
-	@echo "$(COLOR_BLUE)Available targets:$(COLOR_RESET)"
+	@echo "$(COLOR_BLUE)Available targets (Native):$(COLOR_RESET)"
 	@echo "  $(COLOR_GREEN)make$(COLOR_RESET) or $(COLOR_GREEN)make all$(COLOR_RESET)      - Configure and build the project"
 	@echo "  $(COLOR_GREEN)make info$(COLOR_RESET)              - Display build configuration"
 	@echo "  $(COLOR_GREEN)make configure$(COLOR_RESET)         - Configure the project with CMake"
@@ -139,12 +139,116 @@ help:
 	@echo "  $(COLOR_GREEN)make run$(COLOR_RESET)               - Build and run the application"
 	@echo "  $(COLOR_GREEN)make run-only$(COLOR_RESET)          - Run without building"
 	@echo "  $(COLOR_GREEN)make clean$(COLOR_RESET)             - Remove all build artifacts"
-	@echo "  $(COLOR_GREEN)make re$(COLOR_RESET)           - Clean and rebuild from scratch"
+	@echo "  $(COLOR_GREEN)make re$(COLOR_RESET)                - Clean and rebuild from scratch"
 	@echo "  $(COLOR_GREEN)make clean-cmake$(COLOR_RESET)       - Clean only CMake cache"
 	@echo "  $(COLOR_GREEN)make reconfigure$(COLOR_RESET)       - Reconfigure without full clean"
 	@echo "  $(COLOR_GREEN)make install-deps$(COLOR_RESET)      - Install dependencies via vcpkg"
-	@echo "  $(COLOR_GREEN)make help$(COLOR_RESET)              - Display this help message"
+	@echo ""
+	@echo "$(COLOR_BLUE)Available targets (WebAssembly):$(COLOR_RESET)"
+	@echo "  $(COLOR_GREEN)make setup-emscripten$(COLOR_RESET)  - Install Emscripten SDK (one-time setup)"
+	@echo "  $(COLOR_GREEN)make wasm$(COLOR_RESET)              - Configure and build WebAssembly version"
+	@echo "  $(COLOR_GREEN)make configure-wasm$(COLOR_RESET)    - Configure WASM build with Emscripten"
+	@echo "  $(COLOR_GREEN)make build-wasm$(COLOR_RESET)        - Build WASM without reconfiguring"
+	@echo "  $(COLOR_GREEN)make serve-wasm$(COLOR_RESET)        - Build and serve WASM on http://localhost:8000"
+	@echo "  $(COLOR_GREEN)make clean-wasm$(COLOR_RESET)        - Remove WASM build artifacts"
 	@echo ""
 	@echo "$(COLOR_BLUE)Environment:$(COLOR_RESET)"
 	@echo "  VULKAN_SDK=$(VULKAN_SDK)"
 	@echo "  VK_LAYER_PATH=$(VULKAN_LAYER_PATH)"
+	@echo ""
+	@echo "$(COLOR_YELLOW)First time using WebAssembly? Run:$(COLOR_RESET)"
+	@echo "  $(COLOR_GREEN)make setup-emscripten$(COLOR_RESET)"
+	@echo ""
+	@echo "  $(COLOR_GREEN)make help$(COLOR_RESET)              - Display this help message"
+
+# =============================================================================
+# WebAssembly (WebGPU) Build Targets
+# =============================================================================
+
+WASM_BUILD_DIR := build_wasm
+WASM_EXECUTABLE := $(WASM_BUILD_DIR)/rhi_smoke_test.html
+
+# Emscripten environment setup
+EMSDK_PATH := $(HOME)/emsdk
+EMSCRIPTEN_ENV := $(EMSDK_PATH)/emsdk_env.sh
+
+# Install Emscripten SDK (one-time setup)
+setup-emscripten:
+	@echo "$(COLOR_BLUE)Running Emscripten setup script...$(COLOR_RESET)"
+	@./scripts/setup_emscripten.sh
+
+# Check if Emscripten is available
+check-emscripten:
+	@if [ ! -f "$(EMSCRIPTEN_ENV)" ]; then \
+		echo "$(COLOR_YELLOW)========================================$(COLOR_RESET)"; \
+		echo "$(COLOR_YELLOW)⚠️  Emscripten SDK not found!$(COLOR_RESET)"; \
+		echo "$(COLOR_YELLOW)========================================$(COLOR_RESET)"; \
+		echo ""; \
+		echo "$(COLOR_BLUE)WebAssembly builds require Emscripten SDK.$(COLOR_RESET)"; \
+		echo ""; \
+		echo "$(COLOR_GREEN)Quick Setup (Recommended):$(COLOR_RESET)"; \
+		echo "  $(COLOR_YELLOW)./scripts/setup_emscripten.sh$(COLOR_RESET)"; \
+		echo ""; \
+		echo "$(COLOR_GREEN)Manual Setup:$(COLOR_RESET)"; \
+		echo "  git clone https://github.com/emscripten-core/emsdk.git ~/emsdk"; \
+		echo "  cd ~/emsdk"; \
+		echo "  ./emsdk install 3.1.71"; \
+		echo "  ./emsdk activate 3.1.71"; \
+		echo "  source ~/emsdk/emsdk_env.sh"; \
+		echo ""; \
+		echo "$(COLOR_BLUE)After installation, run 'make wasm' again.$(COLOR_RESET)"; \
+		echo ""; \
+		exit 1; \
+	fi
+
+# Configure WASM build
+configure-wasm: check-emscripten
+	@if [ ! -f $(WASM_BUILD_DIR)/CMakeCache.txt ]; then \
+		echo "$(COLOR_YELLOW)Configuring WebAssembly build...$(COLOR_RESET)"; \
+		mkdir -p $(WASM_BUILD_DIR); \
+		bash -c "source $(EMSCRIPTEN_ENV) && cd $(WASM_BUILD_DIR) && emcmake cmake .. \
+			-DCMAKE_TOOLCHAIN_FILE=../cmake/EmscriptenToolchain.cmake \
+			-DCMAKE_BUILD_TYPE=Release"; \
+		echo "$(COLOR_GREEN)WASM configuration complete!$(COLOR_RESET)"; \
+	else \
+		echo "$(COLOR_BLUE)WASM already configured (use 'make clean-wasm' and retry to reconfigure)$(COLOR_RESET)"; \
+	fi
+
+# Build WASM
+build-wasm: configure-wasm
+	@echo "$(COLOR_YELLOW)Building WebAssembly version...$(COLOR_RESET)"
+	@bash -c "source $(EMSCRIPTEN_ENV) && cd $(WASM_BUILD_DIR) && emmake make -j$$(nproc)"
+	@echo "$(COLOR_GREEN)✅ WASM build complete!$(COLOR_RESET)"
+	@echo ""
+	@echo "$(COLOR_BLUE)Build artifacts:$(COLOR_RESET)"
+	@ls -lh $(WASM_BUILD_DIR)/rhi_smoke_test.html 2>/dev/null || echo "  No .html file found"
+	@ls -lh $(WASM_BUILD_DIR)/rhi_smoke_test.js 2>/dev/null || echo "  No .js file found"
+	@ls -lh $(WASM_BUILD_DIR)/rhi_smoke_test.wasm 2>/dev/null || echo "  No .wasm file found"
+
+# Build WASM without reconfiguring
+build-wasm-only: check-emscripten
+	@echo "$(COLOR_YELLOW)Building WebAssembly (no reconfigure)...$(COLOR_RESET)"
+	@bash -c "source $(EMSCRIPTEN_ENV) && cd $(WASM_BUILD_DIR) && emmake make -j$$(nproc)"
+	@echo "$(COLOR_GREEN)WASM build complete!$(COLOR_RESET)"
+
+# Full WASM build (alias for build-wasm)
+wasm: build-wasm
+
+# Serve WASM build on local web server
+serve-wasm: wasm
+	@echo "$(COLOR_BLUE)========================================$(COLOR_RESET)"
+	@echo "$(COLOR_GREEN)🌐 Starting web server...$(COLOR_RESET)"
+	@echo "$(COLOR_BLUE)========================================$(COLOR_RESET)"
+	@echo "Server URL: $(COLOR_GREEN)http://localhost:8000$(COLOR_RESET)"
+	@echo "Press Ctrl+C to stop"
+	@echo "$(COLOR_BLUE)========================================$(COLOR_RESET)"
+	@cd $(WASM_BUILD_DIR) && python3 -m http.server 8000
+
+# Clean WASM build
+clean-wasm:
+	@echo "$(COLOR_YELLOW)Cleaning WebAssembly build...$(COLOR_RESET)"
+	@rm -rf $(WASM_BUILD_DIR)
+	@echo "$(COLOR_GREEN)WASM build cleaned!$(COLOR_RESET)"
+
+# Rebuild WASM from scratch
+re-wasm: clean-wasm wasm

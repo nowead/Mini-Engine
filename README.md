@@ -55,16 +55,16 @@ Mini-Engine is a modern multi-backend rendering engine built from scratch, evolv
 | Feature | Status | Description |
 |---------|--------|-------------|
 | **RHI Architecture** | **COMPLETED** | Graphics API abstraction layer |
-| **Vulkan Backend** | **COMPLETED** | Full RHI implementation with validation |
+| **Vulkan Backend** | **COMPLETED** | Full RHI implementation (Desktop) |
+| **WebGPU Backend** | **COMPLETED** | Full RHI implementation (Web only) |
 | **Legacy Code Cleanup** | **COMPLETED** | 100% RHI-native (Phase 8) |
 | FDF Wireframe | Completed | Heightmap-based wireframe rendering |
 | OBJ Model Loading | Completed | 3D model loading with texture mapping |
 | ImGui UI | Completed | Real-time parameter adjustment UI |
 | Camera Controls | Completed | Mouse/keyboard camera manipulation |
-| WebGPU Backend | Planned | For web deployment (Phase 9+) |
 | Ray Tracing | Planned | Using VK_KHR_ray_tracing_pipeline |
 
-**Latest Achievement (2025-12-21)**: **Phase 8 Complete** - Legacy code removed, 100% RHI-native rendering with zero validation errors!
+**Latest Achievement (2025-12-26)**: **WebGPU Backend Complete** - Web deployment support via Emscripten + Browser WebGPU API!
 
 ---
 
@@ -143,16 +143,18 @@ Mini-Engine is a modern multi-backend rendering engine built from scratch, evolv
 ┌──────────────────────────────────────────────────────────────────┐
 │              Layer 4: Backend Implementations                    │
 │  ┌────────────────────────────────────────────────────────────┐  │
-│  │ [COMPLETE] Vulkan Backend (rhi-vulkan/)                    │  │
+│  │ [COMPLETE] Vulkan Backend (rhi-vulkan/) - Desktop          │  │
 │  │  - VulkanRHIDevice, VulkanRHISwapchain, etc.               │  │
 │  │  - VMA (Vulkan Memory Allocator) integration               │  │
 │  │  - Platform-specific rendering (Vulkan 1.1/1.3)            │  │
-│  │  - Complete implementation (12 RHI classes)                │  │
+│  │  - Complete implementation (15 RHI classes)                │  │
 │  └────────────────────────────────────────────────────────────┘  │
 │  ┌────────────────────────────────────────────────────────────┐  │
-│  │ [PLANNED] WebGPU Backend (rhi-webgpu/)                     │  │
+│  │ [COMPLETE] WebGPU Backend (rhi-webgpu/) - Web Only          │  │
 │  │  - WebGPURHIDevice, WebGPURHISwapchain, etc.               │  │
-│  │  - Web and native deployment                               │  │
+│  │  - Emscripten + Browser WebGPU API                         │  │
+│  │  - SPIR-V → WGSL shader conversion                         │  │
+│  │  - Complete implementation (15 RHI classes)                │  │
 │  └────────────────────────────────────────────────────────────┘  │
 │  ┌────────────────────────────────────────────────────────────┐  │
 │  │ [PLANNED] Future Backends (D3D12, Metal)                   │  │
@@ -256,14 +258,15 @@ src/
 
 ### Prerequisites
 
-| Component | Version |
-|-----------|----------|
-| Vulkan SDK | 1.3+ (with slangc) |
-| CMake | 3.28+ |
-| C++ Compiler | C++20 support (GCC 12+, Clang 15+, MSVC 19.30+) |
-| vcpkg | Latest |
+| Component | Version | Required For |
+|-----------|----------|--------------|
+| Vulkan SDK | 1.3+ (with slangc) | Desktop builds |
+| CMake | 3.28+ | All builds |
+| C++ Compiler | C++20 support (GCC 12+, Clang 15+, MSVC 19.30+) | All builds |
+| vcpkg | Latest | Dependency management |
+| Emscripten SDK | 3.1.71+ | Web builds (optional) |
 
-### Build
+### Desktop Build (Vulkan)
 
 ```bash
 # Set environment variables
@@ -273,14 +276,27 @@ export VULKAN_SDK=/path/to/vulkansdk
 # Clone and build
 git clone https://github.com/nowead/Mini-Engine.git
 cd Mini-Engine
-make  # or: cmake --preset=default && cmake --build build
-```
+make build
 
-### Run
-
-```bash
+# Run
 ./build/vulkanGLFW
 ```
+
+### Web Build (WebGPU + WebAssembly)
+
+```bash
+# One-time setup: Install Emscripten SDK
+make setup-emscripten
+
+# Build for web
+make wasm
+
+# Serve locally and test
+make serve-wasm
+# Open http://localhost:8000 in your browser
+```
+
+**Note**: Desktop development doesn't need Emscripten. Only install it if you need web deployment.
 
 ### Controls
 
@@ -295,13 +311,30 @@ make  # or: cmake --preset=default && cmake --build build
 
 ## Dependencies
 
-Managed via vcpkg:
+### Desktop Build Dependencies (vcpkg)
 
 - **GLFW** - Window and input management
 - **GLM** - Mathematics library (matrices, vectors)
 - **stb** - Image loading
 - **tinyobjloader** - OBJ file parsing
 - **ImGui** - UI system
+- **Vulkan SDK** - Vulkan headers and validation layers
+- **VulkanMemoryAllocator** - GPU memory management
+
+### Web Build Dependencies (Emscripten ports)
+
+- **Emscripten SDK** - WebAssembly compiler toolchain
+- **Browser WebGPU API** - Native browser GPU access (Chrome 113+, Edge 113+)
+- All other dependencies provided by Emscripten ports
+
+**Installation**:
+```bash
+# Desktop dependencies (via vcpkg)
+cmake --preset linux-default  # Auto-installs vcpkg deps
+
+# Web dependencies (one command)
+make setup-emscripten  # Auto-installs Emscripten SDK
+```
 
 ---
 
@@ -310,12 +343,14 @@ Managed via vcpkg:
 | Document | Description |
 |----------|-------------|
 | [docs/README.md](docs/README.md) | Documentation hub |
+| [docs/SUMMARY.md](docs/SUMMARY.md) | **Project overview and backend status** |
+| [docs/refactoring/webgpu-backend/](docs/refactoring/webgpu-backend/) | **WebGPU Backend Documentation** |
+| [ARCHITECTURE_CLARIFICATION.md](docs/refactoring/webgpu-backend/ARCHITECTURE_CLARIFICATION.md) | Mini-Engine vs Dawn architecture |
+| [SUMMARY.md](docs/refactoring/webgpu-backend/SUMMARY.md) | WebGPU implementation summary |
 | [docs/refactoring/layered-to-rhi/](docs/refactoring/layered-to-rhi/) | **RHI Migration Documentation** |
 | [RHI_MIGRATION_PRD.md](docs/refactoring/layered-to-rhi/RHI_MIGRATION_PRD.md) | Complete migration plan and progress |
 | [PHASE8_SUMMARY.md](docs/refactoring/layered-to-rhi/PHASE8_SUMMARY.md) | Phase 8 completion report (legacy cleanup) |
 | [ARCHITECTURE.md](docs/refactoring/layered-to-rhi/ARCHITECTURE.md) | Complete 4-layer architecture guide |
-| [PHASE8_DIRECTORY_REFACTORING.md](docs/refactoring/layered-to-rhi/PHASE8_DIRECTORY_REFACTORING.md) | Directory restructuring guide |
-| [PHASE7_SUMMARY.md](docs/refactoring/layered-to-rhi/PHASE7_SUMMARY.md) | Phase 7 & 7.5 completion report |
 | [RHI_TECHNICAL_GUIDE.md](docs/refactoring/layered-to-rhi/RHI_TECHNICAL_GUIDE.md) | RHI API reference |
 | [TROUBLESHOOTING.md](docs/refactoring/layered-to-rhi/TROUBLESHOOTING.md) | RHI migration troubleshooting |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | General troubleshooting guide |
