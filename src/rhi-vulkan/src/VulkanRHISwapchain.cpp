@@ -90,7 +90,7 @@ rhi::RHITextureView* VulkanRHISwapchain::acquireNextImage(rhi::RHISemaphore* sig
     return m_imageViews[m_currentImageIndex].get();
 }
 
-void VulkanRHISwapchain::present() {
+void VulkanRHISwapchain::present(rhi::RHISemaphore* waitSemaphore /* = nullptr */) {
     // Phase 7.5: Layout transition to PRESENT_SRC is now handled in the rendering command buffer
     // No need for separate transition here
 
@@ -98,11 +98,19 @@ void VulkanRHISwapchain::present() {
     auto* rhiQueue = m_device->getQueue(rhi::QueueType::Graphics);
     auto* vulkanQueue = static_cast<VulkanRHIQueue*>(rhiQueue);
 
+    // Get Vulkan semaphore to wait on before presenting
+    vk::Semaphore vkWaitSemaphore = VK_NULL_HANDLE;
+    if (waitSemaphore) {
+        auto* vulkanSemaphore = static_cast<VulkanRHISemaphore*>(waitSemaphore);
+        vkWaitSemaphore = vulkanSemaphore->getVkSemaphore();
+    }
+
     vk::PresentInfoKHR presentInfo;
+    presentInfo.waitSemaphoreCount = waitSemaphore ? 1 : 0;
+    presentInfo.pWaitSemaphores = waitSemaphore ? &vkWaitSemaphore : nullptr;
     presentInfo.swapchainCount = 1;
     presentInfo.pSwapchains = &(*m_swapchain);
     presentInfo.pImageIndices = &m_currentImageIndex;
-    // TODO: Add wait semaphores for proper synchronization
 
     vk::Result result = vulkanQueue->getVkQueue().presentKHR(presentInfo);
 

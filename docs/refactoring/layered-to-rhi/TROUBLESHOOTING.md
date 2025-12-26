@@ -462,6 +462,202 @@ After fix, no more semaphore warnings:
 
 ---
 
+### Issue 10: SPIR-V Version Mismatch on Linux
+
+**Date**: 2025-12-26
+**Severity**: High (Blocks Linux runtime)
+**Status**: ✅ Resolved
+
+**Description**:
+After completing RHI migration, validation layers reported SPIR-V version incompatibility errors on Linux. Shaders compiled with SPIR-V 1.5 were being loaded on Vulkan 1.1 environment (lavapipe/llvmpipe).
+
+**Error Message**:
+```
+[Vulkan] Validation Error: [ VUID-VkShaderModuleCreateInfo-pCode-08737 ]
+vkCreateShaderModule(): pCreateInfo->pCode (spirv-val produced an error):
+Invalid SPIR-V binary version 1.5 for target environment SPIR-V 1.3 (under Vulkan 1.1 semantics).
+```
+
+**Root Cause**:
+1. CMakeLists.txt was configured to compile shaders with `-profile spirv_1_3` for Linux
+2. However, pre-compiled `fdf.spv` shader was compiled with SPIR-V 1.5
+3. FDF mode (enabled by default) loaded the old `fdf.spv` instead of `slang.spv`
+4. Vulkan 1.1 only supports SPIR-V 1.0, 1.1, 1.2, and 1.3
+
+**Investigation**:
+```bash
+# Check SPIR-V version in compiled shader
+$ od -A x -t x1z -N 24 shaders/fdf.spv
+000000 03 02 23 07 00 05 01 00  # 00 05 01 00 = version 1.5
+```
+
+**Resolution**:
+Recompiled `fdf.spv` with SPIR-V 1.3 target:
+
+```bash
+cd shaders
+$HOME/1.3.296.0/x86_64/bin/slangc fdf.slang \
+    -target spirv \
+    -profile spirv_1_3 \
+    -emit-spirv-directly \
+    -fvk-use-entrypoint-name \
+    -entry vertMain \
+    -entry fragMain \
+    -Wno-41012 \
+    -o fdf.spv
+```
+
+**Files Modified**:
+- `shaders/fdf.spv`: Recompiled with SPIR-V 1.3
+- Note: `CMakeLists.txt` already had correct configuration (line 181-184)
+
+**Verification**:
+```bash
+# Check new SPIR-V version
+$ od -A x -t x1z -N 24 shaders/fdf.spv
+000000 03 02 23 07 00 03 01 00  # 00 03 01 00 = version 1.3 ✅
+
+# Run application - no more SPIR-V version errors
+$ make run-only
+[RendererBridge] Initialized with Vulkan backend
+[Renderer] RHI Pipeline created successfully
+# ✅ No SPIR-V version errors!
+```
+
+**Key Takeaway**:
+- Always verify SPIR-V versions in pre-compiled shaders match target Vulkan version
+- SPIR-V 1.3 is the maximum version for Vulkan 1.1
+- Use `spirv_1_3` profile for Linux builds to ensure compatibility
+
+---
+
+### Issue 11: Semaphore Double Signaling Without Wait
+
+**Date**: 2025-12-26
+**Severity**: Medium (Validation errors during rendering)
+**Status**: ✅ Resolved
+
+**Description**:
+Validation layers reported semaphore synchronization errors where semaphores were being signaled multiple times without being waited on. Additionally, present operations were waiting on semaphores that had no way to be signaled.
+
+**Error Messages**:
+```
+[Vulkan] Validation Error: [ VUID-vkQueueSubmit-pCommandBuffers-00065 ]
+vkQueueSubmit(): pSubmits[0].pSignalSemaphores[0] (VkSemaphore 0xee647e0000000009[])
+is being signaled by VkQueue 0x57c3fec7eba0[], but it was previously signaled by
+VkQueue 0x57c3fec7eba0[] and has not since been waited on.
+
+[Vulkan] Validation Error: [ VUID-vkQueuePresentKHR-pWaitSemaphores-03268 ]
+vkQueuePresentKHR(): pPresentInfo->pWaitSemaphores[0] queue (VkQueue 0x57c3fec7eba0[])
+is waiting on semaphore (VkSemaphore 0xe88693000000000c[]) that has no way to be signaled.
+```
+
+**Root Cause**:
+1. `RHISwapchain::present()` interface had no parameter to wait on render completion semaphore
+2. `getRenderFinishedSemaphore()` was incorrectly using `m_currentImageIndex` instead of `m_currentFrame`
+3. Frame synchronization requires per-frame semaphores, not per-swapchain-image semaphores
+4. Timeline of problematic events:
+   - Submit command buffer → signals `renderFinishedSemaphore[currentFrame]`
+   - Present operation → waits on nothing (missing synchronization)
+   - Next frame → signals same semaphore again without wait
+
+**Investigation**:
+```cpp
+// RendererBridge.hpp - Original (problematic)
+rhi::RHISemaphore* getRenderFinishedSemaphore() const {
+    return m_renderFinishedSemaphores[m_currentImageIndex].get();  // ❌ Wrong index!
+}
+
+// VulkanRHISwapchain.cpp - Original (missing sync)
+void VulkanRHISwapchain::present() {
+    vk::PresentInfoKHR presentInfo;
+    // ... no wait semaphores ❌
+    presentInfo.swapchainCount = 1;
+    presentInfo.pSwapchains = &(*m_swapchain);
+}
+```
+
+**Resolution**:
+
+1. **Updated RHISwapchain interface** to accept wait semaphore:
+```cpp
+// src/rhi/include/rhi/RHISwapchain.hpp
+virtual void present(RHISemaphore* waitSemaphore = nullptr) = 0;
+```
+
+2. **Implemented semaphore wait in present**:
+```cpp
+// src/rhi-vulkan/src/VulkanRHISwapchain.cpp
+void VulkanRHISwapchain::present(rhi::RHISemaphore* waitSemaphore) {
+    vk::Semaphore vkWaitSemaphore = VK_NULL_HANDLE;
+    if (waitSemaphore) {
+        auto* vulkanSemaphore = static_cast<VulkanRHISemaphore*>(waitSemaphore);
+        vkWaitSemaphore = vulkanSemaphore->getVkSemaphore();
+    }
+
+    vk::PresentInfoKHR presentInfo;
+    presentInfo.waitSemaphoreCount = waitSemaphore ? 1 : 0;
+    presentInfo.pWaitSemaphores = waitSemaphore ? &vkWaitSemaphore : nullptr;
+    // ...
+}
+```
+
+3. **Fixed semaphore indexing**:
+```cpp
+// src/rendering/RendererBridge.hpp
+rhi::RHISemaphore* getRenderFinishedSemaphore() const {
+    return m_renderFinishedSemaphores[m_currentFrame].get();  // ✅ Use frame index
+}
+```
+
+4. **Updated present call** to pass render finished semaphore:
+```cpp
+// src/rendering/RendererBridge.cpp
+void RendererBridge::endFrame() {
+    // Present with render finished semaphore to ensure rendering is complete
+    m_swapchain->present(m_renderFinishedSemaphores[m_currentFrame].get());
+
+    m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+}
+```
+
+**Files Modified**:
+- `src/rhi/include/rhi/RHISwapchain.hpp`: Added waitSemaphore parameter to present()
+- `src/rhi-vulkan/include/rhi-vulkan/VulkanRHISwapchain.hpp`: Updated override signature
+- `src/rhi-vulkan/src/VulkanRHISwapchain.cpp`: Implemented wait semaphore in present
+- `src/rendering/RendererBridge.hpp`: Fixed getRenderFinishedSemaphore() indexing
+- `src/rendering/RendererBridge.cpp`: Pass semaphore to present()
+
+**Synchronization Flow (Fixed)**:
+```
+Frame N:
+  1. beginFrame() → acquireNextImage() signals imageAvailable[N]
+  2. submit() waits on imageAvailable[N], signals renderFinished[N]
+  3. present() waits on renderFinished[N] ✅
+  4. Advance to frame N+1
+
+Frame N+1:
+  1. Wait for fence[N+1] to ensure frame N+1-2 completed
+  2. Can now safely reuse semaphores[N+1]
+```
+
+**Verification**:
+```bash
+❯ make run-only
+[RendererBridge] Initialized with Vulkan backend
+[Renderer] RHI Pipeline created successfully
+[Renderer] RHI buffers uploaded: 23200 vertices (742400 bytes), 92168 indices (368672 bytes)
+# ✅ No semaphore synchronization errors!
+```
+
+**Key Takeaway**:
+- Use `m_currentFrame` for frame-in-flight resources (semaphores, fences, command buffers)
+- Use `m_currentImageIndex` only for swapchain-specific resources (framebuffers, image views)
+- Present must wait on render completion semaphore to ensure GPU work finishes before displaying
+- Proper synchronization chain: imageAvailable → render → renderFinished → present
+
+---
+
 ## Future Issues
 
 *Issues discovered during later phases will be documented here*

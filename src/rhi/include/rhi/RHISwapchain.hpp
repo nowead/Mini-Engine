@@ -55,11 +55,15 @@ public:
 
     /**
      * @brief Present the current image to the screen
+     * @param waitSemaphore Semaphore to wait on before presenting (optional)
      *
      * This should be called after rendering is complete to display the image.
      * Must be called from the graphics queue.
+     *
+     * @note The waitSemaphore should be signaled by the rendering command buffer
+     * to ensure rendering is complete before presentation.
      */
-    virtual void present() = 0;
+    virtual void present(RHISemaphore* waitSemaphore = nullptr) = 0;
 
     /**
      * @brief Resize the swapchain

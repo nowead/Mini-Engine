@@ -184,10 +184,10 @@ public:
     }
 
     /**
-     * @brief Get render finished semaphore for current image
+     * @brief Get render finished semaphore for current frame
      */
     rhi::RHISemaphore* getRenderFinishedSemaphore() const {
-        return m_renderFinishedSemaphores[m_currentImageIndex].get();
+        return m_renderFinishedSemaphores[m_currentFrame].get();
     }
 
     /**

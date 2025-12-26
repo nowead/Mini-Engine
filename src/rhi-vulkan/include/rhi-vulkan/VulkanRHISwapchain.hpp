@@ -35,7 +35,7 @@ public:
 
     // RHISwapchain interface
     rhi::RHITextureView* acquireNextImage(rhi::RHISemaphore* signalSemaphore = nullptr) override;
-    void present() override;
+    void present(rhi::RHISemaphore* waitSemaphore = nullptr) override;
     void resize(uint32_t width, uint32_t height) override;
     uint32_t getWidth() const override { return m_extent.width; }
     uint32_t getHeight() const override { return m_extent.height; }

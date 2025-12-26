@@ -155,8 +155,8 @@ void RendererBridge::endFrame() {
         return;
     }
 
-    // Present
-    m_swapchain->present();
+    // Present with render finished semaphore to ensure rendering is complete
+    m_swapchain->present(m_renderFinishedSemaphores[m_currentFrame].get());
 
     // Advance to next frame
     m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
