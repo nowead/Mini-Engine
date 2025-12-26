@@ -128,8 +128,6 @@ bool WebGPURHICapabilities::isFormatSupported(TextureFormat format, TextureUsage
         case TextureFormat::RGBA8UnormSrgb:
         case TextureFormat::BGRA8Unorm:
         case TextureFormat::BGRA8UnormSrgb:
-        case TextureFormat::RGB10A2Unorm:
-        case TextureFormat::RG11B10Float:
         case TextureFormat::RGBA16Float:
         case TextureFormat::RGBA32Float:
         case TextureFormat::R8Unorm:
@@ -174,7 +172,6 @@ bool WebGPURHICapabilities::isSampleCountSupported(TextureFormat format, uint32_
             case TextureFormat::RGBA8UnormSrgb:
             case TextureFormat::BGRA8Unorm:
             case TextureFormat::BGRA8UnormSrgb:
-            case TextureFormat::RGB10A2Unorm:
             case TextureFormat::RGBA16Float:
             case TextureFormat::Depth24Plus:
             case TextureFormat::Depth32Float:

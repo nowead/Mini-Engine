@@ -1,6 +1,6 @@
 #pragma once
 
-#include <rhi/RHITypes.hpp>
+#include <rhi/RHI.hpp>
 
 // WebGPU headers
 #ifdef __EMSCRIPTEN__
@@ -91,7 +91,7 @@ inline rhi::TextureFormat FromWGPUFormat(WGPUTextureFormat format) {
         case WGPUTextureFormat_R8Snorm:             return rhi::TextureFormat::R8Snorm;
         case WGPUTextureFormat_R8Uint:              return rhi::TextureFormat::R8Uint;
         case WGPUTextureFormat_R8Sint:              return rhi::TextureFormat::R8Sint;
-        case WGPUTextureFormat::RGBA8Unorm:         return rhi::TextureFormat::RGBA8Unorm;
+        case WGPUTextureFormat_RGBA8Unorm:          return rhi::TextureFormat::RGBA8Unorm;
         case WGPUTextureFormat_RGBA8UnormSrgb:      return rhi::TextureFormat::RGBA8UnormSrgb;
         case WGPUTextureFormat_BGRA8Unorm:          return rhi::TextureFormat::BGRA8Unorm;
         case WGPUTextureFormat_BGRA8UnormSrgb:      return rhi::TextureFormat::BGRA8UnormSrgb;
@@ -313,14 +313,16 @@ inline WGPUBlendOperation ToWGPUBlendOp(rhi::BlendOp op) {
 inline WGPUColorWriteMaskFlags ToWGPUColorWriteMask(rhi::ColorWriteMask mask) {
     WGPUColorWriteMaskFlags flags = WGPUColorWriteMask_None;
 
-    if ((mask & rhi::ColorWriteMask::Red) != rhi::ColorWriteMask::None)
-        flags |= WGPUColorWriteMask_Red;
-    if ((mask & rhi::ColorWriteMask::Green) != rhi::ColorWriteMask::None)
-        flags |= WGPUColorWriteMask_Green;
-    if ((mask & rhi::ColorWriteMask::Blue) != rhi::ColorWriteMask::None)
-        flags |= WGPUColorWriteMask_Blue;
-    if ((mask & rhi::ColorWriteMask::Alpha) != rhi::ColorWriteMask::None)
-        flags |= WGPUColorWriteMask_Alpha;
+    auto maskValue = static_cast<uint32_t>(mask);
+    auto redValue = static_cast<uint32_t>(rhi::ColorWriteMask::Red);
+    auto greenValue = static_cast<uint32_t>(rhi::ColorWriteMask::Green);
+    auto blueValue = static_cast<uint32_t>(rhi::ColorWriteMask::Blue);
+    auto alphaValue = static_cast<uint32_t>(rhi::ColorWriteMask::Alpha);
+
+    if ((maskValue & redValue) != 0)   flags |= WGPUColorWriteMask_Red;
+    if ((maskValue & greenValue) != 0) flags |= WGPUColorWriteMask_Green;
+    if ((maskValue & blueValue) != 0)  flags |= WGPUColorWriteMask_Blue;
+    if ((maskValue & alphaValue) != 0) flags |= WGPUColorWriteMask_Alpha;
 
     return flags;
 }
@@ -373,10 +375,10 @@ inline WGPUFilterMode ToWGPUFilterMode(rhi::FilterMode mode) {
     }
 }
 
-inline WGPUMipmapFilterMode ToWGPUMipmapFilterMode(rhi::FilterMode mode) {
+inline WGPUMipmapFilterMode ToWGPUMipmapFilterMode(rhi::MipmapMode mode) {
     switch (mode) {
-        case rhi::FilterMode::Nearest: return WGPUMipmapFilterMode_Nearest;
-        case rhi::FilterMode::Linear:  return WGPUMipmapFilterMode_Linear;
+        case rhi::MipmapMode::Nearest: return WGPUMipmapFilterMode_Nearest;
+        case rhi::MipmapMode::Linear:  return WGPUMipmapFilterMode_Linear;
         default: throw std::runtime_error("Invalid mipmap filter mode");
     }
 }
@@ -409,105 +411,6 @@ inline WGPUVertexFormat ToWGPUVertexFormat(rhi::TextureFormat format) {
     }
 }
 
-// =============================================================================
-// Front Face & Cull Mode Conversions
-// =============================================================================
-
-inline WGPUFrontFace ToWGPUFrontFace(rhi::FrontFace face) {
-    switch (face) {
-        case rhi::FrontFace::CounterClockwise: return WGPUFrontFace_CCW;
-        case rhi::FrontFace::Clockwise:        return WGPUFrontFace_CW;
-        default: throw std::runtime_error("Invalid front face");
-    }
-}
-
-inline WGPUCullMode ToWGPUCullMode(rhi::CullMode mode) {
-    switch (mode) {
-        case rhi::CullMode::None:  return WGPUCullMode_None;
-        case rhi::CullMode::Front: return WGPUCullMode_Front;
-        case rhi::CullMode::Back:  return WGPUCullMode_Back;
-        default: throw std::runtime_error("Invalid cull mode");
-    }
-}
-
-// =============================================================================
-// Index Format Conversions
-// =============================================================================
-
-inline WGPUIndexFormat ToWGPUIndexFormat(rhi::IndexFormat format) {
-    switch (format) {
-        case rhi::IndexFormat::Uint16: return WGPUIndexFormat_Uint16;
-        case rhi::IndexFormat::Uint32: return WGPUIndexFormat_Uint32;
-        default: throw std::runtime_error("Invalid index format");
-    }
-}
-
-// =============================================================================
-// Blend Operation & Factor Conversions
-// =============================================================================
-
-inline WGPUBlendOperation ToWGPUBlendOperation(rhi::BlendOp op) {
-    switch (op) {
-        case rhi::BlendOp::Add:             return WGPUBlendOperation_Add;
-        case rhi::BlendOp::Subtract:        return WGPUBlendOperation_Subtract;
-        case rhi::BlendOp::ReverseSubtract: return WGPUBlendOperation_ReverseSubtract;
-        case rhi::BlendOp::Min:             return WGPUBlendOperation_Min;
-        case rhi::BlendOp::Max:             return WGPUBlendOperation_Max;
-        default: throw std::runtime_error("Invalid blend operation");
-    }
-}
-
-inline WGPUBlendFactor ToWGPUBlendFactor(rhi::BlendFactor factor) {
-    switch (factor) {
-        case rhi::BlendFactor::Zero:             return WGPUBlendFactor_Zero;
-        case rhi::BlendFactor::One:              return WGPUBlendFactor_One;
-        case rhi::BlendFactor::SrcColor:         return WGPUBlendFactor_Src;
-        case rhi::BlendFactor::OneMinusSrcColor: return WGPUBlendFactor_OneMinusSrc;
-        case rhi::BlendFactor::DstColor:         return WGPUBlendFactor_Dst;
-        case rhi::BlendFactor::OneMinusDstColor: return WGPUBlendFactor_OneMinusDst;
-        case rhi::BlendFactor::SrcAlpha:         return WGPUBlendFactor_SrcAlpha;
-        case rhi::BlendFactor::OneMinusSrcAlpha: return WGPUBlendFactor_OneMinusSrcAlpha;
-        case rhi::BlendFactor::DstAlpha:         return WGPUBlendFactor_DstAlpha;
-        case rhi::BlendFactor::OneMinusDstAlpha: return WGPUBlendFactor_OneMinusDstAlpha;
-        default: throw std::runtime_error("Invalid blend factor");
-    }
-}
-
-// =============================================================================
-// Color Write Mask Conversions
-// =============================================================================
-
-inline WGPUColorWriteMaskFlags ToWGPUColorWriteMask(rhi::ColorWriteMask mask) {
-    WGPUColorWriteMaskFlags wgpuMask = WGPUColorWriteMask_None;
-
-    if (hasFlag(mask, rhi::ColorWriteMask::Red))   wgpuMask |= WGPUColorWriteMask_Red;
-    if (hasFlag(mask, rhi::ColorWriteMask::Green)) wgpuMask |= WGPUColorWriteMask_Green;
-    if (hasFlag(mask, rhi::ColorWriteMask::Blue))  wgpuMask |= WGPUColorWriteMask_Blue;
-    if (hasFlag(mask, rhi::ColorWriteMask::Alpha)) wgpuMask |= WGPUColorWriteMask_Alpha;
-
-    return wgpuMask;
-}
-
-// =============================================================================
-// Load/Store Operation Conversions
-// =============================================================================
-
-inline WGPULoadOp ToWGPULoadOp(rhi::LoadOp op) {
-    switch (op) {
-        case rhi::LoadOp::Load:  return WGPULoadOp_Load;
-        case rhi::LoadOp::Clear: return WGPULoadOp_Clear;
-        case rhi::LoadOp::DontCare: return WGPULoadOp_Clear; // WebGPU doesn't have DontCare, use Clear
-        default: throw std::runtime_error("Invalid load operation");
-    }
-}
-
-inline WGPUStoreOp ToWGPUStoreOp(rhi::StoreOp op) {
-    switch (op) {
-        case rhi::StoreOp::Store: return WGPUStoreOp_Store;
-        case rhi::StoreOp::DontCare: return WGPUStoreOp_Discard;
-        default: throw std::runtime_error("Invalid store operation");
-    }
-}
 
 } // namespace WebGPU
 } // namespace RHI

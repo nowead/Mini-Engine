@@ -216,7 +216,7 @@ void WebGPURHIDevice::requestDevice() {
     deviceDesc.defaultQueue.label = "Default Queue";
 
     // Request features (none for now)
-    deviceDesc.requiredFeaturesCount = 0;
+    deviceDesc.requiredFeatureCount = 0;
     deviceDesc.requiredFeatures = nullptr;
 
     DeviceRequestData callbackData;
@@ -242,7 +242,10 @@ void WebGPURHIDevice::requestDevice() {
 
     // Set error callbacks
     wgpuDeviceSetUncapturedErrorCallback(m_device, onDeviceError, nullptr);
+#ifndef __EMSCRIPTEN__
+    // Note: Emscripten WebGPU doesn't have wgpuDeviceSetDeviceLostCallback
     wgpuDeviceSetDeviceLostCallback(m_device, onDeviceLost, nullptr);
+#endif
 
     // Get default queue
     m_queue = wgpuDeviceGetQueue(m_device);

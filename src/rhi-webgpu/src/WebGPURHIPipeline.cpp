@@ -114,7 +114,7 @@ WebGPURHIRenderPipeline::WebGPURHIRenderPipeline(WebGPURHIDevice* device,
 
     // Primitive state
     WGPUPrimitiveState primitiveState{};
-    primitiveState.topology = ToWGPUPrimitiveTopology(desc.primitive.topology);
+    primitiveState.topology = ToWGPUTopology(desc.primitive.topology);
     primitiveState.frontFace = ToWGPUFrontFace(desc.primitive.frontFace);
     primitiveState.cullMode = ToWGPUCullMode(desc.primitive.cullMode);
 
@@ -130,7 +130,7 @@ WebGPURHIRenderPipeline::WebGPURHIRenderPipeline(WebGPURHIDevice* device,
     if (desc.depthStencil) {
         depthStencilState.format = ToWGPUFormat(desc.depthStencil->format);
         depthStencilState.depthWriteEnabled = desc.depthStencil->depthWriteEnabled;
-        depthStencilState.depthCompare = ToWGPUCompareFunction(desc.depthStencil->depthCompare);
+        depthStencilState.depthCompare = ToWGPUCompareFunc(desc.depthStencil->depthCompare);
 
         // Stencil (simplified - full stencil state can be added if needed)
         depthStencilState.stencilFront.compare = WGPUCompareFunction_Always;
@@ -157,11 +157,11 @@ WebGPURHIRenderPipeline::WebGPURHIRenderPipeline(WebGPURHIDevice* device,
     for (const auto& target : desc.colorTargets) {
         WGPUBlendState blendState{};
         if (target.blend.blendEnabled) {
-            blendState.color.operation = ToWGPUBlendOperation(target.blend.colorBlendOp);
+            blendState.color.operation = ToWGPUBlendOp(target.blend.colorBlendOp);
             blendState.color.srcFactor = ToWGPUBlendFactor(target.blend.srcColorFactor);
             blendState.color.dstFactor = ToWGPUBlendFactor(target.blend.dstColorFactor);
 
-            blendState.alpha.operation = ToWGPUBlendOperation(target.blend.alphaBlendOp);
+            blendState.alpha.operation = ToWGPUBlendOp(target.blend.alphaBlendOp);
             blendState.alpha.srcFactor = ToWGPUBlendFactor(target.blend.srcAlphaFactor);
             blendState.alpha.dstFactor = ToWGPUBlendFactor(target.blend.dstAlphaFactor);
 

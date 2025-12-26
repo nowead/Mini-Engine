@@ -24,8 +24,9 @@ static void onQueueWorkDone(WGPUQueueWorkDoneStatus status, void* userdata) {
     data->done = true;
 }
 
-WebGPURHIFence::WebGPURHIFence(WebGPURHIDevice* device)
+WebGPURHIFence::WebGPURHIFence(WebGPURHIDevice* device, bool signaled)
     : m_device(device)
+    , m_signaled(signaled)
 {
 }
 

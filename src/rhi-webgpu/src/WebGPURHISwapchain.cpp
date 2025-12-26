@@ -39,7 +39,7 @@ WebGPURHISwapchain::WebGPURHISwapchain(WebGPURHIDevice* device, const SwapchainD
     WGPUSurfaceDescriptor surfaceDesc{};
     surfaceDesc.nextInChain = &canvasDesc.chain;
 
-    m_surface = wgpuInstanceCreateSurface(m_device->getWGPUInstance(), &surfaceDesc);
+    m_surface = wgpuInstanceCreateSurface(m_device->getInstance(), &surfaceDesc);
 #else
     // Native: Get surface from GLFW window
     WGPUSurfaceDescriptor surfaceDesc{};
@@ -65,7 +65,7 @@ WebGPURHISwapchain::WebGPURHISwapchain(WebGPURHIDevice* device, const SwapchainD
     surfaceDesc.nextInChain = &x11Desc.chain;
 #endif
 
-    m_surface = wgpuInstanceCreateSurface(m_device->getWGPUInstance(), &surfaceDesc);
+    m_surface = wgpuInstanceCreateSurface(m_device->getInstance(), &surfaceDesc);
 #endif
 
     if (!m_surface) {
@@ -116,13 +116,14 @@ RHITextureView* WebGPURHISwapchain::acquireNextImage(RHISemaphore* signalSemapho
     }
 
     // Wrap in RHI texture view (swapchain owns the view, don't release it)
-    m_currentTextureView = std::make_unique<WebGPURHITextureView>(
+    // Note: Using new instead of make_unique because constructor is private with friend access
+    m_currentTextureView.reset(new WebGPURHITextureView(
         m_device,
         textureView,
         m_format,
         rhi::TextureViewDimension::View2D,
         false // Don't own the view - swapchain manages it
-    );
+    ));
 
     return m_currentTextureView.get();
 }

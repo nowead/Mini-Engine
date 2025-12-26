@@ -14,67 +14,75 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 option(RHI_BACKEND_VULKAN "Enable Vulkan RHI backend" ON)
 option(RHI_BACKEND_WEBGPU "Enable WebGPU RHI backend" OFF)
 
-message(STATUS "--- RHI Backend Configuration ---")
-message(STATUS "RHI_BACKEND_VULKAN: ${RHI_BACKEND_VULKAN}")
-message(STATUS "RHI_BACKEND_WEBGPU: ${RHI_BACKEND_WEBGPU}")
-message(STATUS "---------------------------------")
-
-find_package(glfw3 CONFIG REQUIRED)
-find_package(glm CONFIG REQUIRED)
-find_package(Vulkan REQUIRED)
-find_package(VulkanMemoryAllocator CONFIG REQUIRED)
-find_package(Stb REQUIRED)
-find_package(tinyobjloader REQUIRED)
-find_package(imgui CONFIG REQUIRED)
-
-message(STATUS "--- Vulkan Debug Info ---")
-message(STATUS "Vulkan_FOUND: ${Vulkan_FOUND}")
-message(STATUS "VULKAN_INCLUDE_DIR: ${VULKAN_INCLUDE_DIR}")
-message(STATUS "VULKAN_LIBRARY: ${VULKAN_LIBRARY}")
-message(STATUS "VULKAN_SDK (env var from CMake): $ENV{VULKAN_SDK}")
-message(STATUS "-------------------------")
-
-# =============================================================================
-# set up Vulkan C++ module (must be before RHI modules)
-add_library(VulkanCppModule)
-add_library(Vulkan::cppm ALIAS VulkanCppModule)
-
-target_compile_definitions(VulkanCppModule PUBLIC
-        VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
-        VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1
-)
-
-# Suppress Vulkan C++ module warnings
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "GNU")
-    target_compile_options(VulkanCppModule PRIVATE -Wno-missing-declarations)
-endif()
-target_include_directories(VulkanCppModule
-        PRIVATE
-        "${Vulkan_INCLUDE_DIR}"
-)
-target_link_libraries(VulkanCppModule
-        PUBLIC
-        Vulkan::Vulkan
-)
-
-set_target_properties(VulkanCppModule PROPERTIES
-    CXX_STANDARD 20
-    CXX_SCAN_FOR_MODULES ON
-)
-
-target_sources(VulkanCppModule
-        PUBLIC
-        FILE_SET cxx_modules TYPE CXX_MODULES
-        BASE_DIRS
-        "${Vulkan_INCLUDE_DIR}"
-        FILES
-        "${Vulkan_INCLUDE_DIR}/vulkan/vulkan.cppm"
-)
-
 # Emscripten: Auto-enable WebGPU, disable Vulkan
 if(EMSCRIPTEN)
     set(RHI_BACKEND_WEBGPU ON CACHE BOOL "" FORCE)
     set(RHI_BACKEND_VULKAN OFF CACHE BOOL "" FORCE)
+    message(STATUS "Emscripten detected - forcing WebGPU backend")
+endif()
+
+message(STATUS "--- RHI Backend Configuration ---")
+message(STATUS "RHI_BACKEND_VULKAN: ${RHI_BACKEND_VULKAN}")
+message(STATUS "RHI_BACKEND_WEBGPU: ${RHI_BACKEND_WEBGPU}")
+message(STATUS "EMSCRIPTEN: ${EMSCRIPTEN}")
+message(STATUS "---------------------------------")
+
+# Dependencies (skip vcpkg for Emscripten - it uses its own ports)
+if(NOT EMSCRIPTEN)
+    find_package(glfw3 CONFIG REQUIRED)
+    find_package(glm CONFIG REQUIRED)
+    find_package(Vulkan REQUIRED)
+    find_package(VulkanMemoryAllocator CONFIG REQUIRED)
+    find_package(Stb REQUIRED)
+    find_package(tinyobjloader REQUIRED)
+    find_package(imgui CONFIG REQUIRED)
+endif()
+
+# =============================================================================
+# Vulkan C++ module setup (Native builds only)
+# =============================================================================
+if(NOT EMSCRIPTEN)
+    message(STATUS "--- Vulkan Debug Info ---")
+    message(STATUS "Vulkan_FOUND: ${Vulkan_FOUND}")
+    message(STATUS "VULKAN_INCLUDE_DIR: ${VULKAN_INCLUDE_DIR}")
+    message(STATUS "VULKAN_LIBRARY: ${VULKAN_LIBRARY}")
+    message(STATUS "VULKAN_SDK (env var from CMake): $ENV{VULKAN_SDK}")
+    message(STATUS "-------------------------")
+
+    add_library(VulkanCppModule)
+    add_library(Vulkan::cppm ALIAS VulkanCppModule)
+
+    target_compile_definitions(VulkanCppModule PUBLIC
+            VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
+            VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1
+    )
+
+    # Suppress Vulkan C++ module warnings
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+        target_compile_options(VulkanCppModule PRIVATE -Wno-missing-declarations)
+    endif()
+    target_include_directories(VulkanCppModule
+            PRIVATE
+            "${Vulkan_INCLUDE_DIR}"
+    )
+    target_link_libraries(VulkanCppModule
+            PUBLIC
+            Vulkan::Vulkan
+    )
+
+    set_target_properties(VulkanCppModule PROPERTIES
+        CXX_STANDARD 20
+        CXX_SCAN_FOR_MODULES ON
+    )
+
+    target_sources(VulkanCppModule
+            PUBLIC
+            FILE_SET cxx_modules TYPE CXX_MODULES
+            BASE_DIRS
+            "${Vulkan_INCLUDE_DIR}"
+            FILES
+            "${Vulkan_INCLUDE_DIR}/vulkan/vulkan.cppm"
+    )
 endif()
 
 # Find WebGPU dependencies (native builds only)
@@ -102,6 +110,8 @@ if(RHI_BACKEND_WEBGPU)
     target_link_libraries(rhi_factory PUBLIC rhi::webgpu)
 endif()
 
+# Main application (skip for Emscripten - it uses Vulkan-specific code)
+if(NOT EMSCRIPTEN)
 add_executable(vulkanGLFW
     src/main.cpp
     # Application layer
@@ -252,6 +262,7 @@ add_slang_shader_target(foo SOURCES ${SHADER_SLANG_SOURCES})
 # 실제 프로그램 실행 파일 타겟인 'bar'가 'foo' 타겟에 의존하도록 설정
 # 이렇게 하면 'bar'를 빌드하기 전에 항상 셰이더('foo')가 먼저 컴파일됩니다.
 add_dependencies(vulkanGLFW foo)
+endif() # NOT EMSCRIPTEN
 
 # =============================================================================
 # Phase 3 Smoke Test
@@ -264,19 +275,38 @@ add_executable(rhi_smoke_test
 )
 
 target_include_directories(rhi_smoke_test BEFORE PRIVATE
-    ${Vulkan_INCLUDE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-target_link_libraries(rhi_smoke_test PRIVATE
-    glfw
-    glm::glm
-    Vulkan::Vulkan
-    GPUOpen::VulkanMemoryAllocator
-    Vulkan::cppm
-    rhi::factory
-    rhi::vulkan
-)
+if(NOT EMSCRIPTEN)
+    target_include_directories(rhi_smoke_test BEFORE PRIVATE
+        ${Vulkan_INCLUDE_DIR}
+    )
+    target_link_libraries(rhi_smoke_test PRIVATE
+        glfw
+        glm::glm
+        Vulkan::Vulkan
+        GPUOpen::VulkanMemoryAllocator
+        Vulkan::cppm
+        rhi::factory
+        rhi::vulkan
+    )
+else()
+    target_link_libraries(rhi_smoke_test PRIVATE
+        rhi::factory
+    )
+    # Emscripten-specific settings
+    set_target_properties(rhi_smoke_test PROPERTIES
+        SUFFIX ".html"
+    )
+    target_link_options(rhi_smoke_test PRIVATE
+        "SHELL:-s USE_WEBGPU=1"
+        "SHELL:-s USE_GLFW=3"
+        "SHELL:-s ALLOW_MEMORY_GROWTH=1"
+        "SHELL:-s WASM=1"
+        "SHELL:--shell-file ${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm_shell.html"
+    )
+endif()
 
 target_compile_definitions(rhi_smoke_test PRIVATE
     IMGUI_IMPL_VULKAN_NO_PROTOTYPES=0

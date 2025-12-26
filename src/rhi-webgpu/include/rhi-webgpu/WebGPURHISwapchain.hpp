@@ -1,6 +1,7 @@
 #pragma once
 
 #include "WebGPUCommon.hpp"
+#include "WebGPURHITexture.hpp"
 #include <memory>
 #include <vector>
 
@@ -9,7 +10,6 @@ namespace WebGPU {
 
 // Forward declarations
 class WebGPURHIDevice;
-class WebGPURHITextureView;
 
 // Bring RHI types into scope
 using rhi::RHISwapchain;

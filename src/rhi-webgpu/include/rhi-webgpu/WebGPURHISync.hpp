@@ -20,7 +20,7 @@ using rhi::RHISemaphore;
  */
 class WebGPURHIFence : public RHIFence {
 public:
-    WebGPURHIFence(WebGPURHIDevice* device);
+    WebGPURHIFence(WebGPURHIDevice* device, bool signaled = false);
     ~WebGPURHIFence() override;
 
     // RHIFence interface

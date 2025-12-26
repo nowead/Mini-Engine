@@ -231,10 +231,10 @@ std::unique_ptr<RHIRenderPassEncoder> WebGPURHICommandEncoder::beginRenderPass(c
         wgpuAttachment.storeOp = ToWGPUStoreOp(attachment.storeOp);
 
         // Clear color
-        wgpuAttachment.clearValue.r = attachment.clearValue.r;
-        wgpuAttachment.clearValue.g = attachment.clearValue.g;
-        wgpuAttachment.clearValue.b = attachment.clearValue.b;
-        wgpuAttachment.clearValue.a = attachment.clearValue.a;
+        wgpuAttachment.clearValue.r = attachment.clearValue.float32[0];
+        wgpuAttachment.clearValue.g = attachment.clearValue.float32[1];
+        wgpuAttachment.clearValue.b = attachment.clearValue.float32[2];
+        wgpuAttachment.clearValue.a = attachment.clearValue.float32[3];
 
         colorAttachments.push_back(wgpuAttachment);
     }
@@ -243,18 +243,18 @@ std::unique_ptr<RHIRenderPassEncoder> WebGPURHICommandEncoder::beginRenderPass(c
     WGPURenderPassDepthStencilAttachment depthStencilAttachment{};
     WGPURenderPassDepthStencilAttachment* pDepthStencil = nullptr;
 
-    if (desc.depthStencilAttachment.view) {
-        auto* depthView = static_cast<WebGPURHITextureView*>(desc.depthStencilAttachment.view);
+    if (desc.depthStencilAttachment && desc.depthStencilAttachment->view) {
+        auto* depthView = static_cast<WebGPURHITextureView*>(desc.depthStencilAttachment->view);
         depthStencilAttachment.view = depthView->getWGPUTextureView();
 
-        depthStencilAttachment.depthLoadOp = ToWGPULoadOp(desc.depthStencilAttachment.depthLoadOp);
-        depthStencilAttachment.depthStoreOp = ToWGPUStoreOp(desc.depthStencilAttachment.depthStoreOp);
-        depthStencilAttachment.depthClearValue = desc.depthStencilAttachment.depthClearValue;
+        depthStencilAttachment.depthLoadOp = ToWGPULoadOp(desc.depthStencilAttachment->depthLoadOp);
+        depthStencilAttachment.depthStoreOp = ToWGPUStoreOp(desc.depthStencilAttachment->depthStoreOp);
+        depthStencilAttachment.depthClearValue = desc.depthStencilAttachment->depthClearValue;
         depthStencilAttachment.depthReadOnly = false;
 
-        depthStencilAttachment.stencilLoadOp = ToWGPULoadOp(desc.depthStencilAttachment.stencilLoadOp);
-        depthStencilAttachment.stencilStoreOp = ToWGPUStoreOp(desc.depthStencilAttachment.stencilStoreOp);
-        depthStencilAttachment.stencilClearValue = desc.depthStencilAttachment.stencilClearValue;
+        depthStencilAttachment.stencilLoadOp = ToWGPULoadOp(desc.depthStencilAttachment->stencilLoadOp);
+        depthStencilAttachment.stencilStoreOp = ToWGPUStoreOp(desc.depthStencilAttachment->stencilStoreOp);
+        depthStencilAttachment.stencilClearValue = desc.depthStencilAttachment->stencilClearValue;
         depthStencilAttachment.stencilReadOnly = false;
 
         pDepthStencil = &depthStencilAttachment;

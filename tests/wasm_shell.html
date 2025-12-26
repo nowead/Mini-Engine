@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mini-Engine WebGPU RHI Smoke Test</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #1a1a1a;
+            color: #ffffff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }
+
+        .container {
+            text-align: center;
+            max-width: 1200px;
+            padding: 20px;
+        }
+
+        h1 {
+            color: #4a9eff;
+            margin-bottom: 10px;
+        }
+
+        .subtitle {
+            color: #888;
+            margin-bottom: 30px;
+        }
+
+        #canvas {
+            border: 2px solid #4a9eff;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(74, 158, 255, 0.3);
+            display: block;
+            margin: 0 auto;
+            max-width: 100%;
+        }
+
+        #status {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #2a2a2a;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            margin: 20px auto;
+            border: 5px solid #2a2a2a;
+            border-top: 5px solid #4a9eff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .info {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #2a2a2a;
+            border-radius: 8px;
+            text-align: left;
+        }
+
+        .info h3 {
+            color: #4a9eff;
+            margin-top: 0;
+        }
+
+        .info ul {
+            margin: 10px 0;
+        }
+
+        .info li {
+            margin: 5px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Mini-Engine WebGPU Backend</h1>
+        <p class="subtitle">RHI (Render Hardware Interface) Smoke Test</p>
+
+        <canvas id="canvas" width="800" height="600"></canvas>
+
+        <div id="status">
+            <div class="spinner"></div>
+            <div id="statusText">Loading WebAssembly module...</div>
+        </div>
+
+        <div class="info">
+            <h3>About This Test</h3>
+            <ul>
+                <li><strong>Backend:</strong> WebGPU (Emscripten)</li>
+                <li><strong>RHI Version:</strong> 1.0</li>
+                <li><strong>Target:</strong> rhi_smoke_test</li>
+                <li><strong>Build:</strong> WebAssembly</li>
+            </ul>
+            <p><strong>Note:</strong> This test requires a WebGPU-capable browser (Chrome 113+, Edge 113+, or Firefox with WebGPU enabled).</p>
+        </div>
+    </div>
+
+    <script type="text/javascript">
+        var statusElement = document.getElementById('status');
+        var statusText = document.getElementById('statusText');
+        var canvas = document.getElementById('canvas');
+
+        var Module = {
+            canvas: canvas,
+
+            preRun: [],
+            postRun: [],
+
+            print: function(text) {
+                console.log('[stdout] ' + text);
+                if (statusText) {
+                    statusText.innerHTML = text;
+                }
+            },
+
+            printErr: function(text) {
+                console.error('[stderr] ' + text);
+                if (statusText) {
+                    statusText.innerHTML = '<span style="color: #ff4a4a;">Error: ' + text + '</span>';
+                }
+            },
+
+            setStatus: function(text) {
+                if (!Module.setStatus.last) Module.setStatus.last = { time: Date.now(), text: '' };
+                if (text === Module.setStatus.last.text) return;
+
+                var m = text.match(/([^(]+)\((\d+(\.\d+)?)\/(\d+)\)/);
+                var now = Date.now();
+
+                if (m && now - Module.setStatus.last.time < 30) return;
+                Module.setStatus.last.time = now;
+                Module.setStatus.last.text = text;
+
+                if (m) {
+                    text = m[1];
+                }
+
+                console.log('[status] ' + text);
+                statusText.innerHTML = text;
+
+                if (!text) {
+                    statusElement.style.display = 'none';
+                } else {
+                    statusElement.style.display = 'block';
+                }
+            },
+
+            totalDependencies: 0,
+
+            monitorRunDependencies: function(left) {
+                this.totalDependencies = Math.max(this.totalDependencies, left);
+                Module.setStatus(left ? 'Preparing... (' + (this.totalDependencies-left) + '/' + this.totalDependencies + ')' : 'All downloads complete.');
+            }
+        };
+
+        Module.setStatus('Downloading...');
+
+        window.onerror = function(msg, url, lineNo, columnNo, error) {
+            var message = [
+                'Message: ' + msg,
+                'URL: ' + url,
+                'Line: ' + lineNo,
+                'Column: ' + columnNo,
+                'Error object: ' + JSON.stringify(error)
+            ].join(' - ');
+
+            Module.setStatus('Exception: ' + msg);
+            console.error(message);
+            return false;
+        };
+    </script>
+
+    {{{ SCRIPT }}}
+</body>
+</html>

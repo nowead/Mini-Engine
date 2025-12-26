@@ -34,7 +34,7 @@ WebGPURHISampler::WebGPURHISampler(WebGPURHIDevice* device, const SamplerDesc& d
 
     // Comparison (for shadow sampling)
     if (desc.compareEnable) {
-        samplerDesc.compare = ToWGPUCompareFunction(desc.compareOp);
+        samplerDesc.compare = ToWGPUCompareFunc(desc.compareOp);
     } else {
         samplerDesc.compare = WGPUCompareFunction_Undefined;
     }
