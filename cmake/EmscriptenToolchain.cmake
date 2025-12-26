@@ -1,0 +1,17 @@
+# Emscripten Toolchain for WebAssembly Builds
+
+set(CMAKE_SYSTEM_NAME Emscripten)
+set(CMAKE_C_COMPILER emcc)
+set(CMAKE_CXX_COMPILER em++)
+
+# WebGPU and GLFW support
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -s USE_WEBGPU=1")
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -s USE_GLFW=3")
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -s ALLOW_MEMORY_GROWTH=1")
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -s WASM=1")
+
+# Optimization
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
+
+# Disable C++20 module scanning for Emscripten compatibility
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF CACHE BOOL "" FORCE)

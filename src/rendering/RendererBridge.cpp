@@ -33,9 +33,17 @@ RendererBridge::~RendererBridge() {
 // ============================================================================
 
 void RendererBridge::initializeRHI(GLFWwindow* window, bool enableValidation) {
+    // Determine backend (Emscripten auto-selects WebGPU)
+    rhi::RHIBackendType backend;
+#ifdef __EMSCRIPTEN__
+    backend = rhi::RHIBackendType::WebGPU;
+#else
+    backend = rhi::RHIFactory::getDefaultBackend();
+#endif
+
     // Create device using factory
     auto createInfo = rhi::DeviceCreateInfo{}
-        .setBackend(rhi::RHIFactory::getDefaultBackend())
+        .setBackend(backend)
         .setValidation(enableValidation)
         .setWindow(window)
         .setAppName("Mini-Engine");

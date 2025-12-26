@@ -6,7 +6,7 @@
 #endif
 
 #ifdef RHI_BACKEND_WEBGPU
-// #include <rhi-webgpu/WebGPURHIDevice.hpp>  // Future
+#include <rhi-webgpu/WebGPURHIDevice.hpp>
 #endif
 
 #include <stdexcept>
@@ -38,8 +38,11 @@ std::unique_ptr<RHIDevice> RHIFactory::createDevice(const DeviceCreateInfo& info
 
 #ifdef RHI_BACKEND_WEBGPU
         case RHIBackendType::WebGPU: {
-            // Future: WebGPU implementation
-            throw std::runtime_error("WebGPU backend not yet implemented");
+            auto* window = static_cast<GLFWwindow*>(info.windowHandle);
+            return std::make_unique<RHI::WebGPU::WebGPURHIDevice>(
+                window,
+                info.enableValidation
+            );
         }
 #endif
 

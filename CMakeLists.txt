@@ -71,13 +71,35 @@ target_sources(VulkanCppModule
         "${Vulkan_INCLUDE_DIR}/vulkan/vulkan.cppm"
 )
 
+# Emscripten: Auto-enable WebGPU, disable Vulkan
+if(EMSCRIPTEN)
+    set(RHI_BACKEND_WEBGPU ON CACHE BOOL "" FORCE)
+    set(RHI_BACKEND_VULKAN OFF CACHE BOOL "" FORCE)
+endif()
+
+# Find WebGPU dependencies (native builds only)
+if(RHI_BACKEND_WEBGPU AND NOT EMSCRIPTEN)
+    find_package(dawn CONFIG REQUIRED)
+endif()
+
 # Add RHI modules
 add_subdirectory(src/rhi)
-add_subdirectory(src/rhi-vulkan)
+
+if(RHI_BACKEND_VULKAN)
+    add_subdirectory(src/rhi-vulkan)
+endif()
+
+if(RHI_BACKEND_WEBGPU)
+    add_subdirectory(src/rhi-webgpu)
+endif()
 
 # Link rhi_factory to backend implementations (after both are defined)
 if(RHI_BACKEND_VULKAN)
     target_link_libraries(rhi_factory PUBLIC rhi::vulkan)
+endif()
+
+if(RHI_BACKEND_WEBGPU)
+    target_link_libraries(rhi_factory PUBLIC rhi::webgpu)
 endif()
 
 add_executable(vulkanGLFW
