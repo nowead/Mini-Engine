@@ -57,24 +57,35 @@ Mini-Engine is a modern multi-backend rendering engine built from scratch, evolv
 | **RHI Architecture** | **COMPLETED** | Graphics API abstraction layer |
 | **Vulkan Backend** | **COMPLETED** | Full RHI implementation (Desktop) |
 | **WebGPU Backend** | **COMPLETED** | Full RHI implementation (Web only) |
-| **Legacy Code Cleanup** | **COMPLETED** | 100% RHI-native (Phase 8) |
+| **Legacy Code Cleanup** | **COMPLETED** | 100% RHI-native |
 | FDF Wireframe | Completed | Heightmap-based wireframe rendering |
 | OBJ Model Loading | Completed | 3D model loading with texture mapping |
 | ImGui UI | Completed | Real-time parameter adjustment UI |
 | Camera Controls | Completed | Mouse/keyboard camera manipulation |
 | Ray Tracing | Planned | Using VK_KHR_ray_tracing_pipeline |
 
-**Latest Achievement (2025-12-26)**: **WebGPU Backend Complete** - Web deployment support via Emscripten + Browser WebGPU API!
+**Latest Achievements**:
+- **WebGPU Backend Complete**: Full web deployment support via Emscripten + Browser WebGPU API
+- **Automatic Build System**: One-click Emscripten setup for simplified web builds
 
 ---
 
 ## Features
 
-### Rendering Pipeline
+### Multi-Backend Rendering Pipeline
 
+**Vulkan Backend (Desktop)**:
 - Vulkan 1.3-based graphics pipeline
 - Swapchain management and frame synchronization (Semaphore, Fence)
-- Slang shader compilation support
+- Slang shader compilation to SPIR-V
+- VMA (Vulkan Memory Allocator) integration
+
+**WebGPU Backend (Web)**:
+- Browser WebGPU API integration
+- Emscripten WebAssembly compilation
+- Runtime SPIR-V to WGSL shader conversion
+- Canvas-based swapchain for web rendering
+- Complete RHI parity with Vulkan backend
 
 ### Resource Management
 
@@ -150,7 +161,7 @@ Mini-Engine is a modern multi-backend rendering engine built from scratch, evolv
 │  │  - Complete implementation (15 RHI classes)                │  │
 │  └────────────────────────────────────────────────────────────┘  │
 │  ┌────────────────────────────────────────────────────────────┐  │
-│  │ [COMPLETE] WebGPU Backend (rhi-webgpu/) - Web Only          │  │
+│  │ [COMPLETE] WebGPU Backend (rhi-webgpu/) - Web Only         │  │
 │  │  - WebGPURHIDevice, WebGPURHISwapchain, etc.               │  │
 │  │  - Emscripten + Browser WebGPU API                         │  │
 │  │  - SPIR-V → WGSL shader conversion                         │  │
@@ -212,7 +223,13 @@ src/
 │   ├── include/rhi-vulkan/
 │   │   └── VulkanRHI*.hpp  # Vulkan implementations
 │   └── src/
-│       └── VulkanRHI*.cpp  # 12 Vulkan RHI classes
+│       └── VulkanRHI*.cpp  # 15 Vulkan RHI classes
+│
+├── rhi-webgpu/             # WebGPU Backend (Layer 4)
+│   ├── include/rhi-webgpu/
+│   │   └── WebGPURHI*.hpp  # WebGPU implementations
+│   └── src/
+│       └── WebGPURHI*.cpp  # 15 WebGPU RHI classes
 │
 ├── rendering/              # High-Level Rendering (Layer 2)
 │   ├── Renderer.cpp/hpp        # Orchestrates rendering (API-agnostic)
@@ -241,6 +258,12 @@ src/
     ├── Vertex.hpp
     ├── VulkanCommon.hpp
     └── FileUtils.hpp
+
+scripts/
+└── setup_emscripten.sh     # Automatic Emscripten SDK installer
+
+tests/
+└── wasm_shell.html         # HTML template for WASM application
 ```
 
 **Migration Status**:
@@ -250,7 +273,12 @@ src/
   - Deleted: VulkanBuffer, VulkanImage, VulkanPipeline, VulkanSwapchain, SyncManager
   - 100% RHI-native rendering
   - Zero Vulkan validation errors
-- [PLANNED] **Phase 9+**: WebGPU backend, VulkanDevice removal
+- [COMPLETE] **Phase 9**: WebGPU backend implementation complete
+  - 15 WebGPU RHI classes implemented
+  - Full web deployment support via Emscripten
+  - Automatic build system with one-click Emscripten setup
+  - Complete architectural documentation
+- [PLANNED] **Phase 10+**: VulkanDevice removal, additional backend optimizations
 
 ---
 
@@ -285,18 +313,23 @@ make build
 ### Web Build (WebGPU + WebAssembly)
 
 ```bash
-# One-time setup: Install Emscripten SDK
+# One-time setup: Automatic Emscripten SDK installation
 make setup-emscripten
+# OR manually run: ./scripts/setup_emscripten.sh
 
 # Build for web
 make wasm
 
-# Serve locally and test
+# Serve locally and test in browser
 make serve-wasm
-# Open http://localhost:8000 in your browser
+# Open http://localhost:8000 in Chrome 113+ or Edge 113+
 ```
 
-**Note**: Desktop development doesn't need Emscripten. Only install it if you need web deployment.
+**Important Notes**:
+- **Desktop development doesn't need Emscripten** - Only install for web deployment
+- **Browser Requirements**: Chrome 113+, Edge 113+, or other WebGPU-compatible browsers
+- **Automatic Setup**: `setup_emscripten.sh` installs Emscripten SDK 3.1.71 to `~/emsdk`
+- **Platform Separation**: Desktop uses Vulkan backend, Web uses WebGPU backend
 
 ### Controls
 
@@ -361,19 +394,47 @@ make setup-emscripten  # Auto-installs Emscripten SDK
 
 ## Development
 
+### Build System (Makefile)
+
+The project includes a comprehensive Makefile for both desktop and web builds:
+
+```bash
+# Desktop builds
+make build              # Build desktop version (Vulkan)
+make clean              # Clean build artifacts
+
+# Web builds
+make setup-emscripten   # One-click Emscripten SDK setup
+make wasm               # Build WebAssembly version
+make serve-wasm         # Serve WASM locally (port 8000)
+make clean-wasm         # Clean WASM build artifacts
+
+# Utilities
+make help               # Show all available targets
+```
+
+**Automatic Emscripten Setup**:
+- `make setup-emscripten` runs `scripts/setup_emscripten.sh`
+- Automatically installs Emscripten SDK 3.1.71 to `~/emsdk`
+- Idempotent: Safe to run multiple times
+- Enhanced error messages guide users through setup
+
 ### Shader Compilation
 
 ```bash
-# Compile Slang shaders
+# Compile Slang shaders (Desktop - SPIR-V)
 slangc shaders/shader.slang -o shaders/slang.spv -target spirv
 slangc shaders/fdf.slang -o shaders/fdf.spv -target spirv
+
+# Note: WebGPU uses runtime SPIR-V → WGSL conversion
 ```
 
 ### Code Style
 
 - C++20 Modern C++ style
 - RAII-based resource management
-- Using `vk::raii::*` Vulkan C++ wrappers
+- Using `vk::raii::*` Vulkan C++ wrappers for Vulkan backend
+- Platform-specific implementations isolated in backend folders
 
 ---
 
