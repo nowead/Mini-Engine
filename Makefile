@@ -206,7 +206,7 @@ configure-wasm: check-emscripten
 	@if [ ! -f $(WASM_BUILD_DIR)/CMakeCache.txt ]; then \
 		echo "$(COLOR_YELLOW)Configuring WebAssembly build...$(COLOR_RESET)"; \
 		mkdir -p $(WASM_BUILD_DIR); \
-		bash -c "source $(EMSCRIPTEN_ENV) && cd $(WASM_BUILD_DIR) && emcmake cmake .. \
+		bash -c "export PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin && source $(EMSCRIPTEN_ENV) && cd $(WASM_BUILD_DIR) && emcmake cmake .. \
 			-DCMAKE_TOOLCHAIN_FILE=../cmake/EmscriptenToolchain.cmake \
 			-DCMAKE_BUILD_TYPE=Release"; \
 		echo "$(COLOR_GREEN)WASM configuration complete!$(COLOR_RESET)"; \
@@ -217,7 +217,11 @@ configure-wasm: check-emscripten
 # Build WASM
 build-wasm: configure-wasm
 	@echo "$(COLOR_YELLOW)Building WebAssembly version...$(COLOR_RESET)"
-	@bash -c "source $(EMSCRIPTEN_ENV) && cd $(WASM_BUILD_DIR) && emmake make -j$$(nproc)"
+ifeq ($(DETECTED_OS),macOS)
+	@bash -c "export PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin && source $(EMSCRIPTEN_ENV) && cd $(WASM_BUILD_DIR) && emmake make -j$$(sysctl -n hw.ncpu)"
+else
+	@bash -c "export PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin && source $(EMSCRIPTEN_ENV) && cd $(WASM_BUILD_DIR) && emmake make -j$$(nproc)"
+endif
 	@echo "$(COLOR_GREEN)✅ WASM build complete!$(COLOR_RESET)"
 	@echo ""
 	@echo "$(COLOR_BLUE)Build artifacts:$(COLOR_RESET)"
@@ -228,7 +232,11 @@ build-wasm: configure-wasm
 # Build WASM without reconfiguring
 build-wasm-only: check-emscripten
 	@echo "$(COLOR_YELLOW)Building WebAssembly (no reconfigure)...$(COLOR_RESET)"
-	@bash -c "source $(EMSCRIPTEN_ENV) && cd $(WASM_BUILD_DIR) && emmake make -j$$(nproc)"
+ifeq ($(DETECTED_OS),macOS)
+	@bash -c "export PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin && source $(EMSCRIPTEN_ENV) && cd $(WASM_BUILD_DIR) && emmake make -j$$(sysctl -n hw.ncpu)"
+else
+	@bash -c "export PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin && source $(EMSCRIPTEN_ENV) && cd $(WASM_BUILD_DIR) && emmake make -j$$(nproc)"
+endif
 	@echo "$(COLOR_GREEN)WASM build complete!$(COLOR_RESET)"
 
 # Full WASM build (alias for build-wasm)

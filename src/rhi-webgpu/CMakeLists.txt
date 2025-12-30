@@ -41,6 +41,12 @@ else()
         PUBLIC
             rhi::interface
     )
+    # Optimize for size in WASM builds
+    target_compile_options(rhi_webgpu PRIVATE
+        -Oz
+        -g0
+        -flto
+    )
 endif()
 
 target_compile_features(rhi_webgpu PUBLIC cxx_std_20)

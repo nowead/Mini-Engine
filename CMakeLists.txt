@@ -4,7 +4,13 @@ project(vulkanGLFW CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_SCAN_FOR_MODULES ON)
+
+# Disable C++ module scanning for Emscripten (Unix Makefiles doesn't support it)
+if(EMSCRIPTEN)
+    set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+else()
+    set(CMAKE_CXX_SCAN_FOR_MODULES ON)
+endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 
@@ -304,7 +310,19 @@ else()
         "SHELL:-s USE_GLFW=3"
         "SHELL:-s ALLOW_MEMORY_GROWTH=1"
         "SHELL:-s WASM=1"
+        "SHELL:-s INITIAL_MEMORY=134217728"
+        "SHELL:-s MAXIMUM_MEMORY=4294967296"
+        "SHELL:-s STACK_SIZE=16777216"
+        "SHELL:-Oz"
+        "SHELL:-s ERROR_ON_UNDEFINED_SYMBOLS=0"
+        "SHELL:-flto"
         "SHELL:--shell-file ${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm_shell.html"
+    )
+    # Optimize compile flags for WASM - use Oz for maximum size optimization
+    target_compile_options(rhi_smoke_test PRIVATE
+        -Oz
+        -g0
+        -flto
     )
 endif()
 
