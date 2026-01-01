@@ -337,3 +337,73 @@ endif()
 if(RHI_BACKEND_WEBGPU)
     target_compile_definitions(rhi_smoke_test PRIVATE RHI_BACKEND_WEBGPU=1)
 endif()
+
+# =============================================================================
+# Instancing Test (Phase 1.1 Demo)
+# =============================================================================
+add_executable(instancing_test
+    tests/instancing_test_main.cpp
+    src/examples/InstancingTest.cpp
+    src/examples/InstancingTest.hpp
+    # Renderer Bridge
+    src/rendering/RendererBridge.hpp
+    src/rendering/RendererBridge.cpp
+)
+
+target_include_directories(instancing_test BEFORE PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+if(NOT EMSCRIPTEN)
+    target_include_directories(instancing_test BEFORE PRIVATE
+        ${Vulkan_INCLUDE_DIR}
+    )
+    target_link_libraries(instancing_test PRIVATE
+        glfw
+        glm::glm
+        Vulkan::Vulkan
+        GPUOpen::VulkanMemoryAllocator
+        Vulkan::cppm
+        rhi::factory
+        rhi::vulkan
+    )
+else()
+    target_link_libraries(instancing_test PRIVATE
+        rhi::factory
+    )
+    # Emscripten-specific settings
+    set_target_properties(instancing_test PROPERTIES
+        SUFFIX ".html"
+    )
+    target_link_options(instancing_test PRIVATE
+        "SHELL:-s USE_WEBGPU=1"
+        "SHELL:-s USE_GLFW=3"
+        "SHELL:-s ALLOW_MEMORY_GROWTH=1"
+        "SHELL:-s WASM=1"
+        "SHELL:-s INITIAL_MEMORY=134217728"
+        "SHELL:-s MAXIMUM_MEMORY=4294967296"
+        "SHELL:-s STACK_SIZE=16777216"
+        "SHELL:-Oz"
+        "SHELL:-s ERROR_ON_UNDEFINED_SYMBOLS=0"
+        "SHELL:-flto"
+        "SHELL:--shell-file ${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm_shell.html"
+    )
+    # Optimize compile flags for WASM
+    target_compile_options(instancing_test PRIVATE
+        -Oz
+        -g0
+        -flto
+    )
+endif()
+
+target_compile_definitions(instancing_test PRIVATE
+    IMGUI_IMPL_VULKAN_NO_PROTOTYPES=0
+)
+
+if(RHI_BACKEND_VULKAN)
+    target_compile_definitions(instancing_test PRIVATE RHI_BACKEND_VULKAN=1)
+endif()
+
+if(RHI_BACKEND_WEBGPU)
+    target_compile_definitions(instancing_test PRIVATE RHI_BACKEND_WEBGPU=1)
+endif()

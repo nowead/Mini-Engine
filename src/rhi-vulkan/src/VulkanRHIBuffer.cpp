@@ -22,10 +22,11 @@ VulkanRHIBuffer::VulkanRHIBuffer(VulkanRHIDevice* device, const BufferDesc& desc
     // Determine VMA usage based on buffer usage
     VmaAllocationCreateInfo allocInfo{};
 
-    // If buffer needs to be mapped (Uniform, MapRead, MapWrite), use CPU-visible memory
+    // If buffer needs to be mapped (Uniform, MapRead, MapWrite, CopyDst), use CPU-visible memory
     if (hasFlag(desc.usage, BufferUsage::Uniform) ||
         hasFlag(desc.usage, BufferUsage::MapRead) ||
-        hasFlag(desc.usage, BufferUsage::MapWrite)) {
+        hasFlag(desc.usage, BufferUsage::MapWrite) ||
+        hasFlag(desc.usage, BufferUsage::CopyDst)) {
         allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
         allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                          VMA_ALLOCATION_CREATE_MAPPED_BIT;

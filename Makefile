@@ -103,6 +103,11 @@ run-only:
 	@echo "$(COLOR_YELLOW)Running application...$(COLOR_RESET)"
 	@$(ENV_SETUP) && ./$(EXECUTABLE)
 
+# Run instancing test
+run-instancing:
+	@echo "$(COLOR_YELLOW)Running instancing test...$(COLOR_RESET)"
+	@$(ENV_SETUP) && ./$(BUILD_DIR)/instancing_test
+
 # Clean build artifacts
 clean:
 	@echo "$(COLOR_YELLOW)Cleaning build directory...$(COLOR_RESET)"

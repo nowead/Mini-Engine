@@ -39,6 +39,12 @@ VulkanRHISwapchain::VulkanRHISwapchain(VulkanRHIDevice* device, const SwapchainD
 
     createSwapchain();
     createImageViews();
+
+#ifdef __linux__
+    // Linux requires traditional render pass and framebuffers
+    createRenderPass();
+    createFramebuffers();
+#endif
 }
 
 VulkanRHISwapchain::~VulkanRHISwapchain() {
@@ -370,7 +376,7 @@ void VulkanRHISwapchain::createRenderPass() {
         return;
     }
 
-    // Color attachment
+    // Color attachment (no depth for simple rendering)
     vk::AttachmentDescription colorAttachment;
     colorAttachment.format = m_surfaceFormat.format;
     colorAttachment.samples = vk::SampleCountFlagBits::e1;
@@ -381,40 +387,25 @@ void VulkanRHISwapchain::createRenderPass() {
     colorAttachment.initialLayout = vk::ImageLayout::eUndefined;
     colorAttachment.finalLayout = vk::ImageLayout::ePresentSrcKHR;
 
-    // Depth attachment
-    vk::AttachmentDescription depthAttachment;
-    depthAttachment.format = vk::Format::eD32Sfloat;
-    depthAttachment.samples = vk::SampleCountFlagBits::e1;
-    depthAttachment.loadOp = vk::AttachmentLoadOp::eClear;
-    depthAttachment.storeOp = vk::AttachmentStoreOp::eDontCare;
-    depthAttachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
-    depthAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
-    depthAttachment.initialLayout = vk::ImageLayout::eUndefined;
-    depthAttachment.finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
-
     vk::AttachmentReference colorAttachmentRef;
     colorAttachmentRef.attachment = 0;
     colorAttachmentRef.layout = vk::ImageLayout::eColorAttachmentOptimal;
-
-    vk::AttachmentReference depthAttachmentRef;
-    depthAttachmentRef.attachment = 1;
-    depthAttachmentRef.layout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
 
     vk::SubpassDescription subpass;
     subpass.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
     subpass.colorAttachmentCount = 1;
     subpass.pColorAttachments = &colorAttachmentRef;
-    subpass.pDepthStencilAttachment = &depthAttachmentRef;
+    subpass.pDepthStencilAttachment = nullptr;  // No depth
 
     vk::SubpassDependency dependency;
     dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
     dependency.dstSubpass = 0;
-    dependency.srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
-    dependency.dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
+    dependency.srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+    dependency.dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
     dependency.srcAccessMask = vk::AccessFlagBits::eNone;
-    dependency.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+    dependency.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
 
-    std::array<vk::AttachmentDescription, 2> attachments = { colorAttachment, depthAttachment };
+    std::array<vk::AttachmentDescription, 1> attachments = { colorAttachment };
 
     vk::RenderPassCreateInfo renderPassInfo;
     renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
