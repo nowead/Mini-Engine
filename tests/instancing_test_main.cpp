@@ -17,8 +17,8 @@
 #include <memory>
 #include <chrono>
 
-// For Linux: need VulkanRHISwapchain to get native render pass
-#ifdef __linux__
+// For Linux Vulkan: need VulkanRHISwapchain to get native render pass
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
 #include <vulkan/vulkan.h>
 #include <rhi-vulkan/VulkanRHISwapchain.hpp>
 #endif
@@ -88,10 +88,11 @@ public:
 
             std::cout << "Swapchain created: " << width << "x" << height << "\n\n";
 
-            // Get native render pass (for Linux traditional render pass)
+            // Get native render pass (for Linux Vulkan traditional render pass)
+            // WebGPU doesn't need traditional render pass
             void* nativeRenderPass = nullptr;
-#ifdef __linux__
-            // On Linux, we need to provide the VkRenderPass for pipeline creation
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+            // On Linux with Vulkan, we need to provide the VkRenderPass for pipeline creation
             auto* vulkanSwapchain = static_cast<RHI::Vulkan::VulkanRHISwapchain*>(m_bridge->getSwapchain());
             VkRenderPass vkRenderPass = static_cast<VkRenderPass>(vulkanSwapchain->getRenderPass());
             nativeRenderPass = reinterpret_cast<void*>(vkRenderPass);
@@ -220,8 +221,9 @@ private:
         renderPassDesc.width = m_width;
         renderPassDesc.height = m_height;
 
-#ifdef __linux__
-        // Linux: Provide native render pass and framebuffer for traditional rendering
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+        // Linux Vulkan: Provide native render pass and framebuffer for traditional rendering
+        // WebGPU uses dynamic rendering, doesn't need this
         auto* vulkanSwapchain = static_cast<RHI::Vulkan::VulkanRHISwapchain*>(swapchain);
         VkRenderPass vkRenderPass = static_cast<VkRenderPass>(vulkanSwapchain->getRenderPass());
         uint32_t imageIndex = vulkanSwapchain->getCurrentImageIndex();

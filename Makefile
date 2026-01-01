@@ -143,18 +143,21 @@ help:
 	@echo "  $(COLOR_GREEN)make build-only$(COLOR_RESET)        - Build without reconfiguring"
 	@echo "  $(COLOR_GREEN)make run$(COLOR_RESET)               - Build and run the application"
 	@echo "  $(COLOR_GREEN)make run-only$(COLOR_RESET)          - Run without building"
+	@echo "  $(COLOR_GREEN)make run-instancing$(COLOR_RESET)    - Run GPU instancing demo (native)"
 	@echo "  $(COLOR_GREEN)make clean$(COLOR_RESET)             - Remove all build artifacts"
 	@echo "  $(COLOR_GREEN)make re$(COLOR_RESET)                - Clean and rebuild from scratch"
 	@echo "  $(COLOR_GREEN)make clean-cmake$(COLOR_RESET)       - Clean only CMake cache"
 	@echo "  $(COLOR_GREEN)make reconfigure$(COLOR_RESET)       - Reconfigure without full clean"
 	@echo "  $(COLOR_GREEN)make install-deps$(COLOR_RESET)      - Install dependencies via vcpkg"
 	@echo ""
-	@echo "$(COLOR_BLUE)Available targets (WebAssembly):$(COLOR_RESET)"
+	@echo "$(COLOR_BLUE)Available targets (WebAssembly/WebGPU):$(COLOR_RESET)"
 	@echo "  $(COLOR_GREEN)make setup-emscripten$(COLOR_RESET)  - Install Emscripten SDK (one-time setup)"
 	@echo "  $(COLOR_GREEN)make wasm$(COLOR_RESET)              - Configure and build WebAssembly version"
 	@echo "  $(COLOR_GREEN)make configure-wasm$(COLOR_RESET)    - Configure WASM build with Emscripten"
 	@echo "  $(COLOR_GREEN)make build-wasm$(COLOR_RESET)        - Build WASM without reconfiguring"
+	@echo "  $(COLOR_GREEN)make wasm-instancing$(COLOR_RESET)   - Build WebGPU instancing demo"
 	@echo "  $(COLOR_GREEN)make serve-wasm$(COLOR_RESET)        - Build and serve WASM on http://localhost:8000"
+	@echo "  $(COLOR_GREEN)make serve-instancing$(COLOR_RESET)  - Build and serve GPU instancing demo (WebGPU)"
 	@echo "  $(COLOR_GREEN)make clean-wasm$(COLOR_RESET)        - Remove WASM build artifacts"
 	@echo ""
 	@echo "$(COLOR_BLUE)Environment:$(COLOR_RESET)"
@@ -247,6 +250,16 @@ endif
 # Full WASM build (alias for build-wasm)
 wasm: build-wasm
 
+# Build WebGPU instancing test
+wasm-instancing: build-wasm
+	@echo "$(COLOR_YELLOW)Copying WGSL shaders for instancing test...$(COLOR_RESET)"
+	@mkdir -p $(WASM_BUILD_DIR)/shaders
+	@cp shaders/instancing_test.*.wgsl $(WASM_BUILD_DIR)/shaders/
+	@echo "$(COLOR_GREEN)WebGPU instancing test ready!$(COLOR_RESET)"
+	@echo ""
+	@echo "$(COLOR_BLUE)To run the demo:$(COLOR_RESET)"
+	@echo "  $(COLOR_GREEN)make serve-instancing$(COLOR_RESET)"
+
 # Serve WASM build on local web server
 serve-wasm: wasm
 	@echo "$(COLOR_BLUE)========================================$(COLOR_RESET)"
@@ -254,6 +267,23 @@ serve-wasm: wasm
 	@echo "$(COLOR_BLUE)========================================$(COLOR_RESET)"
 	@echo "Server URL: $(COLOR_GREEN)http://localhost:8000$(COLOR_RESET)"
 	@echo "Press Ctrl+C to stop"
+	@echo "$(COLOR_BLUE)========================================$(COLOR_RESET)"
+	@cd $(WASM_BUILD_DIR) && python3 -m http.server 8000
+
+# Serve WebGPU instancing test
+serve-instancing: wasm-instancing
+	@echo "$(COLOR_BLUE)========================================$(COLOR_RESET)"
+	@echo "$(COLOR_GREEN)🎮 WebGPU Instancing Demo$(COLOR_RESET)"
+	@echo "$(COLOR_BLUE)========================================$(COLOR_RESET)"
+	@echo "Demo URL: $(COLOR_GREEN)http://localhost:8000/instancing_test.html$(COLOR_RESET)"
+	@echo ""
+	@echo "$(COLOR_BLUE)Controls:$(COLOR_RESET)"
+	@echo "  $(COLOR_YELLOW)Left Mouse Drag$(COLOR_RESET) - Rotate camera"
+	@echo "  $(COLOR_YELLOW)W/S$(COLOR_RESET)             - Zoom in/out"
+	@echo "  $(COLOR_YELLOW)R$(COLOR_RESET)               - Reset camera"
+	@echo "  $(COLOR_YELLOW)Space$(COLOR_RESET)           - Toggle auto-rotation"
+	@echo ""
+	@echo "Press Ctrl+C to stop server"
 	@echo "$(COLOR_BLUE)========================================$(COLOR_RESET)"
 	@cd $(WASM_BUILD_DIR) && python3 -m http.server 8000
 

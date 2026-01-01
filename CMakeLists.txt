@@ -33,7 +33,7 @@ message(STATUS "RHI_BACKEND_WEBGPU: ${RHI_BACKEND_WEBGPU}")
 message(STATUS "EMSCRIPTEN: ${EMSCRIPTEN}")
 message(STATUS "---------------------------------")
 
-# Dependencies (skip vcpkg for Emscripten - it uses its own ports)
+# Dependencies
 if(NOT EMSCRIPTEN)
     find_package(glfw3 CONFIG REQUIRED)
     find_package(glm CONFIG REQUIRED)
@@ -42,6 +42,16 @@ if(NOT EMSCRIPTEN)
     find_package(Stb REQUIRED)
     find_package(tinyobjloader REQUIRED)
     find_package(imgui CONFIG REQUIRED)
+else()
+    # Emscripten: Use FetchContent for glm (header-only library)
+    include(FetchContent)
+    FetchContent_Declare(
+        glm
+        GIT_REPOSITORY https://github.com/g-truc/glm.git
+        GIT_TAG 1.0.1
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(glm)
 endif()
 
 # =============================================================================
@@ -370,6 +380,7 @@ if(NOT EMSCRIPTEN)
 else()
     target_link_libraries(instancing_test PRIVATE
         rhi::factory
+        glm::glm
     )
     # Emscripten-specific settings
     set_target_properties(instancing_test PROPERTIES

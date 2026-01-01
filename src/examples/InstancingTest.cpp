@@ -196,11 +196,22 @@ void InstancingTest::createPipeline() {
 
     // Load shaders
     std::cout << "  Loading shaders..." << std::endl;
+
+#ifdef __EMSCRIPTEN__
+    // WebGPU/WASM: Use WGSL shaders
+    auto vertWgsl = loadSPIRV("shaders/instancing_test.vert.wgsl");
+    auto fragWgsl = loadSPIRV("shaders/instancing_test.frag.wgsl");
+
+    rhi::ShaderSource vertSource(rhi::ShaderLanguage::WGSL, vertWgsl, rhi::ShaderStage::Vertex, "main");
+    rhi::ShaderSource fragSource(rhi::ShaderLanguage::WGSL, fragWgsl, rhi::ShaderStage::Fragment, "main");
+#else
+    // Vulkan: Use SPIR-V shaders
     auto vertSpirv = loadSPIRV("shaders/instancing_test.vert.spv");
     auto fragSpirv = loadSPIRV("shaders/instancing_test.frag.spv");
 
     rhi::ShaderSource vertSource(rhi::ShaderLanguage::SPIRV, vertSpirv, rhi::ShaderStage::Vertex, "main");
     rhi::ShaderSource fragSource(rhi::ShaderLanguage::SPIRV, fragSpirv, rhi::ShaderStage::Fragment, "main");
+#endif
 
     rhi::ShaderDesc vertShaderDesc(vertSource, "Instancing Vertex Shader");
     rhi::ShaderDesc fragShaderDesc(fragSource, "Instancing Fragment Shader");
@@ -268,7 +279,7 @@ void InstancingTest::createPipeline() {
     pipelineDesc.fragmentShader = m_fragmentShader.get();
     pipelineDesc.layout = m_pipelineLayout.get();
     pipelineDesc.vertex.buffers = {vertexLayout, instanceLayout};
-    pipelineDesc.nativeRenderPass = m_nativeRenderPass;  // Required for Linux (traditional render pass)
+    pipelineDesc.nativeRenderPass = m_nativeRenderPass;  // Required for Linux Vulkan (traditional render pass), nullptr for WebGPU
 
     // Primitive state
     pipelineDesc.primitive.topology = rhi::PrimitiveTopology::TriangleList;
