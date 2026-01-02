@@ -96,13 +96,15 @@ VulkanRHIRenderPassEncoder::VulkanRHIRenderPassEncoder(VulkanRHIDevice* device, 
     // macOS/Windows or Linux fallback: Use dynamic rendering (Vulkan 1.3)
     // Convert color attachments
     std::vector<vk::RenderingAttachmentInfo> colorAttachments;
+    m_colorAttachmentViews.clear();  // Store views for layout transition on end
     for (const auto& attachment : desc.colorAttachments) {
         if (!attachment.view) continue;
 
         auto* vulkanView = static_cast<VulkanRHITextureView*>(attachment.view);
+        vk::ImageView imageView = vulkanView->getVkImageView();
 
         vk::RenderingAttachmentInfo colorAttachment;
-        colorAttachment.imageView = vulkanView->getVkImageView();
+        colorAttachment.imageView = imageView;
         colorAttachment.imageLayout = vk::ImageLayout::eColorAttachmentOptimal;
         colorAttachment.loadOp = ToVkAttachmentLoadOp(attachment.loadOp);
         colorAttachment.storeOp = ToVkAttachmentStoreOp(attachment.storeOp);
@@ -115,6 +117,7 @@ VulkanRHIRenderPassEncoder::VulkanRHIRenderPassEncoder(VulkanRHIDevice* device, 
             });
 
         colorAttachments.push_back(colorAttachment);
+        m_colorAttachmentViews.push_back(imageView);  // Store for later
     }
 
     // Convert depth-stencil attachment
@@ -377,6 +380,32 @@ void VulkanRHICommandEncoder::copyTextureToTexture(const rhi::TextureCopyInfo& s
 
     m_commandBuffer.copyImage(vulkanSrc->getVkImage(), vk::ImageLayout::eTransferSrcOptimal,
                               vulkanDst->getVkImage(), vk::ImageLayout::eTransferDstOptimal, region);
+}
+
+void VulkanRHICommandEncoder::transitionImageLayoutForPresent(vk::Image image) {
+    // Transition from COLOR_ATTACHMENT_OPTIMAL to PRESENT_SRC_KHR
+    vk::ImageMemoryBarrier barrier;
+    barrier.oldLayout = vk::ImageLayout::eColorAttachmentOptimal;
+    barrier.newLayout = vk::ImageLayout::ePresentSrcKHR;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = image;
+    barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 1;
+    barrier.srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+    barrier.dstAccessMask = {};
+
+    m_commandBuffer.pipelineBarrier(
+        vk::PipelineStageFlagBits::eColorAttachmentOutput,
+        vk::PipelineStageFlagBits::eBottomOfPipe,
+        {},
+        nullptr,
+        nullptr,
+        barrier
+    );
 }
 
 std::unique_ptr<RHICommandBuffer> VulkanRHICommandEncoder::finish() {

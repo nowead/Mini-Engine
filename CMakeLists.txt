@@ -51,6 +51,10 @@ else()
         GIT_TAG 1.0.1
         GIT_SHALLOW TRUE
     )
+    # Disable GLM build options to ensure it's header-only
+    set(GLM_BUILD_LIBRARY OFF CACHE BOOL "" FORCE)
+    set(GLM_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(GLM_BUILD_INSTALL OFF CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(glm)
 endif()
 
@@ -394,16 +398,17 @@ else()
         "SHELL:-s INITIAL_MEMORY=134217728"
         "SHELL:-s MAXIMUM_MEMORY=4294967296"
         "SHELL:-s STACK_SIZE=16777216"
-        "SHELL:-Oz"
+        "SHELL:-s ASYNCIFY=1"
+        "SHELL:-s ASSERTIONS=2"
+        "SHELL:-s SAFE_HEAP=1"
+        "SHELL:-g2"
         "SHELL:-s ERROR_ON_UNDEFINED_SYMBOLS=0"
-        "SHELL:-flto"
+        "SHELL:--preload-file ${CMAKE_CURRENT_BINARY_DIR}/shaders@/shaders"
         "SHELL:--shell-file ${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm_shell.html"
     )
-    # Optimize compile flags for WASM
+    # Debug compile flags for WASM
     target_compile_options(instancing_test PRIVATE
-        -Oz
-        -g0
-        -flto
+        -g2
     )
 endif()
 

@@ -289,9 +289,15 @@ void InstancingTest::createPipeline() {
     // Depth-stencil state (no depth for now)
     pipelineDesc.depthStencil = nullptr;
 
-    // Color target
+    // Color target - must match swapchain format
+    // WebGPU only supports BGRA8Unorm, Vulkan uses BGRA8UnormSrgb
+    auto backendType = m_device->getBackendType();
+    rhi::TextureFormat colorFormat = (backendType == rhi::RHIBackendType::WebGPU)
+        ? rhi::TextureFormat::BGRA8Unorm
+        : rhi::TextureFormat::BGRA8UnormSrgb;
+
     pipelineDesc.colorTargets = {
-        rhi::ColorTargetState{rhi::TextureFormat::BGRA8Unorm}
+        rhi::ColorTargetState{colorFormat}
     };
 
     // Multisample state

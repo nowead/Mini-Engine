@@ -90,6 +90,16 @@ void RendererBridge::createSwapchain(uint32_t width, uint32_t height, bool vsync
     rhi::SwapchainDesc desc;
     desc.width = width;
     desc.height = height;
+
+    // WebGPU only supports BGRA8Unorm (not SRGB variant)
+    // Vulkan can use either, but we'll use SRGB for better color accuracy on Vulkan
+    auto backendType = m_device->getBackendType();
+    if (backendType == rhi::RHIBackendType::WebGPU) {
+        desc.format = rhi::TextureFormat::BGRA8Unorm;
+    } else {
+        desc.format = rhi::TextureFormat::BGRA8UnormSrgb;
+    }
+
     desc.presentMode = vsync ? rhi::PresentMode::Fifo : rhi::PresentMode::Mailbox;
     desc.bufferCount = MAX_FRAMES_IN_FLIGHT + 1;  // Triple buffering
     desc.windowHandle = m_window;  // Pass the GLFW window handle

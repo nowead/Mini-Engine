@@ -94,7 +94,7 @@
         <h1>Mini-Engine WebGPU Backend</h1>
         <p class="subtitle">RHI (Render Hardware Interface) Smoke Test</p>
 
-        <canvas id="canvas" width="800" height="600"></canvas>
+        <canvas id="canvas"></canvas>
 
         <div id="status">
             <div class="spinner"></div>
@@ -117,6 +117,19 @@
         var statusElement = document.getElementById('status');
         var statusText = document.getElementById('statusText');
         var canvas = document.getElementById('canvas');
+
+        // Set canvas size with device pixel ratio for high DPI displays
+        var displayWidth = 1280;
+        var displayHeight = 720;
+        var dpr = window.devicePixelRatio || 1;
+
+        // Set CSS size
+        canvas.style.width = displayWidth + 'px';
+        canvas.style.height = displayHeight + 'px';
+
+        // Set actual canvas buffer size (accounting for device pixel ratio)
+        canvas.width = displayWidth * dpr;
+        canvas.height = displayHeight * dpr;
 
         var Module = {
             canvas: canvas,

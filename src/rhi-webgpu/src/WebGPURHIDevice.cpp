@@ -134,10 +134,16 @@ WebGPURHIDevice::~WebGPURHIDevice() {
 void WebGPURHIDevice::createInstance(bool enableValidation) {
     std::cout << "[WebGPU] Creating instance (validation: " << (enableValidation ? "ON" : "OFF") << ")\n";
 
+#ifdef __EMSCRIPTEN__
+    // Emscripten WebGPU requires nullptr descriptor
+    m_instance = wgpuCreateInstance(nullptr);
+#else
+    // Native WebGPU (Dawn) can use descriptor
     WGPUInstanceDescriptor desc = {};
     desc.nextInChain = nullptr;
-
     m_instance = wgpuCreateInstance(&desc);
+#endif
+
     if (!m_instance) {
         throw std::runtime_error("Failed to create WebGPU instance");
     }
@@ -202,17 +208,23 @@ void WebGPURHIDevice::requestAdapter() {
 void WebGPURHIDevice::requestDevice() {
     std::cout << "[WebGPU] Requesting device\n";
 
-    // Query adapter limits
+    // Device descriptor
+    WGPUDeviceDescriptor deviceDesc = {};
+
+#ifdef __EMSCRIPTEN__
+    // Emscripten: Don't specify limits, let WebGPU use defaults
+    deviceDesc.requiredLimits = nullptr;
+#else
+    // Native: Query adapter limits and use them
     WGPUSupportedLimits supportedLimits = {};
     wgpuAdapterGetLimits(m_adapter, &supportedLimits);
 
-    // Set required limits (use adapter's limits)
     WGPURequiredLimits requiredLimits = {};
     requiredLimits.limits = supportedLimits.limits;
 
-    // Device descriptor
-    WGPUDeviceDescriptor deviceDesc = {};
     deviceDesc.requiredLimits = &requiredLimits;
+#endif
+
     deviceDesc.defaultQueue.label = "Default Queue";
 
     // Request features (none for now)
@@ -225,6 +237,7 @@ void WebGPURHIDevice::requestDevice() {
 
     // Synchronous wait for callback
 #ifdef __EMSCRIPTEN__
+    // Emscripten: Event loop handles this automatically
     while (!callbackData.requestEnded) {
         emscripten_sleep(10);
     }
@@ -254,16 +267,22 @@ void WebGPURHIDevice::requestDevice() {
     }
 
     std::cout << "[WebGPU] Device acquired successfully\n";
+    std::cout << "[WebGPU] Queue handle: " << (m_queue ? "valid" : "null") << "\n";
 }
 
 void WebGPURHIDevice::queryCapabilities() {
     std::cout << "[WebGPU] Querying device capabilities\n";
 
-    // Get adapter properties
+#ifdef __EMSCRIPTEN__
+    // Emscripten: Don't query adapter properties, use simple default name
+    m_deviceName = "WebGPU Device (Emscripten)";
+    std::cout << "[WebGPU] Using default device name for Emscripten\n";
+#else
+    // Native: Get adapter properties
     WGPUAdapterProperties adapterProps = {};
     wgpuAdapterGetProperties(m_adapter, &adapterProps);
-
     m_deviceName = adapterProps.name ? adapterProps.name : "Unknown WebGPU Device";
+#endif
 
     // Create capabilities object
     m_capabilities = std::make_unique<WebGPURHICapabilities>(this);

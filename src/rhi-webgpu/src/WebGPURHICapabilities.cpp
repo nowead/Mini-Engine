@@ -15,12 +15,45 @@ WebGPURHICapabilities::~WebGPURHICapabilities() {
 }
 
 void WebGPURHICapabilities::queryLimits(WGPUDevice device) {
+#ifdef __EMSCRIPTEN__
+    // Emscripten: Use WebGPU guaranteed minimum limits
+    // wgpuDeviceGetLimits doesn't work properly in Emscripten
+    m_limits.maxTextureDimension1D = 8192;
+    m_limits.maxTextureDimension2D = 8192;
+    m_limits.maxTextureDimension3D = 2048;
+    m_limits.maxTextureArrayLayers = 256;
+
+    m_limits.maxBindGroups = 4;
+    m_limits.maxBindingsPerBindGroup = 640;
+    m_limits.maxDynamicUniformBuffersPerPipelineLayout = 8;
+    m_limits.maxDynamicStorageBuffersPerPipelineLayout = 4;
+
+    m_limits.maxUniformBufferBindingSize = 65536;
+    m_limits.maxStorageBufferBindingSize = 134217728;
+
+    m_limits.maxVertexBuffers = 8;
+    m_limits.maxVertexAttributes = 16;
+    m_limits.maxVertexBufferArrayStride = 2048;
+
+    m_limits.maxColorAttachments = 8;
+
+    m_limits.maxComputeWorkgroupSizeX = 256;
+    m_limits.maxComputeWorkgroupSizeY = 256;
+    m_limits.maxComputeWorkgroupSizeZ = 64;
+    m_limits.maxComputeWorkgroupsPerDimension = 65535;
+    m_limits.maxComputeInvocationsPerWorkgroup = 256;
+
+    m_limits.maxSamplerAnisotropy = 16;
+
+    m_limits.minUniformBufferOffsetAlignment = 256;
+    m_limits.minStorageBufferOffsetAlignment = 256;
+#else
+    // Native: Query actual device limits
     WGPUSupportedLimits supportedLimits{};
     wgpuDeviceGetLimits(device, &supportedLimits);
 
     const WGPULimits& limits = supportedLimits.limits;
 
-    // Map WebGPU limits to RHI limits
     m_limits.maxTextureDimension1D = limits.maxTextureDimension1D;
     m_limits.maxTextureDimension2D = limits.maxTextureDimension2D;
     m_limits.maxTextureDimension3D = limits.maxTextureDimension3D;
@@ -46,10 +79,11 @@ void WebGPURHICapabilities::queryLimits(WGPUDevice device) {
     m_limits.maxComputeWorkgroupsPerDimension = limits.maxComputeWorkgroupsPerDimension;
     m_limits.maxComputeInvocationsPerWorkgroup = limits.maxComputeInvocationsPerWorkgroup;
 
-    m_limits.maxSamplerAnisotropy = 16; // WebGPU standard supports up to 16
+    m_limits.maxSamplerAnisotropy = 16;
 
     m_limits.minUniformBufferOffsetAlignment = limits.minUniformBufferOffsetAlignment;
     m_limits.minStorageBufferOffsetAlignment = limits.minStorageBufferOffsetAlignment;
+#endif
 }
 
 void WebGPURHICapabilities::queryFeatures(WGPUDevice device) {

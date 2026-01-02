@@ -17,10 +17,17 @@
 #include <memory>
 #include <chrono>
 
-// For Linux Vulkan: need VulkanRHISwapchain to get native render pass
-#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+// For Emscripten main loop
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#include <emscripten/html5.h>
+#endif
+
+// For platform-specific Vulkan code
+#if !defined(__EMSCRIPTEN__)
 #include <vulkan/vulkan.h>
 #include <rhi-vulkan/VulkanRHISwapchain.hpp>
+#include <rhi-vulkan/VulkanRHICommandEncoder.hpp>
 #endif
 
 constexpr int WINDOW_WIDTH = 1280;
@@ -104,6 +111,10 @@ public:
                 device, width, height, nativeRenderPass);
             m_instancingTest->init();
 
+            // Store initial size to prevent unnecessary swapchain recreation
+            m_width = width;
+            m_height = height;
+
             // Set up GLFW callbacks for camera controls
             glfwSetWindowUserPointer(m_window, this);
 
@@ -147,49 +158,70 @@ public:
         }
     }
 
+    void mainLoop() {
+        glfwPollEvents();
+
+        // Calculate delta time
+        double currentTime = glfwGetTime();
+        float deltaTime = static_cast<float>(currentTime - m_lastTime);
+        m_lastTime = currentTime;
+
+        // Update FPS counter
+        m_frameCount++;
+        m_fpsTimer += deltaTime;
+        if (m_fpsTimer >= 1.0) {
+            double fps = m_frameCount / m_fpsTimer;
+            std::cout << "FPS: " << fps << " (1000 instances, 1 draw call)\n";
+            m_frameCount = 0;
+            m_fpsTimer = 0.0;
+        }
+
+        // Handle window resize
+        int width, height;
+        glfwGetFramebufferSize(m_window, &width, &height);
+        if (width != m_width || height != m_height) {
+            m_width = width;
+            m_height = height;
+            m_bridge->createSwapchain(width, height, true);
+            m_instancingTest->resize(width, height);
+            std::cout << "Window resized: " << width << "x" << height << "\n";
+        }
+
+        // Update
+        m_instancingTest->update(deltaTime);
+
+        // Render
+        render();
+
+        // ESC to exit
+        if (glfwGetKey(m_window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+            glfwSetWindowShouldClose(m_window, GLFW_TRUE);
+#ifdef __EMSCRIPTEN__
+            emscripten_cancel_main_loop();
+#endif
+        }
+    }
+
     void run() {
+#ifdef __EMSCRIPTEN__
+        // WebGPU: Use emscripten_set_main_loop for browser's requestAnimationFrame
+        emscripten_set_main_loop_arg(
+            [](void* arg) {
+                auto* demo = static_cast<InstancingDemo*>(arg);
+                demo->mainLoop();
+            },
+            this,
+            0,  // Use browser's requestAnimationFrame (typically 60 FPS)
+            1   // Simulate infinite loop
+        );
+#else
+        // Native: Traditional game loop
         while (!glfwWindowShouldClose(m_window)) {
-            glfwPollEvents();
-
-            // Calculate delta time
-            double currentTime = glfwGetTime();
-            float deltaTime = static_cast<float>(currentTime - m_lastTime);
-            m_lastTime = currentTime;
-
-            // Update FPS counter
-            m_frameCount++;
-            m_fpsTimer += deltaTime;
-            if (m_fpsTimer >= 1.0) {
-                double fps = m_frameCount / m_fpsTimer;
-                std::cout << "FPS: " << fps << " (1000 instances, 1 draw call)\n";
-                m_frameCount = 0;
-                m_fpsTimer = 0.0;
-            }
-
-            // Handle window resize
-            int width, height;
-            glfwGetFramebufferSize(m_window, &width, &height);
-            if (width != m_width || height != m_height) {
-                m_width = width;
-                m_height = height;
-                m_bridge->createSwapchain(width, height, true);
-                m_instancingTest->resize(width, height);
-                std::cout << "Window resized: " << width << "x" << height << "\n";
-            }
-
-            // Update
-            m_instancingTest->update(deltaTime);
-
-            // Render
-            render();
-
-            // ESC to exit
-            if (glfwGetKey(m_window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
-                glfwSetWindowShouldClose(m_window, GLFW_TRUE);
-            }
+            mainLoop();
         }
 
         std::cout << "\n=== Shutting down ===\n";
+#endif
     }
 
 private:
@@ -208,6 +240,36 @@ private:
         // Create command encoder
         auto* device = m_bridge->getDevice();
         auto encoder = device->createCommandEncoder();
+
+        // Transition swapchain image to COLOR_ATTACHMENT_OPTIMAL (Mac Vulkan with dynamic rendering only)
+#if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
+        auto* vulkanSwapchain = static_cast<RHI::Vulkan::VulkanRHISwapchain*>(swapchain);
+        auto* vulkanEncoder = static_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
+
+        // Transition from UNDEFINED/PRESENT_SRC to COLOR_ATTACHMENT_OPTIMAL
+        vk::ImageMemoryBarrier barrier;
+        barrier.oldLayout = vk::ImageLayout::eUndefined;  // Can transition from UNDEFINED or PRESENT_SRC
+        barrier.newLayout = vk::ImageLayout::eColorAttachmentOptimal;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = vulkanSwapchain->getCurrentVkImage();
+        barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+        barrier.subresourceRange.baseMipLevel = 0;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = 1;
+        barrier.srcAccessMask = {};
+        barrier.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+
+        vulkanEncoder->getCommandBuffer().pipelineBarrier(
+            vk::PipelineStageFlagBits::eTopOfPipe,
+            vk::PipelineStageFlagBits::eColorAttachmentOutput,
+            {},
+            nullptr,
+            nullptr,
+            barrier
+        );
+#endif
 
         // Begin render pass
         rhi::RenderPassColorAttachment colorAttachment;
@@ -240,13 +302,28 @@ private:
         // End render pass
         renderPass->end();
 
-        // Finish encoding and submit
+        // Transition swapchain image to PRESENT_SRC layout (Mac Vulkan with dynamic rendering only)
+#if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
+        auto* vulkanSwapchain2 = static_cast<RHI::Vulkan::VulkanRHISwapchain*>(swapchain);
+        auto* vulkanEncoder2 = static_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
+        vulkanEncoder2->transitionImageLayoutForPresent(vulkanSwapchain2->getCurrentVkImage());
+#endif
+
+        // Finish encoding and submit with proper synchronization
         auto commandBuffer = encoder->finish();
         auto* queue = device->getQueue(rhi::QueueType::Graphics);
-        queue->submit(commandBuffer.get());
 
-        // Present
-        swapchain->present();
+        // Submit with semaphore synchronization:
+        // - Wait on imageAvailableSemaphore (signaled by acquireNextImage)
+        // - Signal renderFinishedSemaphore when rendering is complete
+        auto* renderFinishedSemaphore = m_bridge->getRenderFinishedSemaphore();
+        queue->submit(commandBuffer.get(), imageAvailableSemaphore, renderFinishedSemaphore);
+
+#ifndef __EMSCRIPTEN__
+        // Native Vulkan: Explicit present call
+        // WebGPU: Present is automatic via emscripten_set_main_loop / requestAnimationFrame
+        swapchain->present(renderFinishedSemaphore);
+#endif
     }
 
     GLFWwindow* m_window;
