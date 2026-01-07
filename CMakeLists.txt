@@ -89,12 +89,12 @@ endif()
 add_subdirectory(src/rhi)
 
 if(RHI_BACKEND_VULKAN)
-    add_subdirectory(src/rhi-vulkan)
+    add_subdirectory(src/rhi/backends/vulkan)
     target_link_libraries(rhi_factory PUBLIC rhi::vulkan)
 endif()
 
 if(RHI_BACKEND_WEBGPU)
-    add_subdirectory(src/rhi-webgpu)
+    add_subdirectory(src/rhi/backends/webgpu)
     target_link_libraries(rhi_factory PUBLIC rhi::webgpu)
 endif()
 

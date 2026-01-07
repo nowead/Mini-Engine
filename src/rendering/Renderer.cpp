@@ -1,7 +1,7 @@
 #include "Renderer.hpp"
 #include "src/ui/ImGuiManager.hpp"
-#include <rhi-vulkan/VulkanRHICommandEncoder.hpp>
-#include <rhi-vulkan/VulkanRHISwapchain.hpp>  // Phase 7.5: For layout transitions
+#include <rhi/vulkan/VulkanRHICommandEncoder.hpp>
+#include <rhi/vulkan/VulkanRHISwapchain.hpp>  // Phase 7.5: For layout transitions
 
 #include <stdexcept>
 #include <iostream>

@@ -26,8 +26,8 @@
 // For platform-specific Vulkan code
 #if !defined(__EMSCRIPTEN__)
 #include <vulkan/vulkan.h>
-#include <rhi-vulkan/VulkanRHISwapchain.hpp>
-#include <rhi-vulkan/VulkanRHICommandEncoder.hpp>
+#include <rhi/vulkan/VulkanRHISwapchain.hpp>
+#include <rhi/vulkan/VulkanRHICommandEncoder.hpp>
 #endif
 
 constexpr int WINDOW_WIDTH = 1280;

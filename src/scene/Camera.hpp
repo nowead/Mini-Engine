@@ -1,6 +1,5 @@
 #pragma once
 
-#include "src/utils/VulkanCommon.hpp"
 #include <glm/glm.hpp>
 
 /**
