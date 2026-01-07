@@ -1,7 +1,7 @@
 # Mini-Engine Project Summary
 
-**Last Updated**: 2025-12-26
-**Status**: WebGPU Backend Implementation Complete ✅
+**Last Updated**: 2026-01-07
+**Status**: RHI Abstraction Complete ✅
 
 ---
 
@@ -53,11 +53,14 @@ graph TB
 - **Platform**: Linux, Windows, macOS (Desktop)
 - **API Version**: Vulkan 1.1+
 - **Status**: Fully implemented (~8,000 LOC)
+- **Location**: `src/rhi/backends/vulkan/`
 - **Features**:
   - VMA (Vulkan Memory Allocator) integration
   - SPIR-V shader compilation
   - Full RHI interface implementation
   - ImGui integration (Vulkan backend)
+  - Platform-specific optimizations (dynamic rendering on macOS/Windows, traditional render pass on Linux)
+  - Automatic layout transitions and render resource management
 - **Build**:
   ```bash
   make build
@@ -68,6 +71,7 @@ graph TB
 - **Platform**: Web (Chrome 113+, Edge 113+, Firefox Nightly)
 - **Implementation**: Emscripten → Browser WebGPU API
 - **Status**: ✅ Complete (~6,500 LOC)
+- **Location**: `src/rhi/backends/webgpu/`
 - **Purpose**: Web deployment (desktop uses Vulkan backend)
 - **Features**:
   - SPIR-V → WGSL automatic shader conversion
@@ -186,19 +190,23 @@ flowchart LR
 
 ## Current Implementation Status
 
-### Phase 1-7: WebGPU Backend ✅
+### Phase 1-9: Complete RHI Abstraction ✅
 
 | Phase | Component | Status | LOC |
 |-------|-----------|--------|-----|
-| **Phase 1** | Environment Setup | ✅ | - |
-| **Phase 2** | WebGPUCommon (Type Conversions) | ✅ | 530 |
-| **Phase 3** | WebGPURHIDevice | ✅ | 450 |
-| **Phase 4** | WebGPURHIQueue | ✅ | 80 |
-| **Phase 5** | WebGPURHIBuffer | ✅ | 276 |
-| **Phase 6** | Remaining Components | ✅ | 2,445 |
-| **Phase 7** | RHIFactory Integration | ✅ | 15 |
-| **WASM Build** | Makefile Integration | ✅ | 70 |
-| **TOTAL** | **WebGPU Backend** | ✅ | **~6,500** |
+| **Phase 1-7** | WebGPU Backend Implementation | ✅ | ~6,500 |
+| **Phase 8** | Directory Restructuring | ✅ | - |
+| **Phase 9** | RHI Abstraction Completion | ✅ | ~400 |
+| **TOTAL** | **Complete RHI System** | ✅ | **~15,000** |
+
+**Recent Achievements (Phase 8-9)**:
+
+- ✅ Reorganized backends to hierarchical structure (`src/rhi/backends/`)
+- ✅ Extended RHI interface with `TextureLayout` enum and layout transition methods
+- ✅ Added `ensureRenderResourcesReady()` for platform-specific render pass management
+- ✅ Added `transitionTextureLayout()` for explicit layout transitions
+- ✅ Removed all Vulkan dependencies from Renderer (VulkanDevice, manual barriers)
+- ✅ Achieved complete platform abstraction in application code
 
 **Detailed Documentation**: [docs/refactoring/webgpu-backend/SUMMARY.md](refactoring/webgpu-backend/SUMMARY.md)
 
@@ -226,7 +234,7 @@ flowchart LR
 
 ## Key Technical Achievements
 
-### 1. RHI Abstraction (Mini-Engine = Dawn's Role)
+### 1. Complete RHI Abstraction (Mini-Engine = Dawn's Role)
 
 **Mini-Engine RHI serves the same purpose as Google's Dawn**: both are abstraction layers that provide a unified API over platform-specific graphics APIs.
 
@@ -242,6 +250,13 @@ Mini-Engine Architecture:
 
 **Key Insight**: We don't "use" Dawn; we implement a similar abstraction layer. For native desktop builds, we use Vulkan backend directly rather than WebGPU.
 
+**Abstraction Quality**:
+
+- ✅ Zero Vulkan/WebGPU includes in application code (Renderer.cpp)
+- ✅ Platform differences handled internally by backend implementations
+- ✅ Single RHI interface works across all platforms
+- ✅ Automatic backend selection based on platform
+
 ### 2. SPIR-V to WGSL Shader Conversion
 
 WebGPU requires WGSL shaders, but Vulkan uses SPIR-V. The WebGPU backend automatically converts:
@@ -255,7 +270,7 @@ std::string wgsl = convertSPIRVtoWGSL(spirv.data(), spirv.size());
 WGPUShaderModule module = createShaderModule(wgsl);
 ```
 
-**Implementation**: [src/rhi-webgpu/src/WebGPURHIShader.cpp](../src/rhi-webgpu/src/WebGPURHIShader.cpp)
+**Implementation**: [src/rhi/backends/webgpu/src/WebGPURHIShader.cpp](../src/rhi/backends/webgpu/src/WebGPURHIShader.cpp)
 
 ### 2. Async-to-Sync Callback Wrapper
 
@@ -312,15 +327,16 @@ make help       # Show all available targets
 
 ### Codebase Size
 
-| Component | Files | Lines of Code | Language |
-|-----------|-------|---------------|----------|
-| **Vulkan Backend** | 26 | ~8,000 | C++ |
-| **WebGPU Backend** | 26 | ~6,500 | C++ |
-| **RHI Interface** | 15 | ~2,000 | C++ (headers) |
-| **Renderer** | 5 | ~1,500 | C++ |
-| **Build System** | 3 | ~300 | CMake/Makefile |
-| **Documentation** | 15+ | ~5,000 | Markdown |
-| **TOTAL** | **90+** | **~23,300** | - |
+| Component | Files | Lines of Code | Language | Location |
+|-----------|-------|---------------|----------|----------|
+| **Vulkan Backend** | 26 | ~8,000 | C++ | `src/rhi/backends/vulkan/` |
+| **WebGPU Backend** | 26 | ~6,500 | C++ | `src/rhi/backends/webgpu/` |
+| **RHI Interface** | 15 | ~2,500 | C++ (headers) | `src/rhi/include/` |
+| **RHI Factory** | 2 | ~500 | C++ | `src/rhi/src/` |
+| **Renderer** | 5 | ~1,500 | C++ | `src/rendering/` |
+| **Build System** | 4 | ~400 | CMake/Makefile | Root + cmake/ |
+| **Documentation** | 15+ | ~5,500 | Markdown | `docs/` |
+| **TOTAL** | **100+** | **~24,900** | - | - |
 
 ### Build Artifacts
 
@@ -506,7 +522,8 @@ make serve-wasm
 | **2024-12** | Vulkan Backend Complete | ✅ |
 | **2025-12-26** | WebGPU Backend (Emscripten) Complete | ✅ |
 | **2025-12-26** | WASM Build System Complete | ✅ |
-| **TBD** | Dawn Integration | ⏳ |
+| **2026-01-07** | Directory Restructuring (backends/) | ✅ |
+| **2026-01-07** | Complete RHI Abstraction | ✅ |
 | **TBD** | Full Web Rendering Pipeline | ⏳ |
 | **TBD** | DirectX 12 Backend | 🔲 |
 | **TBD** | Metal Backend | 🔲 |
