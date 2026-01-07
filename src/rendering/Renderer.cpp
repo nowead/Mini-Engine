@@ -1,7 +1,11 @@
 #include "Renderer.hpp"
 #include "src/ui/ImGuiManager.hpp"
-#include <rhi/vulkan/VulkanRHICommandEncoder.hpp>
-#include <rhi/vulkan/VulkanRHISwapchain.hpp>  // Phase 7.5: For layout transitions
+
+// Phase 9: Vulkan-specific includes only needed for Linux render pass handle retrieval
+// TODO Phase 10: Consider adding getRenderPass() to RHI interface to remove this last dependency
+#ifdef __linux__
+#include <rhi/vulkan/VulkanRHISwapchain.hpp>
+#endif
 
 #include <stdexcept>
 #include <iostream>
@@ -18,15 +22,10 @@ Renderer::Renderer(GLFWwindow* window,
       projectionMatrix(glm::mat4(1.0f)),
       fdfMode(useFdfMode) {
 
-    // Create core device
-    device = std::make_unique<VulkanDevice>(validationLayers, enableValidation);
-    device->createSurface(window);
-    device->createLogicalDevice();
-
-    // Phase 4: Initialize RHI Bridge (primary rendering system)
+    // Initialize RHI Bridge (handles device creation, surface, and lifecycle)
     rhiBridge = std::make_unique<rendering::RendererBridge>(window, enableValidation);
 
-    // Create swapchain first (needed for depth resources)
+    // Create swapchain (needed for depth resources)
     int width, height;
     glfwGetFramebufferSize(window, &width, &height);
     rhiBridge->createSwapchain(static_cast<uint32_t>(width), static_cast<uint32_t>(height), true);
@@ -37,7 +36,7 @@ Renderer::Renderer(GLFWwindow* window,
     resourceManager = std::make_unique<ResourceManager>(rhiDevice, rhiQueue);
     sceneManager = std::make_unique<SceneManager>(rhiDevice, rhiQueue);
 
-    // Phase 8: Create RHI resources only
+    // Create RHI resources
     createRHIDepthResources();
     createRHIUniformBuffers();
     createRHIBindGroups();
@@ -45,11 +44,11 @@ Renderer::Renderer(GLFWwindow* window,
 }
 
 Renderer::~Renderer() {
-    // RAII: Wait for device idle before destroying Vulkan resources
-    if (device) {
-        device->getDevice().waitIdle();
+    // Wait for device idle before destroying resources
+    if (rhiBridge) {
+        rhiBridge->waitIdle();
     }
-    // All other resources cleaned up by RAII in reverse declaration order
+    // All resources cleaned up by RAII in reverse declaration order
 }
 
 void Renderer::loadModel(const std::string& modelPath) {
@@ -62,13 +61,11 @@ void Renderer::loadModel(const std::string& modelPath) {
 
 void Renderer::loadTexture(const std::string& texturePath) {
     resourceManager->loadTexture(texturePath);  // Delegates to ResourceManager
-    // Phase 8: Descriptor updates now handled via RHI bind groups
+    // Descriptor updates handled via RHI bind groups
 }
 
-// Phase 8: All legacy rendering methods removed - using only RHI-based rendering via drawFrame()
-
 void Renderer::waitIdle() {
-    device->getDevice().waitIdle();
+    rhiBridge->waitIdle();
 }
 
 void Renderer::handleFramebufferResize() {
@@ -86,12 +83,12 @@ void Renderer::adjustZScale(float delta) {
     }
 
     zScale += delta;
-    zScale = std::max(0.1f, std::min(zScale, 50.0f));  // Clamp between 0.1 and 10.0
+    zScale = std::max(0.1f, std::min(zScale, 50.0f));  // Clamp between 0.1 and 50.0
 
     // Wait for device idle before reloading
-    device->getDevice().waitIdle();
+    rhiBridge->waitIdle();
 
-    // Clear existing meshes and reload with new Z-scale (using RHI)
+    // Clear existing meshes and reload with new Z-scale
     auto* rhiDevice = rhiBridge->getDevice();
     auto* rhiQueue = rhiDevice->getQueue(rhi::QueueType::Graphics);
     sceneManager = std::make_unique<SceneManager>(rhiDevice, rhiQueue);
@@ -125,12 +122,12 @@ void Renderer::recreateSwapchain() {
         glfwWaitEvents();
     }
 
-    device->getDevice().waitIdle();
+    rhiBridge->waitIdle();
 
-    // Phase 8: Recreate RHI swapchain and depth resources
+    // Recreate RHI swapchain and depth resources
     rhiBridge->createSwapchain(static_cast<uint32_t>(width), static_cast<uint32_t>(height), true);
     createRHIDepthResources();
-    createRHIPipeline();  // Pipeline needs recreation with new render pass on Linux
+    createRHIPipeline();  // Pipeline needs recreation with new render pass
 
     // Notify ImGui of resize
     if (imguiManager) {
@@ -340,30 +337,21 @@ void Renderer::createRHIPipeline() {
 
     pipelineDesc.label = "RHI Main Pipeline";
 
-    // Phase 8: Linux requires traditional render pass (no dynamic rendering)
-#ifdef __linux__
+    // Phase 9: Ensure platform-specific render resources are ready (uses RHI abstraction)
+    // - On Linux: Creates traditional render pass and framebuffers
+    // - On macOS/Windows: No-op (uses dynamic rendering)
     if (swapchain) {
+        swapchain->ensureRenderResourcesReady(rhiDepthImageView.get());
+
+#ifdef __linux__
+        // Linux still needs native render pass handle for pipeline creation
         auto* vulkanSwapchain = dynamic_cast<RHI::Vulkan::VulkanRHISwapchain*>(swapchain);
         if (vulkanSwapchain) {
-            // Ensure render pass is created
-            vulkanSwapchain->createRenderPass();
-
-            // Create framebuffers with depth image view
-            if (rhiDepthImageView) {
-                auto* vulkanDepthView = dynamic_cast<RHI::Vulkan::VulkanRHITextureView*>(rhiDepthImageView.get());
-                if (vulkanDepthView) {
-                    vulkanSwapchain->createFramebuffers(vulkanDepthView->getVkImageView());
-                }
-            } else {
-                vulkanSwapchain->createFramebuffers();
-            }
-
-            // Cast VkRenderPass handle to void*
             VkRenderPass vkPass = static_cast<VkRenderPass>(vulkanSwapchain->getRenderPass());
             pipelineDesc.nativeRenderPass = reinterpret_cast<void*>(vkPass);
         }
-    }
 #endif
+    }
 
     // Create pipeline
     rhiPipeline = rhiBridge->createRenderPipeline(pipelineDesc);
@@ -556,33 +544,19 @@ void Renderer::drawFrame() {
         return;
     }
 
-    auto* vulkanSwapchain = static_cast<RHI::Vulkan::VulkanRHISwapchain*>(rhiBridge->getSwapchain());
-    auto* vulkanEncoder = static_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
-
 #ifndef __linux__
-    // Phase 7.5: Transition swapchain image from UNDEFINED to COLOR_ATTACHMENT_OPTIMAL
+    // Phase 9: Transition swapchain image from UNDEFINED to COLOR_ATTACHMENT_OPTIMAL
     // before starting the render pass (only needed for dynamic rendering on macOS/Windows)
     // Linux uses traditional render pass which handles layout transitions automatically
-    vk::ImageMemoryBarrier acquireBarrier;
-    acquireBarrier.oldLayout = vk::ImageLayout::eUndefined;
-    acquireBarrier.newLayout = vk::ImageLayout::eColorAttachmentOptimal;
-    acquireBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    acquireBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    acquireBarrier.image = vulkanSwapchain->getCurrentVkImage();
-    acquireBarrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-    acquireBarrier.subresourceRange.baseMipLevel = 0;
-    acquireBarrier.subresourceRange.levelCount = 1;
-    acquireBarrier.subresourceRange.baseArrayLayer = 0;
-    acquireBarrier.subresourceRange.layerCount = 1;
-    acquireBarrier.srcAccessMask = vk::AccessFlagBits::eNone;
-    acquireBarrier.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
-
-    vulkanEncoder->getCommandBuffer().pipelineBarrier(
-        vk::PipelineStageFlagBits::eTopOfPipe,
-        vk::PipelineStageFlagBits::eColorAttachmentOutput,
-        vk::DependencyFlags{},
-        nullptr, nullptr, acquireBarrier
-    );
+    auto* swapchain = rhiBridge->getSwapchain();
+    if (swapchain) {
+        auto* swapchainTexture = swapchain->getCurrentTextureView()->getTexture();
+        encoder->transitionTextureLayout(
+            swapchainTexture,
+            rhi::TextureLayout::Undefined,
+            rhi::TextureLayout::ColorAttachment
+        );
+    }
 #endif
 
     // Setup render pass
@@ -657,30 +631,18 @@ void Renderer::drawFrame() {
     }
 
 #ifndef __linux__
-    // Phase 7.5: Transition swapchain image from COLOR_ATTACHMENT_OPTIMAL to PRESENT_SRC
+    // Phase 9: Transition swapchain image from COLOR_ATTACHMENT_OPTIMAL to PRESENT_SRC
     // This must be done before finishing the command buffer
     // Only needed for dynamic rendering on macOS/Windows
     // Linux uses traditional render pass which handles layout transitions automatically
-    vk::ImageMemoryBarrier presentBarrier;
-    presentBarrier.oldLayout = vk::ImageLayout::eColorAttachmentOptimal;
-    presentBarrier.newLayout = vk::ImageLayout::ePresentSrcKHR;
-    presentBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    presentBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    presentBarrier.image = vulkanSwapchain->getCurrentVkImage();
-    presentBarrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-    presentBarrier.subresourceRange.baseMipLevel = 0;
-    presentBarrier.subresourceRange.levelCount = 1;
-    presentBarrier.subresourceRange.baseArrayLayer = 0;
-    presentBarrier.subresourceRange.layerCount = 1;
-    presentBarrier.srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
-    presentBarrier.dstAccessMask = vk::AccessFlagBits::eNone;
-
-    vulkanEncoder->getCommandBuffer().pipelineBarrier(
-        vk::PipelineStageFlagBits::eColorAttachmentOutput,
-        vk::PipelineStageFlagBits::eBottomOfPipe,
-        vk::DependencyFlags{},
-        nullptr, nullptr, presentBarrier
-    );
+    if (swapchain) {
+        auto* swapchainTexture = swapchain->getCurrentTextureView()->getTexture();
+        encoder->transitionTextureLayout(
+            swapchainTexture,
+            rhi::TextureLayout::ColorAttachment,
+            rhi::TextureLayout::Present
+        );
+    }
 #endif
 
     // Finish command buffer

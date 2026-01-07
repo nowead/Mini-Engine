@@ -108,17 +108,17 @@ public:
     std::unique_ptr<RHIRenderPassEncoder> beginRenderPass(const RenderPassDesc& desc) override;
     std::unique_ptr<RHIComputePassEncoder> beginComputePass(const char* label = nullptr) override;
     void copyBufferToBuffer(rhi::RHIBuffer* src, uint64_t srcOffset, rhi::RHIBuffer* dst, uint64_t dstOffset, uint64_t size) override;
+    void copyBufferToTexture(const rhi::BufferTextureCopyInfo& src, const rhi::TextureCopyInfo& dst, const rhi::Extent3D& copySize) override;
+    void copyTextureToBuffer(const rhi::TextureCopyInfo& src, const rhi::BufferTextureCopyInfo& dst, const rhi::Extent3D& copySize) override;
+    void copyTextureToTexture(const rhi::TextureCopyInfo& src, const rhi::TextureCopyInfo& dst, const rhi::Extent3D& copySize) override;
+    void transitionTextureLayout(rhi::RHITexture* texture, rhi::TextureLayout oldLayout, rhi::TextureLayout newLayout) override;
+    std::unique_ptr<RHICommandBuffer> finish() override;
 
     // Vulkan-specific: Transition swapchain image layout for presentation
     void transitionImageLayoutForPresent(vk::Image image);
 
     // Vulkan-specific: Get command buffer for manual barrier insertion
     vk::raii::CommandBuffer& getCommandBuffer() { return m_commandBuffer; }
-
-    void copyBufferToTexture(const rhi::BufferTextureCopyInfo& src, const rhi::TextureCopyInfo& dst, const rhi::Extent3D& copySize) override;
-    void copyTextureToBuffer(const rhi::TextureCopyInfo& src, const rhi::BufferTextureCopyInfo& dst, const rhi::Extent3D& copySize) override;
-    void copyTextureToTexture(const rhi::TextureCopyInfo& src, const rhi::TextureCopyInfo& dst, const rhi::Extent3D& copySize) override;
-    std::unique_ptr<RHICommandBuffer> finish() override;
 
 private:
     VulkanRHIDevice* m_device;

@@ -1,13 +1,12 @@
 #pragma once
 
-#include "src/core/VulkanDevice.hpp"
 #include "src/resources/ResourceManager.hpp"
 #include "src/scene/SceneManager.hpp"
-#include "src/utils/VulkanCommon.hpp"
 #include "src/utils/Vertex.hpp"
 #include "src/rendering/RendererBridge.hpp"
 
 #include <GLFW/glfw3.h>
+#include <glm/glm.hpp>
 #include <memory>
 #include <vector>
 #include <string>
@@ -113,11 +112,6 @@ public:
     float getMeshRadius() const;
 
     /**
-     * @brief Get Vulkan device (for external components like ImGui)
-     */
-    VulkanDevice& getDevice() { return *device; }
-
-    /**
      * @brief Get RHI device (for external components like ImGui)
      */
     rhi::RHIDevice* getRHIDevice() { return rhiBridge ? rhiBridge->getDevice() : nullptr; }
@@ -142,11 +136,8 @@ private:
     // Window reference
     GLFWwindow* window;
 
-    // RHI Bridge (Phase 4 - provides RHI device access)
+    // RHI Bridge (provides RHI device access and lifecycle management)
     std::unique_ptr<rendering::RendererBridge> rhiBridge;
-
-    // Core device
-    std::unique_ptr<VulkanDevice> device;
 
     // High-level managers
     std::unique_ptr<ResourceManager> resourceManager;

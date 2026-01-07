@@ -49,6 +49,8 @@ public:
         return nullptr;
     }
 
+    void ensureRenderResourcesReady(rhi::RHITextureView* depthView = nullptr) override;
+
     // Vulkan-specific accessors
     vk::SwapchainKHR getVkSwapchain() const { return *m_swapchain; }
     vk::Image getCurrentVkImage() const {

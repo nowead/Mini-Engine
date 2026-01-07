@@ -106,8 +106,6 @@ if(NOT EMSCRIPTEN)
         src/main.cpp
         src/Application.cpp
         src/Application.hpp
-        src/core/VulkanDevice.cpp
-        src/core/VulkanDevice.hpp
         src/resources/ResourceManager.cpp
         src/resources/ResourceManager.hpp
         src/rendering/Renderer.cpp
@@ -129,7 +127,6 @@ if(NOT EMSCRIPTEN)
         src/ui/ImGuiVulkanBackend.cpp
         src/ui/ImGuiManager.cpp
         src/ui/ImGuiManager.hpp
-        src/utils/VulkanCommon.hpp
         src/utils/Vertex.hpp
         src/utils/FileUtils.hpp
     )

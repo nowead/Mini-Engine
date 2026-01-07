@@ -447,5 +447,30 @@ vk::Framebuffer VulkanRHISwapchain::getFramebuffer(uint32_t index) const {
     return VK_NULL_HANDLE;
 }
 
+void VulkanRHISwapchain::ensureRenderResourcesReady(rhi::RHITextureView* depthView) {
+#ifdef __linux__
+    // Linux: Ensure traditional render pass and framebuffers are created
+    if (!*m_renderPass) {
+        createRenderPass();
+    }
+
+    // Recreate framebuffers with depth view if provided
+    if (depthView) {
+        auto* vulkanDepthView = dynamic_cast<VulkanRHITextureView*>(depthView);
+        if (vulkanDepthView) {
+            createFramebuffers(vulkanDepthView->getVkImageView());
+        } else {
+            createFramebuffers();
+        }
+    } else if (m_framebuffers.empty()) {
+        // Create framebuffers if they don't exist
+        createFramebuffers();
+    }
+#else
+    // macOS/Windows: Uses dynamic rendering, no-op
+    (void)depthView;  // Suppress unused parameter warning
+#endif
+}
+
 } // namespace Vulkan
 } // namespace RHI

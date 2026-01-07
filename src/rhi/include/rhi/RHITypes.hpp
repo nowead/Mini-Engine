@@ -151,6 +151,23 @@ enum class TextureFormat {
 };
 
 /**
+ * @brief Texture layout for synchronization
+ *
+ * Represents the memory layout of a texture for different operations.
+ * Not all backends require explicit layout transitions (e.g., WebGPU handles this automatically).
+ */
+enum class TextureLayout {
+    Undefined,         // Initial/undefined layout
+    General,           // General-purpose layout (slower but works for everything)
+    ColorAttachment,   // Optimal for rendering as color attachment
+    DepthStencilAttachment,  // Optimal for depth/stencil attachment
+    ShaderReadOnly,    // Optimal for shader sampling
+    TransferSrc,       // Optimal for copy source
+    TransferDst,       // Optimal for copy destination
+    Present            // Optimal for presentation
+};
+
+/**
  * @brief Shader stage flags
  */
 enum class ShaderStage : uint32_t {

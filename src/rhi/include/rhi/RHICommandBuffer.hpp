@@ -256,6 +256,23 @@ public:
                                      const Extent3D& copySize) = 0;
 
     /**
+     * @brief Transition texture layout for rendering
+     * @param texture Texture to transition
+     * @param oldLayout Old texture layout
+     * @param newLayout New texture layout
+     *
+     * This method handles platform-specific image layout transitions.
+     * On backends that don't require explicit transitions (WebGPU), this is a no-op.
+     *
+     * Common transitions:
+     * - Undefined → ColorAttachment: Before rendering to swapchain
+     * - ColorAttachment → Present: Before presenting swapchain image
+     */
+    virtual void transitionTextureLayout(RHITexture* texture,
+                                        TextureLayout oldLayout,
+                                        TextureLayout newLayout) = 0;
+
+    /**
      * @brief Finish encoding and create an executable command buffer
      * @return Command buffer ready for submission
      */

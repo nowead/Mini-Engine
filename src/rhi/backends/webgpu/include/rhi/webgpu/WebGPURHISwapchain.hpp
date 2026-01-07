@@ -42,6 +42,10 @@ public:
     uint32_t getBufferCount() const override { return m_bufferCount; }
     uint32_t getCurrentImageIndex() const override { return 0; } // WebGPU doesn't expose image index
     RHITextureView* getCurrentTextureView() const override { return m_currentTextureView.get(); }
+    void ensureRenderResourcesReady(RHITextureView* depthView = nullptr) override {
+        // WebGPU handles render passes automatically, no-op
+        (void)depthView;
+    }
 
 private:
     void createSwapchain();

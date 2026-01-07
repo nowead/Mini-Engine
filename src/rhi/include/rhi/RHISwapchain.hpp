@@ -113,6 +113,21 @@ public:
      * Alias for the result of the last acquireNextImage() call.
      */
     virtual RHITextureView* getCurrentTextureView() const = 0;
+
+    /**
+     * @brief Ensure platform-specific render resources are ready
+     * @param depthView Optional depth attachment view for framebuffers
+     *
+     * This method ensures that platform-specific rendering resources
+     * (render passes, framebuffers, etc.) are created and ready to use.
+     *
+     * - On Vulkan (Linux): Creates traditional render pass and framebuffers
+     * - On Vulkan (macOS/Windows): No-op (uses dynamic rendering)
+     * - On WebGPU: No-op (render pass handled by beginRenderPass)
+     *
+     * This should be called after swapchain creation/resize and before rendering.
+     */
+    virtual void ensureRenderResourcesReady(RHITextureView* depthView = nullptr) = 0;
 };
 
 } // namespace rhi

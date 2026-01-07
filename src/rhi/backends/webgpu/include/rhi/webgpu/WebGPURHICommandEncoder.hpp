@@ -117,6 +117,12 @@ public:
     void copyTextureToTexture(const TextureCopyInfo& src,
                              const TextureCopyInfo& dst,
                              const Extent3D& copySize) override;
+    void transitionTextureLayout(rhi::RHITexture* texture,
+                                rhi::TextureLayout oldLayout,
+                                rhi::TextureLayout newLayout) override {
+        // WebGPU handles layout transitions automatically, no-op
+        (void)texture; (void)oldLayout; (void)newLayout;
+    }
     std::unique_ptr<RHICommandBuffer> finish() override;
 
 private:

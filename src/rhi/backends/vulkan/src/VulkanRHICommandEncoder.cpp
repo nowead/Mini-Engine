@@ -408,6 +408,74 @@ void VulkanRHICommandEncoder::transitionImageLayoutForPresent(vk::Image image) {
     );
 }
 
+void VulkanRHICommandEncoder::transitionTextureLayout(rhi::RHITexture* texture,
+                                                      rhi::TextureLayout oldLayout,
+                                                      rhi::TextureLayout newLayout) {
+    if (!texture) return;
+
+    auto* vulkanTexture = dynamic_cast<VulkanRHITexture*>(texture);
+    if (!vulkanTexture) return;
+
+    // Convert RHI layouts to Vulkan layouts
+    auto toVkLayout = [](rhi::TextureLayout layout) -> vk::ImageLayout {
+        switch (layout) {
+            case rhi::TextureLayout::Undefined: return vk::ImageLayout::eUndefined;
+            case rhi::TextureLayout::General: return vk::ImageLayout::eGeneral;
+            case rhi::TextureLayout::ColorAttachment: return vk::ImageLayout::eColorAttachmentOptimal;
+            case rhi::TextureLayout::DepthStencilAttachment: return vk::ImageLayout::eDepthStencilAttachmentOptimal;
+            case rhi::TextureLayout::ShaderReadOnly: return vk::ImageLayout::eShaderReadOnlyOptimal;
+            case rhi::TextureLayout::TransferSrc: return vk::ImageLayout::eTransferSrcOptimal;
+            case rhi::TextureLayout::TransferDst: return vk::ImageLayout::eTransferDstOptimal;
+            case rhi::TextureLayout::Present: return vk::ImageLayout::ePresentSrcKHR;
+            default: return vk::ImageLayout::eUndefined;
+        }
+    };
+
+    vk::ImageMemoryBarrier barrier;
+    barrier.oldLayout = toVkLayout(oldLayout);
+    barrier.newLayout = toVkLayout(newLayout);
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = vulkanTexture->getVkImage();
+    barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;  // TODO: Handle depth/stencil
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 1;
+
+    // Determine pipeline stages and access masks based on layouts
+    vk::PipelineStageFlags srcStage, dstStage;
+    vk::AccessFlags srcAccess, dstAccess;
+
+    if (oldLayout == rhi::TextureLayout::Undefined) {
+        srcStage = vk::PipelineStageFlagBits::eTopOfPipe;
+        srcAccess = vk::AccessFlagBits::eNone;
+    } else {
+        srcStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+        srcAccess = vk::AccessFlagBits::eColorAttachmentWrite;
+    }
+
+    if (newLayout == rhi::TextureLayout::ColorAttachment) {
+        dstStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+        dstAccess = vk::AccessFlagBits::eColorAttachmentWrite;
+    } else if (newLayout == rhi::TextureLayout::Present) {
+        dstStage = vk::PipelineStageFlagBits::eBottomOfPipe;
+        dstAccess = vk::AccessFlagBits::eNone;
+    } else {
+        dstStage = vk::PipelineStageFlagBits::eFragmentShader;
+        dstAccess = vk::AccessFlagBits::eShaderRead;
+    }
+
+    barrier.srcAccessMask = srcAccess;
+    barrier.dstAccessMask = dstAccess;
+
+    m_commandBuffer.pipelineBarrier(
+        srcStage, dstStage,
+        {},
+        nullptr, nullptr, barrier
+    );
+}
+
 std::unique_ptr<RHICommandBuffer> VulkanRHICommandEncoder::finish() {
     if (!m_finished) {
         m_commandBuffer.end();
