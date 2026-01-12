@@ -2,6 +2,8 @@
 
 #include "src/rendering/Renderer.hpp"
 #include "src/scene/Camera.hpp"
+#include "src/game/managers/WorldManager.hpp"
+#include "src/game/sync/MockDataGenerator.hpp"
 
 #include <GLFW/glfw3.h>
 #include <memory>
@@ -47,10 +49,7 @@ private:
     static constexpr uint32_t WINDOW_HEIGHT = 600;
     static constexpr const char* WINDOW_TITLE = "Vulkan";
 
-    // Asset paths - FDF mode
-    static constexpr const char* MODEL_PATH = "models/fdf/mars.fdf";
-    static constexpr const char* TEXTURE_PATH = "textures/viking_room.png";
-    static constexpr bool USE_FDF_MODE = true;  // Set to false for OBJ models
+    // Configuration
     static constexpr bool ENABLE_IMGUI = true;  // Enable ImGui UI
 
     // Validation layers
@@ -68,6 +67,12 @@ private:
     GLFWwindow* window = nullptr;
     std::unique_ptr<Camera> camera;              // Destroyed first (no dependencies)
     std::unique_ptr<Renderer> renderer;          // Destroyed second (now owns ImGuiManager)
+
+    // Game Logic Layer (NEW)
+    std::unique_ptr<WorldManager> worldManager;
+    std::unique_ptr<MockDataGenerator> mockDataGen;
+    float priceUpdateTimer = 0.0f;
+    float priceUpdateInterval = 1.0f;            // Update prices every N seconds
 
     // Mouse state
     bool firstMouse = true;

@@ -2,20 +2,21 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/constants.hpp>
 #include <algorithm>
+#include <iostream>
 
 Camera::Camera(float aspectRatio, ProjectionMode mode)
     : position(0.0f, 0.0f, 5.0f),
-      target(0.0f, 0.0f, 0.0f),
+      target(0.0f, 25.0f, 0.0f),  // Look at middle of buildings (height ~25m)
       up(0.0f, 1.0f, 0.0f),
       yaw(glm::radians(45.0f)),
-      pitch(glm::radians(-30.0f)),
-      distance(30.0f),  // Larger initial distance for better view of maps
+      pitch(glm::radians(30.0f)),  // Positive pitch to look DOWN at buildings from above
+      distance(80.0f),  // Farther distance to see all buildings in grid
       projectionMode(mode),
       aspectRatio(aspectRatio),
       fov(glm::radians(45.0f)),
       nearPlane(0.1f),
       farPlane(1000.0f),  // Larger far plane to render distant objects
-      orthoSize(10.0f) {  // Larger ortho size for isometric view
+      orthoSize(40.0f) {  // Larger ortho size to see entire building grid
     updateCameraVectors();
 }
 
@@ -96,12 +97,12 @@ void Camera::setAspectRatio(float newAspectRatio) {
 
 void Camera::reset() {
     position = glm::vec3(0.0f, 0.0f, 5.0f);
-    target = glm::vec3(0.0f, 0.0f, 0.0f);
+    target = glm::vec3(0.0f, 25.0f, 0.0f);  // Match constructor
     up = glm::vec3(0.0f, 1.0f, 0.0f);
     yaw = glm::radians(45.0f);
-    pitch = glm::radians(-30.0f);
-    distance = 30.0f;  // Match initial distance
-    orthoSize = 10.0f;  // Match initial ortho size
+    pitch = glm::radians(30.0f);  // Match constructor
+    distance = 80.0f;  // Match initial distance
+    orthoSize = 40.0f;  // Match initial ortho size
     updateCameraVectors();
 }
 

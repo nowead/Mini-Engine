@@ -129,6 +129,18 @@ if(NOT EMSCRIPTEN)
         src/ui/ImGuiManager.hpp
         src/utils/Vertex.hpp
         src/utils/FileUtils.hpp
+        # Game Logic Layer
+        src/game/entities/BuildingEntity.cpp
+        src/game/entities/BuildingEntity.hpp
+        src/game/managers/BuildingManager.cpp
+        src/game/managers/BuildingManager.hpp
+        src/game/managers/WorldManager.cpp
+        src/game/managers/WorldManager.hpp
+        src/game/world/Sector.hpp
+        src/game/sync/PriceUpdate.hpp
+        src/game/sync/MockDataGenerator.hpp
+        src/game/utils/AnimationUtils.hpp
+        src/game/utils/HeightCalculator.hpp
     )
 
     target_include_directories(vulkanGLFW BEFORE PRIVATE

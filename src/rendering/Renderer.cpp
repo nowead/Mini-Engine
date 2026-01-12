@@ -1,5 +1,6 @@
 #include "Renderer.hpp"
 #include "src/ui/ImGuiManager.hpp"
+#include "InstancedRenderData.hpp"
 
 // Phase 9: Vulkan-specific includes only needed for Linux render pass handle retrieval
 // TODO Phase 10: Consider adding getRenderPass() to RHI interface to remove this last dependency
@@ -40,7 +41,14 @@ Renderer::Renderer(GLFWwindow* window,
     createRHIDepthResources();
     createRHIUniformBuffers();
     createRHIBindGroups();
-    createRHIPipeline();
+
+    // Only create main pipeline if we have model data to render
+    if (fdfMode) {
+        createRHIPipeline();
+    }
+
+    // Always create building pipeline for game world rendering
+    createBuildingPipeline();
 }
 
 Renderer::~Renderer() {
@@ -75,6 +83,11 @@ void Renderer::handleFramebufferResize() {
 void Renderer::updateCamera(const glm::mat4& view, const glm::mat4& projection) {
     viewMatrix = view;
     projectionMatrix = projection;
+}
+
+void Renderer::submitInstancedRenderData(const rendering::InstancedRenderData& data) {
+    // Store copy of data for this frame (fixes dangling pointer issue)
+    pendingInstancedData = data;
 }
 
 void Renderer::adjustZScale(float delta) {
@@ -479,6 +492,158 @@ void Renderer::createRHIBuffers() {
 }
 
 // ============================================================================
+// Building Instancing Pipeline Creation
+// ============================================================================
+
+void Renderer::createBuildingPipeline() {
+    if (!rhiBridge || !rhiBridge->isReady() || !rhiBindGroupLayout) {
+        return;
+    }
+
+    // Ensure swapchain is created
+    if (!rhiBridge->getSwapchain()) {
+        int width, height;
+        glfwGetFramebufferSize(window, &width, &height);
+        rhiBridge->createSwapchain(static_cast<uint32_t>(width), static_cast<uint32_t>(height), true);
+    }
+
+    // Create building shaders from SPIR-V files
+    buildingVertexShader = rhiBridge->createShaderFromFile(
+        "shaders/building.vert.spv",
+        rhi::ShaderStage::Vertex,
+        "main"
+    );
+
+    buildingFragmentShader = rhiBridge->createShaderFromFile(
+        "shaders/building.frag.spv",
+        rhi::ShaderStage::Fragment,
+        "main"
+    );
+
+    if (!buildingVertexShader || !buildingFragmentShader) {
+        std::cerr << "[Renderer] Failed to create building shaders\n";
+        return;
+    }
+
+    // Create dedicated bind group layout for buildings (only UBO, no texture)
+    rhi::BindGroupLayoutDesc buildingLayoutDesc;
+    rhi::BindGroupLayoutEntry uboEntry;
+    uboEntry.binding = 0;
+    uboEntry.visibility = rhi::ShaderStage::Vertex;
+    uboEntry.type = rhi::BindingType::UniformBuffer;
+    buildingLayoutDesc.entries.push_back(uboEntry);
+    buildingLayoutDesc.label = "Building Bind Group Layout";
+
+    buildingBindGroupLayout = rhiBridge->getDevice()->createBindGroupLayout(buildingLayoutDesc);
+
+    if (!buildingBindGroupLayout) {
+        std::cerr << "[Renderer] Failed to create building bind group layout\n";
+        return;
+    }
+
+    // Create bind groups for building rendering (one per frame)
+    buildingBindGroups.clear();
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        rhi::BindGroupDesc bindGroupDesc;
+        bindGroupDesc.layout = buildingBindGroupLayout.get();
+        bindGroupDesc.entries.push_back(
+            rhi::BindGroupEntry::Buffer(0, rhiUniformBuffers[i].get())
+        );
+        bindGroupDesc.label = "Building Bind Group";
+        buildingBindGroups.push_back(rhiBridge->getDevice()->createBindGroup(bindGroupDesc));
+    }
+
+    // Create pipeline layout
+    rhi::PipelineLayoutDesc layoutDesc;
+    layoutDesc.bindGroupLayouts.push_back(buildingBindGroupLayout.get());
+    buildingPipelineLayout = rhiBridge->createPipelineLayout(layoutDesc);
+
+    if (!buildingPipelineLayout) {
+        std::cerr << "[Renderer] Failed to create building pipeline layout\n";
+        return;
+    }
+
+    // Setup vertex state - per-vertex attributes (binding 0)
+    rhi::VertexBufferLayout vertexLayout;
+    vertexLayout.stride = sizeof(Vertex);
+    vertexLayout.inputRate = rhi::VertexInputRate::Vertex;
+    vertexLayout.attributes = {
+        rhi::VertexAttribute(0, 0, rhi::TextureFormat::RGB32Float, offsetof(Vertex, pos)),    // inPosition
+        rhi::VertexAttribute(1, 0, rhi::TextureFormat::RGB32Float, offsetof(Vertex, color)),  // inNormal (reuse color slot)
+        rhi::VertexAttribute(2, 0, rhi::TextureFormat::RG32Float, offsetof(Vertex, texCoord)) // inTexCoord
+    };
+
+    // Setup instance state - per-instance attributes (binding 1)
+    // Must match BuildingManager::InstanceData layout (48 bytes)
+    rhi::VertexBufferLayout instanceLayout;
+    instanceLayout.stride = 48;  // sizeof(BuildingManager::InstanceData)
+    instanceLayout.inputRate = rhi::VertexInputRate::Instance;
+    instanceLayout.attributes = {
+        rhi::VertexAttribute(3, 1, rhi::TextureFormat::RGB32Float, 0),   // instancePosition (vec3, offset 0)
+        rhi::VertexAttribute(4, 1, rhi::TextureFormat::R32Float, 12),    // instanceHeight (float, offset 12)
+        rhi::VertexAttribute(5, 1, rhi::TextureFormat::RGBA32Float, 16), // instanceColor (vec4, offset 16)
+        rhi::VertexAttribute(6, 1, rhi::TextureFormat::RG32Float, 32)    // instanceBaseScale (vec2, offset 32)
+    };
+
+    // Create render pipeline descriptor
+    rhi::RenderPipelineDesc pipelineDesc;
+    pipelineDesc.vertexShader = buildingVertexShader.get();
+    pipelineDesc.fragmentShader = buildingFragmentShader.get();
+    pipelineDesc.layout = buildingPipelineLayout.get();
+    pipelineDesc.vertex.buffers.push_back(vertexLayout);
+    pipelineDesc.vertex.buffers.push_back(instanceLayout);
+
+    // Primitive state
+    pipelineDesc.primitive.topology = rhi::PrimitiveTopology::TriangleList;
+    pipelineDesc.primitive.cullMode = rhi::CullMode::Back;
+    pipelineDesc.primitive.frontFace = rhi::FrontFace::CounterClockwise;
+
+    // Depth-stencil state
+    rhi::DepthStencilState depthStencilState;
+    depthStencilState.depthTestEnabled = true;
+    depthStencilState.depthWriteEnabled = true;
+    depthStencilState.depthCompare = rhi::CompareOp::Less;
+    depthStencilState.format = rhi::TextureFormat::Depth32Float;
+    pipelineDesc.depthStencil = &depthStencilState;
+
+    // Color target - match swapchain format
+    rhi::ColorTargetState colorTarget;
+    auto* swapchain = rhiBridge->getSwapchain();
+    if (swapchain) {
+        colorTarget.format = swapchain->getFormat();
+    } else {
+        colorTarget.format = rhi::TextureFormat::BGRA8UnormSrgb;
+    }
+    colorTarget.blend.blendEnabled = false;
+    pipelineDesc.colorTargets.push_back(colorTarget);
+
+    pipelineDesc.label = "Building Instancing Pipeline";
+
+    // Ensure platform-specific render resources are ready
+    if (swapchain) {
+        swapchain->ensureRenderResourcesReady(rhiDepthImageView.get());
+
+#ifdef __linux__
+        // Linux needs native render pass handle for pipeline creation
+        auto* vulkanSwapchain = dynamic_cast<RHI::Vulkan::VulkanRHISwapchain*>(swapchain);
+        if (vulkanSwapchain) {
+            VkRenderPass vkPass = static_cast<VkRenderPass>(vulkanSwapchain->getRenderPass());
+            pipelineDesc.nativeRenderPass = reinterpret_cast<void*>(vkPass);
+        }
+#endif
+    }
+
+    // Create pipeline
+    buildingPipeline = rhiBridge->createRenderPipeline(pipelineDesc);
+
+    if (buildingPipeline) {
+        std::cout << "[Renderer] Building instancing pipeline created successfully\n";
+    } else {
+        std::cerr << "[Renderer] Failed to create building pipeline\n";
+    }
+}
+
+// ============================================================================
 // Phase 8: RHI Uniform Buffer Update
 // ============================================================================
 
@@ -519,6 +684,12 @@ void Renderer::drawFrame() {
         int width, height;
         glfwGetFramebufferSize(window, &width, &height);
         rhiBridge->createSwapchain(static_cast<uint32_t>(width), static_cast<uint32_t>(height), true);
+    }
+
+    // Ensure render resources (framebuffers) are ready before rendering
+    auto* swapchain = rhiBridge->getSwapchain();
+    if (swapchain && rhiDepthImageView) {
+        swapchain->ensureRenderResourcesReady(rhiDepthImageView.get());
     }
 
     // Step 1: Begin frame (wait for fence, acquire swapchain image)
@@ -619,6 +790,46 @@ void Renderer::drawFrame() {
                 renderPass->setIndexBuffer(rhiIndexBuffer.get(), rhi::IndexFormat::Uint32, 0);
                 renderPass->drawIndexed(rhiIndexCount, 1, 0, 0, 0);
             }
+        }
+
+        // NEW: Render instanced data (buildings, etc.) using GPU Instancing (Phase 1.1)
+        // Clean interface - Renderer doesn't know about game entities
+        // NOTE: This is OUTSIDE the rhiPipeline block so buildings render independently
+        if (pendingInstancedData && pendingInstancedData->instanceCount > 0 && buildingPipeline) {
+            auto* mesh = pendingInstancedData->mesh;
+            auto* instanceBuffer = pendingInstancedData->instanceBuffer;
+
+            if (mesh && mesh->hasData() && instanceBuffer) {
+                // Switch to building instancing pipeline
+                renderPass->setPipeline(buildingPipeline.get());
+
+                // Bind building-specific descriptor sets (UBO only)
+                if (frameIndex < buildingBindGroups.size() && buildingBindGroups[frameIndex]) {
+                    renderPass->setBindGroup(0, buildingBindGroups[frameIndex].get());
+                }
+
+                // Bind vertex buffer (slot 0: per-vertex data)
+                renderPass->setVertexBuffer(0, mesh->getVertexBuffer(), 0);
+
+                // Bind instance buffer (slot 1: per-instance data)
+                renderPass->setVertexBuffer(1, instanceBuffer, 0);
+
+                // Bind index buffer
+                renderPass->setIndexBuffer(mesh->getIndexBuffer(), rhi::IndexFormat::Uint32, 0);
+
+                // Draw all instances in one call!
+                renderPass->drawIndexed(
+                    static_cast<uint32_t>(mesh->getIndexCount()),      // indexCount
+                    pendingInstancedData->instanceCount,                // instanceCount
+                    0,                                                  // firstIndex
+                    0,                                                  // vertexOffset
+                    0                                                   // firstInstance
+                );
+
+            }
+
+            // Clear pending data after rendering
+            pendingInstancedData.reset();
         }
 
         // Phase 7: Render ImGui UI (if initialized)

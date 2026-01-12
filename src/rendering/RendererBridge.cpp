@@ -53,6 +53,12 @@ void RendererBridge::initializeRHI(GLFWwindow* window, bool enableValidation) {
     if (!m_device) {
         throw std::runtime_error("Failed to create RHI device");
     }
+
+    // Get graphics queue
+    m_graphicsQueue = m_device->getQueue(rhi::QueueType::Graphics);
+    if (!m_graphicsQueue) {
+        throw std::runtime_error("Failed to get graphics queue from RHI device");
+    }
 }
 
 void RendererBridge::createSyncObjects() {

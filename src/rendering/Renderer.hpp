@@ -4,6 +4,7 @@
 #include "src/scene/SceneManager.hpp"
 #include "src/utils/Vertex.hpp"
 #include "src/rendering/RendererBridge.hpp"
+#include "src/rendering/InstancedRenderData.hpp"
 
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
@@ -11,6 +12,7 @@
 #include <vector>
 #include <string>
 #include <chrono>
+#include <optional>
 
 /**
  * @brief High-level renderer coordinating subsystems (4-layer architecture)
@@ -122,6 +124,11 @@ public:
     rhi::RHISwapchain* getRHISwapchain() { return rhiBridge ? rhiBridge->getSwapchain() : nullptr; }
 
     /**
+     * @brief Get RHI graphics queue (for external components like game logic)
+     */
+    rhi::RHIQueue* getGraphicsQueue() { return rhiBridge ? rhiBridge->getGraphicsQueue() : nullptr; }
+
+    /**
      * @brief Get ImGui manager (for external UI updates)
      */
     class ImGuiManager* getImGuiManager() { return imguiManager.get(); }
@@ -130,6 +137,15 @@ public:
      * @brief Initialize ImGui subsystem
      */
     void initImGui(GLFWwindow* window);
+
+    /**
+     * @brief Submit instanced rendering data for this frame
+     * @param data Rendering data (mesh, instance buffer, count)
+     *
+     * This is a clean interface - Renderer doesn't know about game entities.
+     * Application layer extracts rendering data from game logic and passes it here.
+     */
+    void submitInstancedRenderData(const rendering::InstancedRenderData& data);
 
 
 private:
@@ -157,6 +173,14 @@ private:
     std::unique_ptr<rhi::RHIPipelineLayout> rhiPipelineLayout;
     std::unique_ptr<rhi::RHIRenderPipeline> rhiPipeline;
 
+    // Building Instancing Pipeline
+    std::unique_ptr<rhi::RHIShader> buildingVertexShader;
+    std::unique_ptr<rhi::RHIShader> buildingFragmentShader;
+    std::unique_ptr<rhi::RHIBindGroupLayout> buildingBindGroupLayout;
+    std::vector<std::unique_ptr<rhi::RHIBindGroup>> buildingBindGroups;
+    std::unique_ptr<rhi::RHIPipelineLayout> buildingPipelineLayout;
+    std::unique_ptr<rhi::RHIRenderPipeline> buildingPipeline;
+
     // RHI Vertex/Index Buffers (Phase 4.5)
     std::unique_ptr<rhi::RHIBuffer> rhiVertexBuffer;
     std::unique_ptr<rhi::RHIBuffer> rhiIndexBuffer;
@@ -180,12 +204,16 @@ private:
     float zScale = 1.0f;
     std::string currentModelPath;
 
+    // Instanced rendering data (submitted per-frame) - stored by value
+    std::optional<rendering::InstancedRenderData> pendingInstancedData;
+
     // RHI initialization methods (Phase 4)
     void createRHIDepthResources();
     void createRHIUniformBuffers();
     void createRHIBindGroups();
     void createRHIPipeline();  // Phase 4.4
     void createRHIBuffers();   // Phase 4.5 - vertex/index buffers
+    void createBuildingPipeline();  // Building instancing pipeline
 
     // RHI command recording (Phase 4.2)
     void updateRHIUniformBuffer(uint32_t currentImage);

@@ -5,6 +5,7 @@
 #include <rhi/vulkan/VulkanRHICommandEncoder.hpp>  // Phase 7.5: For command buffer creation
 #include <algorithm>
 #include <limits>
+#include <iostream>
 
 namespace RHI {
 namespace Vulkan {
@@ -41,9 +42,9 @@ VulkanRHISwapchain::VulkanRHISwapchain(VulkanRHIDevice* device, const SwapchainD
     createImageViews();
 
 #ifdef __linux__
-    // Linux requires traditional render pass and framebuffers
+    // Linux requires traditional render pass
+    // Framebuffers will be created later via ensureRenderResourcesReady() with depth view
     createRenderPass();
-    createFramebuffers();
 #endif
 }
 
@@ -231,6 +232,9 @@ void VulkanRHISwapchain::cleanup() {
         m_device->waitIdle();
     }
 
+    // Clear framebuffers (must be destroyed before image views)
+    m_framebuffers.clear();
+
     // Clear image views
     m_imageViews.clear();
 
@@ -238,6 +242,7 @@ void VulkanRHISwapchain::cleanup() {
     m_images.clear();
 
     // Swapchain will be destroyed by RAII
+    // Note: Render pass is preserved across swapchain recreations
 }
 
 void VulkanRHISwapchain::recreate() {
@@ -376,7 +381,7 @@ void VulkanRHISwapchain::createRenderPass() {
         return;
     }
 
-    // Color attachment (no depth for simple rendering)
+    // Color attachment
     vk::AttachmentDescription colorAttachment;
     colorAttachment.format = m_surfaceFormat.format;
     colorAttachment.samples = vk::SampleCountFlagBits::e1;
@@ -391,21 +396,40 @@ void VulkanRHISwapchain::createRenderPass() {
     colorAttachmentRef.attachment = 0;
     colorAttachmentRef.layout = vk::ImageLayout::eColorAttachmentOptimal;
 
+    // Depth attachment
+    vk::AttachmentDescription depthAttachment;
+    depthAttachment.format = vk::Format::eD32Sfloat;  // Standard depth format
+    depthAttachment.samples = vk::SampleCountFlagBits::e1;
+    depthAttachment.loadOp = vk::AttachmentLoadOp::eClear;
+    depthAttachment.storeOp = vk::AttachmentStoreOp::eDontCare;  // Don't need to store depth
+    depthAttachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+    depthAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+    depthAttachment.initialLayout = vk::ImageLayout::eUndefined;
+    depthAttachment.finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
+    vk::AttachmentReference depthAttachmentRef;
+    depthAttachmentRef.attachment = 1;
+    depthAttachmentRef.layout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
     vk::SubpassDescription subpass;
     subpass.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
     subpass.colorAttachmentCount = 1;
     subpass.pColorAttachments = &colorAttachmentRef;
-    subpass.pDepthStencilAttachment = nullptr;  // No depth
+    subpass.pDepthStencilAttachment = &depthAttachmentRef;  // Enable depth
 
+    // Add depth stage dependency
     vk::SubpassDependency dependency;
     dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
     dependency.dstSubpass = 0;
-    dependency.srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-    dependency.dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+    dependency.srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput |
+                              vk::PipelineStageFlagBits::eEarlyFragmentTests;
+    dependency.dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput |
+                              vk::PipelineStageFlagBits::eEarlyFragmentTests;
     dependency.srcAccessMask = vk::AccessFlagBits::eNone;
-    dependency.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+    dependency.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite |
+                               vk::AccessFlagBits::eDepthStencilAttachmentWrite;
 
-    std::array<vk::AttachmentDescription, 1> attachments = { colorAttachment };
+    std::array<vk::AttachmentDescription, 2> attachments = { colorAttachment, depthAttachment };
 
     vk::RenderPassCreateInfo renderPassInfo;
     renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
@@ -452,19 +476,29 @@ void VulkanRHISwapchain::ensureRenderResourcesReady(rhi::RHITextureView* depthVi
     // Linux: Ensure traditional render pass and framebuffers are created
     if (!*m_renderPass) {
         createRenderPass();
+        std::cout << "[Swapchain] Render pass created" << std::endl;
     }
 
-    // Recreate framebuffers with depth view if provided
-    if (depthView) {
-        auto* vulkanDepthView = dynamic_cast<VulkanRHITextureView*>(depthView);
-        if (vulkanDepthView) {
-            createFramebuffers(vulkanDepthView->getVkImageView());
+    // Only create framebuffers if they don't exist yet
+    if (m_framebuffers.empty()) {
+        if (depthView) {
+            auto* vulkanDepthView = dynamic_cast<VulkanRHITextureView*>(depthView);
+            if (vulkanDepthView) {
+                createFramebuffers(vulkanDepthView->getVkImageView());
+            } else {
+                createFramebuffers();
+            }
         } else {
             createFramebuffers();
         }
-    } else if (m_framebuffers.empty()) {
-        // Create framebuffers if they don't exist
-        createFramebuffers();
+        // IMPORTANT: This log statement provides necessary timing/synchronization
+        // Removing it causes segfault due to GPU synchronization issues
+        std::cout << "[Swapchain] Created " << m_framebuffers.size() << " framebuffers" << std::endl;
+
+        // Ensure GPU has processed framebuffer creation
+        if (m_device) {
+            m_device->waitIdle();
+        }
     }
 #else
     // macOS/Windows: Uses dynamic rendering, no-op

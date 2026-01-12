@@ -1,5 +1,6 @@
 #include "Application.hpp"
 #include "src/ui/ImGuiManager.hpp"
+#include "src/rendering/InstancedRenderData.hpp"
 
 #include <iostream>
 #include <stdexcept>
@@ -43,30 +44,110 @@ void Application::initWindow() {
 }
 
 void Application::initVulkan() {
-    // Create camera
+    // Create camera (use Perspective for easier debugging)
     float aspectRatio = static_cast<float>(WINDOW_WIDTH) / static_cast<float>(WINDOW_HEIGHT);
-    camera = std::make_unique<Camera>(aspectRatio, ProjectionMode::Isometric);
+    camera = std::make_unique<Camera>(aspectRatio, ProjectionMode::Perspective);
 
-    // Create renderer
-    renderer = std::make_unique<Renderer>(window, validationLayers, enableValidationLayers, USE_FDF_MODE);
-    renderer->loadModel(MODEL_PATH);
-
-    // Only load texture for OBJ models
-    if (!USE_FDF_MODE) {
-        renderer->loadTexture(TEXTURE_PATH);
-    }
+    // Create renderer (FDF mode removed - only building rendering now)
+    renderer = std::make_unique<Renderer>(window, validationLayers, enableValidationLayers, false);
 
     // Phase 6: Initialize ImGui if enabled (now managed by Renderer)
     if (ENABLE_IMGUI) {
         renderer->initImGui(window);
     }
+
+    // NEW: Initialize Game Logic Layer
+    std::cout << "\n=== Initializing Game Logic Layer ===\n" << std::endl;
+
+    // Get RHI device and queue from renderer
+    auto* rhiDevice = renderer->getRHIDevice();
+    auto* rhiQueue = renderer->getGraphicsQueue();
+
+    // Create WorldManager
+    worldManager = std::make_unique<WorldManager>(rhiDevice, rhiQueue);
+    worldManager->initialize();
+
+    // Initialize mock data generator
+    mockDataGen = std::make_unique<MockDataGenerator>();
+
+    // TEST: Create multiple buildings for visibility testing
+    auto* buildingManager = worldManager->getBuildingManager();
+    if (buildingManager) {
+        // Create buildings in a 3x3 grid for better visibility
+        std::vector<std::pair<std::string, glm::vec3>> testBuildings = {
+            {"TEST1", glm::vec3(0.0f, 0.0f, 0.0f)},      // Center
+            {"TEST2", glm::vec3(20.0f, 0.0f, 0.0f)},     // Right
+            {"TEST3", glm::vec3(-20.0f, 0.0f, 0.0f)},    // Left
+            {"TEST4", glm::vec3(0.0f, 0.0f, 20.0f)},     // Back
+            {"TEST5", glm::vec3(0.0f, 0.0f, -20.0f)},    // Front
+            {"TEST6", glm::vec3(20.0f, 0.0f, 20.0f)},    // Back-right
+            {"TEST7", glm::vec3(-20.0f, 0.0f, -20.0f)},  // Front-left
+            {"TEST8", glm::vec3(20.0f, 0.0f, -20.0f)},   // Front-right
+            {"TEST9", glm::vec3(-20.0f, 0.0f, 20.0f)}    // Back-left
+        };
+
+        for (const auto& [ticker, pos] : testBuildings) {
+            uint64_t entityId = buildingManager->createBuilding(ticker, "NASDAQ", pos, 100.0f);
+            mockDataGen->registerTicker(ticker, 100.0f);
+            std::cout << "TEST: Created building '" << ticker << "' at ("
+                      << pos.x << ", " << pos.y << ", " << pos.z << "), entity ID: " << entityId << std::endl;
+        }
+    }
+
+    std::cout << "Game Logic Layer initialized successfully!" << std::endl;
+    std::cout << "Total buildings: " << worldManager->getTotalBuildingCount() << std::endl;
+    std::cout << "Total sectors: " << worldManager->getSectorCount() << "\n" << std::endl;
 }
 
 void Application::mainLoop() {
+    auto lastFrameTime = std::chrono::high_resolution_clock::now();
+
     while (!glfwWindowShouldClose(window)) {
+        // Calculate delta time
+        auto currentFrameTime = std::chrono::high_resolution_clock::now();
+        float deltaTime = std::chrono::duration<float>(currentFrameTime - lastFrameTime).count();
+        lastFrameTime = currentFrameTime;
+
         glfwPollEvents();
         processInput();
         renderer->updateCamera(camera->getViewMatrix(), camera->getProjectionMatrix());
+
+        // NEW: Update Game World
+        if (worldManager) {
+            // Update price data periodically
+            priceUpdateTimer += deltaTime;
+            if (priceUpdateTimer >= priceUpdateInterval) {
+                priceUpdateTimer = 0.0f;
+
+                // Generate mock price updates
+                PriceUpdateBatch updates = mockDataGen->generateUpdates();
+                worldManager->updateMarketData(updates);
+            }
+
+            // Update animations
+            worldManager->update(deltaTime);
+        }
+
+        // Extract rendering data from game logic (clean layer separation)
+        if (worldManager) {
+            auto* buildingManager = worldManager->getBuildingManager();
+            if (buildingManager && buildingManager->getBuildingCount() > 0) {
+                // Update instance buffer if dirty
+                if (buildingManager->isInstanceBufferDirty()) {
+                    buildingManager->updateInstanceBuffer();
+                }
+
+                // Prepare rendering data (no game logic in Renderer)
+                rendering::InstancedRenderData renderData;
+                renderData.mesh = buildingManager->getBuildingMesh();
+                renderData.instanceBuffer = buildingManager->getInstanceBuffer();
+                renderData.instanceCount = static_cast<uint32_t>(buildingManager->getBuildingCount());
+                renderData.needsUpdate = false;
+
+                // Submit to renderer (clean interface)
+                renderer->submitInstancedRenderData(renderData);
+            }
+        }
 
         // Phase 6: Render ImGui UI (now handled internally by Renderer)
         if (ENABLE_IMGUI && renderer->getImGuiManager()) {

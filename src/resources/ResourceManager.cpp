@@ -82,12 +82,19 @@ std::unique_ptr<rhi::RHITexture> ResourceManager::uploadTexture(
     // ========================================================================
     auto encoder = rhiDevice->createCommandEncoder();
 
+    // CRITICAL: Transition image layout from UNDEFINED to TRANSFER_DST_OPTIMAL
+    encoder->transitionTextureLayout(texture.get(),
+                                     rhi::TextureLayout::Undefined,
+                                     rhi::TextureLayout::TransferDst);
+
     // Setup buffer-to-texture copy info
+    // NOTE: bytesPerRow is actually "row length in pixels" for Vulkan, not bytes!
+    // Setting to 0 means "tightly packed" (use image width)
     rhi::BufferTextureCopyInfo bufferCopyInfo{};
     bufferCopyInfo.buffer = stagingBuffer.get();
     bufferCopyInfo.offset = 0;
-    bufferCopyInfo.bytesPerRow = static_cast<uint32_t>(width * channels);
-    bufferCopyInfo.rowsPerImage = static_cast<uint32_t>(height);
+    bufferCopyInfo.bytesPerRow = 0;  // 0 = tightly packed (use image width)
+    bufferCopyInfo.rowsPerImage = 0; // 0 = tightly packed (use image height)
 
     rhi::TextureCopyInfo textureCopyInfo{};
     textureCopyInfo.texture = texture.get();
@@ -99,6 +106,11 @@ std::unique_ptr<rhi::RHITexture> ResourceManager::uploadTexture(
 
     // Copy buffer to texture
     encoder->copyBufferToTexture(bufferCopyInfo, textureCopyInfo, copySize);
+
+    // Transition image layout from TRANSFER_DST_OPTIMAL to SHADER_READ_ONLY_OPTIMAL
+    encoder->transitionTextureLayout(texture.get(),
+                                     rhi::TextureLayout::TransferDst,
+                                     rhi::TextureLayout::ShaderReadOnly);
 
     auto cmdBuffer = encoder->finish();
 

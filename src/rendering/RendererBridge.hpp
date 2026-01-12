@@ -67,6 +67,12 @@ public:
      */
     std::unique_ptr<rhi::RHIDevice>& getDeviceOwnership() { return m_device; }
 
+    /**
+     * @brief Get RHI graphics queue
+     * @return Pointer to graphics queue (never null after construction)
+     */
+    rhi::RHIQueue* getGraphicsQueue() const { return m_graphicsQueue; }
+
     // ========================================================================
     // Swapchain Management
     // ========================================================================
@@ -239,6 +245,7 @@ private:
     void createCommandBuffers();
 
     std::unique_ptr<rhi::RHIDevice> m_device;
+    rhi::RHIQueue* m_graphicsQueue = nullptr;  // Non-owning pointer (owned by device)
     std::unique_ptr<rhi::RHISwapchain> m_swapchain;
 
     // Frame synchronization
