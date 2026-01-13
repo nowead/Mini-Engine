@@ -221,9 +221,12 @@ VulkanRHIRenderPipeline::VulkanRHIRenderPipeline(VulkanRHIDevice* device, const 
         colorFormats.push_back(ToVkFormat(target.format));
     }
 
-    vk::PipelineRenderingCreateInfo renderingInfo;
+    // Initialize rendering info with explicit values
+    vk::PipelineRenderingCreateInfo renderingInfo{};
     renderingInfo.colorAttachmentCount = static_cast<uint32_t>(colorFormats.size());
     renderingInfo.pColorAttachmentFormats = colorFormats.data();
+    renderingInfo.depthAttachmentFormat = vk::Format::eUndefined;
+    renderingInfo.stencilAttachmentFormat = vk::Format::eUndefined;
 
     if (desc.depthStencil) {
         renderingInfo.depthAttachmentFormat = ToVkFormat(desc.depthStencil->format);

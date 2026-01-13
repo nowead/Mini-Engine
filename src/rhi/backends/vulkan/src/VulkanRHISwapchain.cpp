@@ -148,6 +148,9 @@ void VulkanRHISwapchain::createSwapchain() {
     auto formats = m_device->getVkPhysicalDevice().getSurfaceFormatsKHR(m_device->getVkSurface());
     m_surfaceFormat = chooseSurfaceFormat(formats);
 
+    // Update RHI format to match actual surface format
+    m_format = FromVkFormat(m_surfaceFormat.format);
+
     // Query present modes
     auto presentModes = m_device->getVkPhysicalDevice().getSurfacePresentModesKHR(m_device->getVkSurface());
     vk::PresentModeKHR presentMode = choosePresentMode(presentModes, rhi::PresentMode::Fifo);

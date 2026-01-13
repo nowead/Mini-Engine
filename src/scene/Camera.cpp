@@ -5,19 +5,20 @@
 #include <iostream>
 
 Camera::Camera(float aspectRatio, ProjectionMode mode)
-    : position(0.0f, 0.0f, 5.0f),
-      target(0.0f, 25.0f, 0.0f),  // Look at middle of buildings (height ~25m)
+    : position(80.0f, 80.0f, 100.0f),  // Higher and farther back for better view
+      target(0.0f, 15.0f, 0.0f),       // Look at center of building grid
       up(0.0f, 1.0f, 0.0f),
       yaw(glm::radians(45.0f)),
-      pitch(glm::radians(30.0f)),  // Positive pitch to look DOWN at buildings from above
-      distance(80.0f),  // Farther distance to see all buildings in grid
+      pitch(glm::radians(20.0f)),
+      distance(150.0f),
       projectionMode(mode),
       aspectRatio(aspectRatio),
-      fov(glm::radians(45.0f)),
+      fov(glm::radians(70.0f)),        // Wider FOV for better visibility
       nearPlane(0.1f),
-      farPlane(1000.0f),  // Larger far plane to render distant objects
-      orthoSize(40.0f) {  // Larger ortho size to see entire building grid
-    updateCameraVectors();
+      farPlane(1000.0f),
+      orthoSize(40.0f) {
+    // Don't call updateCameraVectors() - use fixed position/target
+    std::cout << "[Camera] Initialized at pos=(80, 80, 100), target=(0, 15, 0), FOV=70deg" << std::endl;
 }
 
 glm::mat4 Camera::getViewMatrix() const {

@@ -84,6 +84,7 @@ TextureFormat FromVkFormat(vk::Format format) {
         case vk::Format::eR8G8B8A8Unorm:    return TextureFormat::RGBA8Unorm;
         case vk::Format::eB8G8R8A8Unorm:    return TextureFormat::BGRA8Unorm;
         case vk::Format::eR8G8B8A8Srgb:     return TextureFormat::RGBA8UnormSrgb;
+        case vk::Format::eB8G8R8A8Srgb:     return TextureFormat::BGRA8UnormSrgb;
         case vk::Format::eD32Sfloat:        return TextureFormat::Depth32Float;
         case vk::Format::eD24UnormS8Uint:   return TextureFormat::Depth24PlusStencil8;
         default:

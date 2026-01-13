@@ -1,5 +1,6 @@
 #include "ImGuiVulkanBackend.hpp"
 #include <rhi/vulkan/VulkanRHICommandEncoder.hpp>
+#include <rhi/vulkan/VulkanCommon.hpp>  // For ToVkFormat
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
@@ -63,12 +64,15 @@ void ImGuiVulkanBackend::init(GLFWwindow* window,
     initInfo.RenderPass = VK_NULL_HANDLE;
     initInfo.UseDynamicRendering = true;
 
-    // Specify color attachment format for dynamic rendering
-    VkFormat colorFormat = static_cast<VkFormat>(vulkanSwapchain->getFormat());
+    // Specify color and depth attachment formats for dynamic rendering
+    // Convert RHI format to Vulkan format properly
+    VkFormat colorFormat = static_cast<VkFormat>(RHI::Vulkan::ToVkFormat(vulkanSwapchain->getFormat()));
+    VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;  // Match renderer's depth format
     initInfo.PipelineRenderingCreateInfo = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR,
         .colorAttachmentCount = 1,
-        .pColorAttachmentFormats = &colorFormat
+        .pColorAttachmentFormats = &colorFormat,
+        .depthAttachmentFormat = depthFormat
     };
 #endif
 

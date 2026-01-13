@@ -56,7 +56,7 @@ void Application::initVulkan() {
         renderer->initImGui(window);
     }
 
-    // NEW: Initialize Game Logic Layer
+    // Initialize Game Logic Layer
     std::cout << "\n=== Initializing Game Logic Layer ===\n" << std::endl;
 
     // Get RHI device and queue from renderer
@@ -70,28 +70,40 @@ void Application::initVulkan() {
     // Initialize mock data generator
     mockDataGen = std::make_unique<MockDataGenerator>();
 
-    // TEST: Create multiple buildings for visibility testing
+    // Create sample buildings in a grid pattern
     auto* buildingManager = worldManager->getBuildingManager();
     if (buildingManager) {
-        // Create buildings in a 3x3 grid for better visibility
-        std::vector<std::pair<std::string, glm::vec3>> testBuildings = {
-            {"TEST1", glm::vec3(0.0f, 0.0f, 0.0f)},      // Center
-            {"TEST2", glm::vec3(20.0f, 0.0f, 0.0f)},     // Right
-            {"TEST3", glm::vec3(-20.0f, 0.0f, 0.0f)},    // Left
-            {"TEST4", glm::vec3(0.0f, 0.0f, 20.0f)},     // Back
-            {"TEST5", glm::vec3(0.0f, 0.0f, -20.0f)},    // Front
-            {"TEST6", glm::vec3(20.0f, 0.0f, 20.0f)},    // Back-right
-            {"TEST7", glm::vec3(-20.0f, 0.0f, -20.0f)},  // Front-left
-            {"TEST8", glm::vec3(20.0f, 0.0f, -20.0f)},   // Front-right
-            {"TEST9", glm::vec3(-20.0f, 0.0f, 20.0f)}    // Back-left
-        };
+        std::cout << "Creating sample buildings...\n";
 
-        for (const auto& [ticker, pos] : testBuildings) {
-            uint64_t entityId = buildingManager->createBuilding(ticker, "NASDAQ", pos, 100.0f);
-            mockDataGen->registerTicker(ticker, 100.0f);
-            std::cout << "TEST: Created building '" << ticker << "' at ("
-                      << pos.x << ", " << pos.y << ", " << pos.z << "), entity ID: " << entityId << std::endl;
+        // Create a 4x4 grid of buildings with better spacing
+        int gridSize = 4;
+        float spacing = 30.0f;  // 30 meters between buildings for better visibility
+        float startX = -(gridSize - 1) * spacing / 2.0f;
+        float startZ = -(gridSize - 1) * spacing / 2.0f;
+
+        for (int x = 0; x < gridSize; x++) {
+            for (int z = 0; z < gridSize; z++) {
+                float posX = startX + x * spacing;
+                float posZ = startZ + z * spacing;
+
+                // Create building with varied heights (15m to 50m)
+                float height = 15.0f + (x + z) * 5.0f;
+
+                std::string ticker = "BUILDING_" + std::to_string(x) + "_" + std::to_string(z);
+                uint64_t entityId = buildingManager->createBuilding(
+                    ticker,
+                    "NASDAQ",
+                    glm::vec3(posX, 0.0f, posZ),
+                    height
+                );
+
+                // Register with mock data generator
+                float initialPrice = 100.0f + (x * 10.0f + z * 5.0f);
+                mockDataGen->registerTicker(ticker, initialPrice);
+            }
         }
+
+        std::cout << "Created " << (gridSize * gridSize) << " buildings in a grid pattern\n";
     }
 
     std::cout << "Game Logic Layer initialized successfully!" << std::endl;

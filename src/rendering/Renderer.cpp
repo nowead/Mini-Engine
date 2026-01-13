@@ -2,11 +2,10 @@
 #include "src/ui/ImGuiManager.hpp"
 #include "InstancedRenderData.hpp"
 
-// Phase 9: Vulkan-specific includes only needed for Linux render pass handle retrieval
+// Phase 9: Vulkan-specific includes for platform-specific functionality
 // TODO Phase 10: Consider adding getRenderPass() to RHI interface to remove this last dependency
-#ifdef __linux__
 #include <rhi/vulkan/VulkanRHISwapchain.hpp>
-#endif
+#include <rhi/vulkan/VulkanRHICommandEncoder.hpp>
 
 #include <stdexcept>
 #include <iostream>
@@ -201,7 +200,7 @@ void Renderer::createRHIUniformBuffers() {
 
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         rhi::BufferDesc bufferDesc;
-        bufferDesc.size = sizeof(UniformBufferObject);
+        bufferDesc.size = sizeof(UniformBufferObject);  // model + view + proj
         bufferDesc.usage = rhi::BufferUsage::Uniform | rhi::BufferUsage::MapWrite;
         bufferDesc.mappedAtCreation = true;
         bufferDesc.label = "RHI Uniform Buffer";
@@ -520,6 +519,8 @@ void Renderer::createBuildingPipeline() {
         "main"
     );
 
+    std::cout << "[Renderer] Using building shaders (simplified instancing format)\n";
+
     if (!buildingVertexShader || !buildingFragmentShader) {
         std::cerr << "[Renderer] Failed to create building shaders\n";
         return;
@@ -574,15 +575,14 @@ void Renderer::createBuildingPipeline() {
     };
 
     // Setup instance state - per-instance attributes (binding 1)
-    // Must match BuildingManager::InstanceData layout (48 bytes)
+    // Use vec3 scale for independent X/Z base size and Y height
     rhi::VertexBufferLayout instanceLayout;
-    instanceLayout.stride = 48;  // sizeof(BuildingManager::InstanceData)
+    instanceLayout.stride = 40;  // vec3(12) + vec3(12) + vec3(12) + padding(4) = 40 bytes
     instanceLayout.inputRate = rhi::VertexInputRate::Instance;
     instanceLayout.attributes = {
         rhi::VertexAttribute(3, 1, rhi::TextureFormat::RGB32Float, 0),   // instancePosition (vec3, offset 0)
-        rhi::VertexAttribute(4, 1, rhi::TextureFormat::R32Float, 12),    // instanceHeight (float, offset 12)
-        rhi::VertexAttribute(5, 1, rhi::TextureFormat::RGBA32Float, 16), // instanceColor (vec4, offset 16)
-        rhi::VertexAttribute(6, 1, rhi::TextureFormat::RG32Float, 32)    // instanceBaseScale (vec2, offset 32)
+        rhi::VertexAttribute(4, 1, rhi::TextureFormat::RGB32Float, 12),  // instanceColor (vec3, offset 12)
+        rhi::VertexAttribute(5, 1, rhi::TextureFormat::RGB32Float, 24)   // instanceScale (vec3, offset 24)
     };
 
     // Create render pipeline descriptor
@@ -653,7 +653,7 @@ void Renderer::updateRHIUniformBuffer(uint32_t currentImage) {
     }
 
     UniformBufferObject ubo{};
-    ubo.model = glm::mat4(1.0f);
+    ubo.model = glm::mat4(1.0f);  // Identity matrix (no model transform)
     ubo.view = viewMatrix;
     ubo.proj = projectionMatrix;
 
@@ -719,14 +719,37 @@ void Renderer::drawFrame() {
     // Phase 9: Transition swapchain image from UNDEFINED to COLOR_ATTACHMENT_OPTIMAL
     // before starting the render pass (only needed for dynamic rendering on macOS/Windows)
     // Linux uses traditional render pass which handles layout transitions automatically
-    auto* swapchain = rhiBridge->getSwapchain();
     if (swapchain) {
-        auto* swapchainTexture = swapchain->getCurrentTextureView()->getTexture();
-        encoder->transitionTextureLayout(
-            swapchainTexture,
-            rhi::TextureLayout::Undefined,
-            rhi::TextureLayout::ColorAttachment
-        );
+        // Use Vulkan-specific method to get current image for layout transition
+        auto* vulkanSwapchain = dynamic_cast<RHI::Vulkan::VulkanRHISwapchain*>(swapchain);
+        auto* vulkanEncoder = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
+        if (vulkanSwapchain && vulkanEncoder) {
+            vk::Image swapchainImage = vulkanSwapchain->getCurrentVkImage();
+            // Transition from UNDEFINED to COLOR_ATTACHMENT_OPTIMAL
+            vulkanEncoder->getCommandBuffer().pipelineBarrier(
+                vk::PipelineStageFlagBits::eTopOfPipe,
+                vk::PipelineStageFlagBits::eColorAttachmentOutput,
+                {},
+                {},
+                {},
+                vk::ImageMemoryBarrier{
+                    .srcAccessMask = {},
+                    .dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
+                    .oldLayout = vk::ImageLayout::eUndefined,
+                    .newLayout = vk::ImageLayout::eColorAttachmentOptimal,
+                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                    .image = swapchainImage,
+                    .subresourceRange = vk::ImageSubresourceRange{
+                        .aspectMask = vk::ImageAspectFlagBits::eColor,
+                        .baseMipLevel = 0,
+                        .levelCount = 1,
+                        .baseArrayLayer = 0,
+                        .layerCount = 1
+                    }
+                }
+            );
+        }
     }
 #endif
 
@@ -741,7 +764,7 @@ void Renderer::drawFrame() {
     colorAttachment.view = swapchainView;
     colorAttachment.loadOp = rhi::LoadOp::Clear;
     colorAttachment.storeOp = rhi::StoreOp::Store;
-    colorAttachment.clearValue = rhi::ClearColorValue(0.1f, 0.1f, 0.2f, 1.0f);  // Dark blue
+    colorAttachment.clearValue = rhi::ClearColorValue(0.01f, 0.01f, 0.03f, 1.0f);  // Dark blue background
     renderPassDesc.colorAttachments.push_back(colorAttachment);
 
     // Depth attachment (if available)
@@ -847,12 +870,36 @@ void Renderer::drawFrame() {
     // Only needed for dynamic rendering on macOS/Windows
     // Linux uses traditional render pass which handles layout transitions automatically
     if (swapchain) {
-        auto* swapchainTexture = swapchain->getCurrentTextureView()->getTexture();
-        encoder->transitionTextureLayout(
-            swapchainTexture,
-            rhi::TextureLayout::ColorAttachment,
-            rhi::TextureLayout::Present
-        );
+        // Use Vulkan-specific method to get current image for layout transition
+        auto* vulkanSwapchain = dynamic_cast<RHI::Vulkan::VulkanRHISwapchain*>(swapchain);
+        auto* vulkanEncoder = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
+        if (vulkanSwapchain && vulkanEncoder) {
+            vk::Image swapchainImage = vulkanSwapchain->getCurrentVkImage();
+            // Transition from COLOR_ATTACHMENT_OPTIMAL to PRESENT_SRC
+            vulkanEncoder->getCommandBuffer().pipelineBarrier(
+                vk::PipelineStageFlagBits::eColorAttachmentOutput,
+                vk::PipelineStageFlagBits::eBottomOfPipe,
+                {},
+                {},
+                {},
+                vk::ImageMemoryBarrier{
+                    .srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
+                    .dstAccessMask = {},
+                    .oldLayout = vk::ImageLayout::eColorAttachmentOptimal,
+                    .newLayout = vk::ImageLayout::ePresentSrcKHR,
+                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                    .image = swapchainImage,
+                    .subresourceRange = vk::ImageSubresourceRange{
+                        .aspectMask = vk::ImageAspectFlagBits::eColor,
+                        .baseMipLevel = 0,
+                        .levelCount = 1,
+                        .baseArrayLayer = 0,
+                        .layerCount = 1
+                    }
+                }
+            );
+        }
     }
 #endif
 

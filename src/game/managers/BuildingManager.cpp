@@ -47,8 +47,8 @@ uint64_t BuildingManager::createBuilding(
     building.targetHeight = building.currentHeight;
     building.heightScale = 1.0f;
 
-    // Set default scale (10m x 10m base)
-    building.baseScale = glm::vec3(10.0f, 1.0f, 10.0f);
+    // Set default scale (5m x 5m base for better spacing)
+    building.baseScale = glm::vec3(5.0f, 1.0f, 5.0f);
 
     // Initialize animation state
     building.isAnimating = false;
@@ -408,10 +408,11 @@ void BuildingManager::updateInstanceBuffer() {
     for (const auto& [entityId, building] : entities) {
         InstanceData data;
         data.position = building.position;
-        data.height = building.currentHeight;
-        data.color = building.getColor();
-        data.baseScale = building.baseScale;
-        data._padding = glm::vec2(0.0f, 0.0f);
+        glm::vec4 colorVec4 = building.getColor();
+        data.color = glm::vec3(colorVec4.r, colorVec4.g, colorVec4.b);  // Convert vec4 to vec3
+        // Use vec3 scale: X/Z from baseScale, Y from height
+        data.scale = glm::vec3(building.baseScale.x, building.currentHeight, building.baseScale.z);
+        data._padding = 0.0f;
 
         instanceData.push_back(data);
     }

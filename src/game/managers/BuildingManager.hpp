@@ -177,15 +177,13 @@ public:
 
     /**
      * @brief Instance data structure for GPU instancing
-     * Matches shader layout requirements (must be 16-byte aligned)
+     * Uses vec3 scale to allow different X/Z base size and Y height
      */
     struct InstanceData {
-        glm::vec3 position;       // 12 bytes
-        float height;             // 4 bytes (total: 16 bytes)
-        glm::vec4 color;          // 16 bytes
-        glm::vec2 baseScale;      // 8 bytes
-        glm::vec2 _padding;       // 8 bytes (align to 16 bytes)
-        // Total: 48 bytes (divisible by 16)
+        glm::vec3 position;       // 12 bytes (offset 0)
+        glm::vec3 color;          // 12 bytes (offset 12)
+        glm::vec3 scale;          // 12 bytes (offset 24) - X/Z for base, Y for height
+        float _padding;           // 4 bytes (total: 40 bytes, aligned to 16)
     };
 
     /**
