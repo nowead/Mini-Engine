@@ -21,7 +21,7 @@ build/
 bld/
 [Bb]in/
 [Oo]bj/
-build*
+/build*
 
 # CMake
 CMakeCache.txt
@@ -29,8 +29,8 @@ CMakeFiles/
 cmake_install.cmake
 !CMakeLists.txt
 
-#slang
-slang.spv
+# Compiled shaders (keep source .glsl files, ignore compiled .spv files)
+*.spv
 
 #docs/blog
 docs/blog
