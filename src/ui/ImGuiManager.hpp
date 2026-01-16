@@ -14,7 +14,7 @@
  *
  * Responsibilities:
  * - ImGui backend management (Vulkan, WebGPU, etc.)
- * - UI rendering (camera controls, file loading, statistics)
+ * - UI rendering (camera controls, statistics)
  * - Backend-agnostic ImGui integration via adapter pattern
  *
  * Note: Migrated to RHI in Phase 6 (ImGui Layer Migration)
@@ -31,9 +31,7 @@ public:
     ImGuiManager& operator=(const ImGuiManager&) = delete;
 
     void newFrame();
-    void renderUI(Camera& camera, bool isFdfMode, float zScale,
-                  std::function<void()> onModeToggle,
-                  std::function<void(const std::string&)> onFileLoad);
+    void renderUI(Camera& camera, uint32_t buildingCount = 0);
     void render(rhi::RHICommandEncoder* encoder, uint32_t imageIndex);
     void handleResize();
 
@@ -42,8 +40,4 @@ private:
 
     // UI state
     bool showDemoWindow = false;
-    char filePathBuffer[256] = "models/test.fdf";
-    float moveSpeed = 1.0f;
-    float rotateSpeed = 0.5f;
-    float zoomSpeed = 1.0f;
 };

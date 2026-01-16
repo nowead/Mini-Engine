@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(vulkanGLFW CXX)
+project(MiniEngine CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -17,6 +17,7 @@ endif()
 # =============================================================================
 option(RHI_BACKEND_VULKAN "Enable Vulkan RHI backend" ON)
 option(RHI_BACKEND_WEBGPU "Enable WebGPU RHI backend" OFF)
+option(BUILD_TESTS "Build test executables" ON)
 
 if(EMSCRIPTEN)
     set(RHI_BACKEND_WEBGPU ON CACHE BOOL "" FORCE)
@@ -102,7 +103,7 @@ endif()
 # Main Application (Native only)
 # =============================================================================
 if(NOT EMSCRIPTEN)
-    add_executable(vulkanGLFW
+    add_executable(MiniEngine
         src/main.cpp
         src/Application.cpp
         src/Application.hpp
@@ -120,8 +121,6 @@ if(NOT EMSCRIPTEN)
         src/scene/Camera.hpp
         src/loaders/OBJLoader.cpp
         src/loaders/OBJLoader.hpp
-        src/loaders/FDFLoader.cpp
-        src/loaders/FDFLoader.hpp
         src/ui/ImGuiBackend.hpp
         src/ui/ImGuiVulkanBackend.hpp
         src/ui/ImGuiVulkanBackend.cpp
@@ -143,12 +142,12 @@ if(NOT EMSCRIPTEN)
         src/game/utils/HeightCalculator.hpp
     )
 
-    target_include_directories(vulkanGLFW BEFORE PRIVATE
+    target_include_directories(MiniEngine BEFORE PRIVATE
         ${Vulkan_INCLUDE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}
     )
 
-    target_link_libraries(vulkanGLFW PRIVATE
+    target_link_libraries(MiniEngine PRIVATE
         glm::glm
         Vulkan::Vulkan
         GPUOpen::VulkanMemoryAllocator
@@ -160,7 +159,7 @@ if(NOT EMSCRIPTEN)
         rhi::vulkan
     )
 
-    target_compile_definitions(vulkanGLFW PRIVATE
+    target_compile_definitions(MiniEngine PRIVATE
         IMGUI_IMPL_VULKAN_NO_PROTOTYPES=0
         $<$<BOOL:${RHI_BACKEND_VULKAN}>:RHI_BACKEND_VULKAN=1>
         $<$<BOOL:${RHI_BACKEND_WEBGPU}>:RHI_BACKEND_WEBGPU=1>
@@ -223,98 +222,137 @@ if(NOT EMSCRIPTEN)
     endfunction()
 
     add_slang_shader_target(shader_compilation SOURCES ${SHADER_SLANG_SOURCES})
-    add_dependencies(vulkanGLFW shader_compilation)
+    add_dependencies(MiniEngine shader_compilation)
 endif()
 
 # =============================================================================
-# Test Targets
+# Demo/Test Executables (Optional)
 # =============================================================================
-# Helper function for common test configuration
-function(configure_rhi_test TARGET)
-    target_include_directories(${TARGET} BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+if(BUILD_TESTS)
+    # Helper function for common test configuration
+    function(configure_rhi_test TARGET)
+        target_include_directories(${TARGET} BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-    target_compile_definitions(${TARGET} PRIVATE
-        IMGUI_IMPL_VULKAN_NO_PROTOTYPES=0
-        $<$<BOOL:${RHI_BACKEND_VULKAN}>:RHI_BACKEND_VULKAN=1>
-        $<$<BOOL:${RHI_BACKEND_WEBGPU}>:RHI_BACKEND_WEBGPU=1>
+        target_compile_definitions(${TARGET} PRIVATE
+            IMGUI_IMPL_VULKAN_NO_PROTOTYPES=0
+            $<$<BOOL:${RHI_BACKEND_VULKAN}>:RHI_BACKEND_VULKAN=1>
+            $<$<BOOL:${RHI_BACKEND_WEBGPU}>:RHI_BACKEND_WEBGPU=1>
+        )
+
+        if(NOT EMSCRIPTEN)
+            target_include_directories(${TARGET} BEFORE PRIVATE ${Vulkan_INCLUDE_DIR})
+            target_link_libraries(${TARGET} PRIVATE
+                glfw glm::glm Vulkan::Vulkan
+                GPUOpen::VulkanMemoryAllocator Vulkan::cppm
+                rhi::factory rhi::vulkan
+            )
+        else()
+            target_link_libraries(${TARGET} PRIVATE rhi::factory)
+            set_target_properties(${TARGET} PROPERTIES SUFFIX ".html")
+            target_link_options(${TARGET} PRIVATE
+                "SHELL:-s USE_WEBGPU=1"
+                "SHELL:-s USE_GLFW=3"
+                "SHELL:-s ALLOW_MEMORY_GROWTH=1"
+                "SHELL:-s WASM=1"
+                "SHELL:-s INITIAL_MEMORY=134217728"
+                "SHELL:-s MAXIMUM_MEMORY=4294967296"
+                "SHELL:-s STACK_SIZE=16777216"
+                "SHELL:-Oz"
+                "SHELL:-s ERROR_ON_UNDEFINED_SYMBOLS=0"
+                "SHELL:-flto"
+                "SHELL:--shell-file ${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm_shell.html"
+            )
+            target_compile_options(${TARGET} PRIVATE -Oz -g0 -flto)
+        endif()
+    endfunction()
+
+    # RHI Smoke Test (interactive, run manually with: make demo-smoke)
+    add_executable(rhi_smoke_test
+        tests/rhi_smoke_test.cpp
+        src/rendering/RendererBridge.hpp
+        src/rendering/RendererBridge.cpp
+    )
+    configure_rhi_test(rhi_smoke_test)
+
+    # Instancing Test (interactive, run manually with: make demo-instancing)
+    add_executable(instancing_test
+        tests/instancing_test_main.cpp
+        src/examples/InstancingTest.cpp
+        src/examples/InstancingTest.hpp
+        src/rendering/RendererBridge.hpp
+        src/rendering/RendererBridge.cpp
     )
 
+    configure_rhi_test(instancing_test)
+
+    # Compile instancing test shaders (GLSL -> SPIR-V)
     if(NOT EMSCRIPTEN)
-        target_include_directories(${TARGET} BEFORE PRIVATE ${Vulkan_INCLUDE_DIR})
-        target_link_libraries(${TARGET} PRIVATE
-            glfw glm::glm Vulkan::Vulkan
-            GPUOpen::VulkanMemoryAllocator Vulkan::cppm
-            rhi::factory rhi::vulkan
-        )
-    else()
-        target_link_libraries(${TARGET} PRIVATE rhi::factory)
-        set_target_properties(${TARGET} PROPERTIES SUFFIX ".html")
-        target_link_options(${TARGET} PRIVATE
-            "SHELL:-s USE_WEBGPU=1"
-            "SHELL:-s USE_GLFW=3"
-            "SHELL:-s ALLOW_MEMORY_GROWTH=1"
-            "SHELL:-s WASM=1"
-            "SHELL:-s INITIAL_MEMORY=134217728"
-            "SHELL:-s MAXIMUM_MEMORY=4294967296"
-            "SHELL:-s STACK_SIZE=16777216"
-            "SHELL:-Oz"
-            "SHELL:-s ERROR_ON_UNDEFINED_SYMBOLS=0"
-            "SHELL:-flto"
-            "SHELL:--shell-file ${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm_shell.html"
-        )
-        target_compile_options(${TARGET} PRIVATE -Oz -g0 -flto)
+        find_program(GLSLC_EXECUTABLE glslc HINTS $ENV{VULKAN_SDK}/bin)
+        if(GLSLC_EXECUTABLE)
+            set(INSTANCING_SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
+            
+            add_custom_command(
+                OUTPUT ${INSTANCING_SHADER_DIR}/instancing_test.vert.spv
+                COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=vertex
+                        -o ${INSTANCING_SHADER_DIR}/instancing_test.vert.spv
+                        ${INSTANCING_SHADER_DIR}/instancing_test.vert.glsl
+                DEPENDS ${INSTANCING_SHADER_DIR}/instancing_test.vert.glsl
+                COMMENT "Compiling instancing_test.vert.glsl -> SPIR-V"
+            )
+            
+            add_custom_command(
+                OUTPUT ${INSTANCING_SHADER_DIR}/instancing_test.frag.spv
+                COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=fragment
+                        -o ${INSTANCING_SHADER_DIR}/instancing_test.frag.spv
+                        ${INSTANCING_SHADER_DIR}/instancing_test.frag.glsl
+                DEPENDS ${INSTANCING_SHADER_DIR}/instancing_test.frag.glsl
+                COMMENT "Compiling instancing_test.frag.glsl -> SPIR-V"
+            )
+            
+            add_custom_target(instancing_shaders DEPENDS
+                ${INSTANCING_SHADER_DIR}/instancing_test.vert.spv
+                ${INSTANCING_SHADER_DIR}/instancing_test.frag.spv
+            )
+            
+            add_dependencies(instancing_test instancing_shaders)
+        endif()
     endif()
-endfunction()
 
-# RHI Smoke Test
-add_executable(rhi_smoke_test
-    tests/rhi_smoke_test.cpp
-    src/rendering/RendererBridge.hpp
-    src/rendering/RendererBridge.cpp
-)
-configure_rhi_test(rhi_smoke_test)
+    if(EMSCRIPTEN)
+        target_link_libraries(instancing_test PRIVATE glm::glm)
 
-# Instancing Test
-add_executable(instancing_test
-    tests/instancing_test_main.cpp
-    src/examples/InstancingTest.cpp
-    src/examples/InstancingTest.hpp
-    src/rendering/RendererBridge.hpp
-    src/rendering/RendererBridge.cpp
-)
+        # Copy WGSL shaders for WebGPU
+        set(INSTANCING_SHADER_DIR ${CMAKE_CURRENT_BINARY_DIR}/shaders)
+        file(MAKE_DIRECTORY ${INSTANCING_SHADER_DIR})
+        file(GLOB WGSL_SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.wgsl")
 
-configure_rhi_test(instancing_test)
+        foreach(SHADER ${WGSL_SHADERS})
+            get_filename_component(SHADER_NAME ${SHADER} NAME)
+            configure_file(${SHADER} ${INSTANCING_SHADER_DIR}/${SHADER_NAME} COPYONLY)
+        endforeach()
 
-if(EMSCRIPTEN)
-    target_link_libraries(instancing_test PRIVATE glm::glm)
+        add_custom_command(
+            TARGET instancing_test PRE_LINK
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${INSTANCING_SHADER_DIR}
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CMAKE_CURRENT_SOURCE_DIR}/shaders/instancing_test.vert.wgsl
+                ${CMAKE_CURRENT_SOURCE_DIR}/shaders/instancing_test.frag.wgsl
+                ${INSTANCING_SHADER_DIR}/
+            COMMENT "Copying WGSL shaders"
+        )
 
-    # Copy WGSL shaders for WebGPU
-    set(INSTANCING_SHADER_DIR ${CMAKE_CURRENT_BINARY_DIR}/shaders)
-    file(MAKE_DIRECTORY ${INSTANCING_SHADER_DIR})
-    file(GLOB WGSL_SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.wgsl")
+        # Debug build settings for instancing test
+        target_link_options(instancing_test PRIVATE
+            "SHELL:-s ASYNCIFY=1"
+            "SHELL:-s ASSERTIONS=2"
+            "SHELL:-s SAFE_HEAP=1"
+            "SHELL:-g2"
+            "SHELL:--preload-file ${CMAKE_CURRENT_BINARY_DIR}/shaders@/shaders"
+        )
+        target_compile_options(instancing_test PRIVATE -g2)
+    endif()
 
-    foreach(SHADER ${WGSL_SHADERS})
-        get_filename_component(SHADER_NAME ${SHADER} NAME)
-        configure_file(${SHADER} ${INSTANCING_SHADER_DIR}/${SHADER_NAME} COPYONLY)
-    endforeach()
-
-    add_custom_command(
-        TARGET instancing_test PRE_LINK
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${INSTANCING_SHADER_DIR}
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/instancing_test.vert.wgsl
-            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/instancing_test.frag.wgsl
-            ${INSTANCING_SHADER_DIR}/
-        COMMENT "Copying WGSL shaders"
-    )
-
-    # Debug build settings for instancing test
-    target_link_options(instancing_test PRIVATE
-        "SHELL:-s ASYNCIFY=1"
-        "SHELL:-s ASSERTIONS=2"
-        "SHELL:-s SAFE_HEAP=1"
-        "SHELL:-g2"
-        "SHELL:--preload-file ${CMAKE_CURRENT_BINARY_DIR}/shaders@/shaders"
-    )
-    target_compile_options(instancing_test PRIVATE -g2)
+    message(STATUS "Demo executables enabled: rhi_smoke_test, instancing_test")
+else()
+    message(STATUS "Demo executables disabled (BUILD_TESTS=OFF)")
 endif()

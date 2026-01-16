@@ -9,7 +9,8 @@
 
 Application::Application() {
     initWindow();
-    initVulkan();
+    initRenderer();
+    initGameLogic();
 }
 
 Application::~Application() {
@@ -43,22 +44,19 @@ void Application::initWindow() {
     glfwSetKeyCallback(window, keyCallback);
 }
 
-void Application::initVulkan() {
-    // Create camera (use Perspective for easier debugging)
+void Application::initRenderer() {
+    // Create camera
     float aspectRatio = static_cast<float>(WINDOW_WIDTH) / static_cast<float>(WINDOW_HEIGHT);
     camera = std::make_unique<Camera>(aspectRatio, ProjectionMode::Perspective);
 
-    // Create renderer (FDF mode removed - only building rendering now)
-    renderer = std::make_unique<Renderer>(window, validationLayers, enableValidationLayers, false);
+    // Create renderer
+    renderer = std::make_unique<Renderer>(window, validationLayers, enableValidationLayers);
 
-    // Phase 6: Initialize ImGui if enabled (now managed by Renderer)
-    if (ENABLE_IMGUI) {
-        renderer->initImGui(window);
-    }
+    // Initialize ImGui
+    renderer->initImGui(window);
+}
 
-    // Initialize Game Logic Layer
-    std::cout << "\n=== Initializing Game Logic Layer ===\n" << std::endl;
-
+void Application::initGameLogic() {
     // Get RHI device and queue from renderer
     auto* rhiDevice = renderer->getRHIDevice();
     auto* rhiQueue = renderer->getGraphicsQueue();
@@ -73,11 +71,8 @@ void Application::initVulkan() {
     // Create sample buildings in a grid pattern
     auto* buildingManager = worldManager->getBuildingManager();
     if (buildingManager) {
-        std::cout << "Creating sample buildings...\n";
-
-        // Create a 4x4 grid of buildings with better spacing
         int gridSize = 4;
-        float spacing = 30.0f;  // 30 meters between buildings for better visibility
+        float spacing = 30.0f;
         float startX = -(gridSize - 1) * spacing / 2.0f;
         float startZ = -(gridSize - 1) * spacing / 2.0f;
 
@@ -85,30 +80,21 @@ void Application::initVulkan() {
             for (int z = 0; z < gridSize; z++) {
                 float posX = startX + x * spacing;
                 float posZ = startZ + z * spacing;
-
-                // Create building with varied heights (15m to 50m)
                 float height = 15.0f + (x + z) * 5.0f;
 
                 std::string ticker = "BUILDING_" + std::to_string(x) + "_" + std::to_string(z);
-                uint64_t entityId = buildingManager->createBuilding(
+                buildingManager->createBuilding(
                     ticker,
                     "NASDAQ",
                     glm::vec3(posX, 0.0f, posZ),
                     height
                 );
 
-                // Register with mock data generator
                 float initialPrice = 100.0f + (x * 10.0f + z * 5.0f);
                 mockDataGen->registerTicker(ticker, initialPrice);
             }
         }
-
-        std::cout << "Created " << (gridSize * gridSize) << " buildings in a grid pattern\n";
     }
-
-    std::cout << "Game Logic Layer initialized successfully!" << std::endl;
-    std::cout << "Total buildings: " << worldManager->getTotalBuildingCount() << std::endl;
-    std::cout << "Total sectors: " << worldManager->getSectorCount() << "\n" << std::endl;
 }
 
 void Application::mainLoop() {
@@ -161,19 +147,15 @@ void Application::mainLoop() {
             }
         }
 
-        // Phase 6: Render ImGui UI (now handled internally by Renderer)
-        if (ENABLE_IMGUI && renderer->getImGuiManager()) {
-            auto* imgui = renderer->getImGuiManager();
+        // Render ImGui UI
+        if (auto* imgui = renderer->getImGuiManager()) {
             imgui->newFrame();
-            imgui->renderUI(
-                *camera,
-                renderer->isFdfMode(),
-                renderer->getZScale(),
-                [this]() { /* Mode toggle - would require renderer recreation */ },
-                [this](const std::string& path) {
-                    renderer->loadModel(path);
-                }
-            );
+
+            uint32_t buildingCount = 0;
+            if (worldManager && worldManager->getBuildingManager()) {
+                buildingCount = static_cast<uint32_t>(worldManager->getBuildingManager()->getBuildingCount());
+            }
+            imgui->renderUI(*camera, buildingCount);
         }
 
         // Renderer handles both scene and ImGui rendering
@@ -203,22 +185,6 @@ void Application::processInput() {
         camera->translate(moveSpeed, 0.0f);
     }
 
-    // Q/E for Z-scale adjustment (FDF mode only)
-    static auto lastZScaleAdjust = std::chrono::high_resolution_clock::now();
-    auto now = std::chrono::high_resolution_clock::now();
-    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastZScaleAdjust).count();
-
-    // Throttle Z-scale adjustments to avoid too frequent reloads (250ms cooldown)
-    if (elapsed > 250) {
-        if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) {
-            renderer->adjustZScale(-0.1f);
-            lastZScaleAdjust = now;
-        }
-        if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) {
-            renderer->adjustZScale(0.1f);
-            lastZScaleAdjust = now;
-        }
-    }
 }
 
 void Application::framebufferResizeCallback(GLFWwindow* window, int width, int height) {

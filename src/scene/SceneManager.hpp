@@ -34,12 +34,11 @@ public:
     SceneManager& operator=(SceneManager&&) = delete;
 
     /**
-     * @brief Load mesh from file (supports .obj and .fdf extensions)
-     * @param path Path to mesh file
-     * @param zScale Scale factor for Z-axis in FDF files (default 1.0)
+     * @brief Load mesh from OBJ file
+     * @param path Path to OBJ mesh file
      * @return Pointer to loaded mesh (owned by SceneManager)
      */
-    Mesh* loadMesh(const std::string& path, float zScale = 1.0f);
+    Mesh* loadMesh(const std::string& path);
 
     /**
      * @brief Get primary mesh (for simple single-mesh scenes)

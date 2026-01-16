@@ -52,7 +52,7 @@ endif
 
 # Build directory
 BUILD_DIR := build
-EXECUTABLE := $(BUILD_DIR)/vulkanGLFW
+EXECUTABLE := $(BUILD_DIR)/MiniEngine
 
 # Colors for output
 COLOR_GREEN := \033[0;32m
@@ -60,7 +60,7 @@ COLOR_BLUE := \033[0;34m
 COLOR_YELLOW := \033[0;33m
 COLOR_RESET := \033[0m
 
-.PHONY: all configure build run clean re help info wasm configure-wasm build-wasm serve-wasm clean-wasm setup-emscripten
+.PHONY: all build run run-only clean re help info demo-smoke demo-instancing release wasm configure-wasm build-wasm serve-wasm clean-wasm setup-emscripten
 
 # Default target
 all: build
@@ -79,35 +79,24 @@ info:
 # Configure the project with CMake presets
 configure: info
 	@echo "$(COLOR_YELLOW)Configuring project...$(COLOR_RESET)"
-	@$(ENV_SETUP) && cmake --preset $(CMAKE_PRESET)
+	@$(ENV_SETUP) && cmake --preset $(CMAKE_PRESET) -DBUILD_TESTS=ON
 	@echo "$(COLOR_GREEN)Configuration complete!$(COLOR_RESET)"
 
-# Build the project
+# Build the project (includes demo executables)
 build: configure
 	@echo "$(COLOR_YELLOW)Building project...$(COLOR_RESET)"
 	@$(ENV_SETUP) && cmake --build $(BUILD_DIR)
 	@echo "$(COLOR_GREEN)Build complete!$(COLOR_RESET)"
 
-# Build without reconfiguring
-build-only:
-	@echo "$(COLOR_YELLOW)Building project (no configure)...$(COLOR_RESET)"
-	@$(ENV_SETUP) && cmake --build $(BUILD_DIR)
-	@echo "$(COLOR_GREEN)Build complete!$(COLOR_RESET)"
-
-# Run the executable
+# Run the main application
 run: build
-	@echo "$(COLOR_YELLOW)Running application...$(COLOR_RESET)"
+	@echo "$(COLOR_YELLOW)Running MiniEngine...$(COLOR_RESET)"
 	@$(ENV_SETUP) && ./$(EXECUTABLE)
 
 # Run without building
 run-only:
-	@echo "$(COLOR_YELLOW)Running application...$(COLOR_RESET)"
+	@echo "$(COLOR_YELLOW)Running MiniEngine...$(COLOR_RESET)"
 	@$(ENV_SETUP) && ./$(EXECUTABLE)
-
-# Run instancing test
-run-instancing:
-	@echo "$(COLOR_YELLOW)Running instancing test...$(COLOR_RESET)"
-	@$(ENV_SETUP) && ./$(BUILD_DIR)/instancing_test
 
 # Clean build artifacts
 clean:
@@ -119,56 +108,58 @@ clean:
 # Rebuild from scratch
 re: clean build
 
-# Clean only CMake cache (keep compiled objects)
-clean-cmake:
-	@echo "$(COLOR_YELLOW)Cleaning CMake cache...$(COLOR_RESET)"
-	@rm -rf $(BUILD_DIR)/CMakeCache.txt $(BUILD_DIR)/CMakeFiles
-	@echo "$(COLOR_GREEN)CMake cache cleaned!$(COLOR_RESET)"
+# =============================================================================
+# Production Build (without demo executables)
+# =============================================================================
+release: info
+	@echo "$(COLOR_YELLOW)Building release (no demos)...$(COLOR_RESET)"
+	@$(ENV_SETUP) && cmake --preset $(CMAKE_PRESET) -DBUILD_TESTS=OFF
+	@$(ENV_SETUP) && cmake --build $(BUILD_DIR)
+	@echo "$(COLOR_GREEN)Release build complete!$(COLOR_RESET)"
 
-# Reconfigure without full clean
-reconfigure: clean-cmake configure
+# =============================================================================
+# Demo Executables
+# =============================================================================
+demo-smoke: build
+	@echo "$(COLOR_YELLOW)Running RHI smoke test...$(COLOR_RESET)"
+	@$(ENV_SETUP) && ./$(BUILD_DIR)/rhi_smoke_test
 
-# Install dependencies via vcpkg (if needed)
-install-deps:
-	@echo "$(COLOR_YELLOW)Installing dependencies via vcpkg...$(COLOR_RESET)"
-	@$(ENV_SETUP) && cmake --preset $(CMAKE_PRESET)
-	@echo "$(COLOR_GREEN)Dependencies installed!$(COLOR_RESET)"
+demo-instancing: build
+	@echo "$(COLOR_YELLOW)Running GPU instancing demo...$(COLOR_RESET)"
+	@$(ENV_SETUP) && ./$(BUILD_DIR)/instancing_test
 
 # Display help
 help:
-	@echo "$(COLOR_BLUE)Available targets (Native):$(COLOR_RESET)"
-	@echo "  $(COLOR_GREEN)make$(COLOR_RESET) or $(COLOR_GREEN)make all$(COLOR_RESET)      - Configure and build the project"
-	@echo "  $(COLOR_GREEN)make info$(COLOR_RESET)              - Display build configuration"
-	@echo "  $(COLOR_GREEN)make configure$(COLOR_RESET)         - Configure the project with CMake"
-	@echo "  $(COLOR_GREEN)make build$(COLOR_RESET)             - Configure and build the project"
-	@echo "  $(COLOR_GREEN)make build-only$(COLOR_RESET)        - Build without reconfiguring"
-	@echo "  $(COLOR_GREEN)make run$(COLOR_RESET)               - Build and run the application"
-	@echo "  $(COLOR_GREEN)make run-only$(COLOR_RESET)          - Run without building"
-	@echo "  $(COLOR_GREEN)make run-instancing$(COLOR_RESET)    - Run GPU instancing demo (native)"
-	@echo "  $(COLOR_GREEN)make clean$(COLOR_RESET)             - Remove all build artifacts"
-	@echo "  $(COLOR_GREEN)make re$(COLOR_RESET)                - Clean and rebuild from scratch"
-	@echo "  $(COLOR_GREEN)make clean-cmake$(COLOR_RESET)       - Clean only CMake cache"
-	@echo "  $(COLOR_GREEN)make reconfigure$(COLOR_RESET)       - Reconfigure without full clean"
-	@echo "  $(COLOR_GREEN)make install-deps$(COLOR_RESET)      - Install dependencies via vcpkg"
+	@echo "$(COLOR_BLUE)========================================$(COLOR_RESET)"
+	@echo "$(COLOR_BLUE)  MiniEngine Build System$(COLOR_RESET)"
+	@echo "$(COLOR_BLUE)========================================$(COLOR_RESET)"
 	@echo ""
-	@echo "$(COLOR_BLUE)Available targets (WebAssembly/WebGPU):$(COLOR_RESET)"
-	@echo "  $(COLOR_GREEN)make setup-emscripten$(COLOR_RESET)  - Install Emscripten SDK (one-time setup)"
-	@echo "  $(COLOR_GREEN)make wasm$(COLOR_RESET)              - Configure and build WebAssembly version"
-	@echo "  $(COLOR_GREEN)make configure-wasm$(COLOR_RESET)    - Configure WASM build with Emscripten"
-	@echo "  $(COLOR_GREEN)make build-wasm$(COLOR_RESET)        - Build WASM without reconfiguring"
-	@echo "  $(COLOR_GREEN)make wasm-instancing$(COLOR_RESET)   - Build WebGPU instancing demo"
-	@echo "  $(COLOR_GREEN)make serve-wasm$(COLOR_RESET)        - Build and serve WASM on http://localhost:8000"
-	@echo "  $(COLOR_GREEN)make serve-instancing$(COLOR_RESET)  - Build and serve GPU instancing demo (WebGPU)"
-	@echo "  $(COLOR_GREEN)make clean-wasm$(COLOR_RESET)        - Remove WASM build artifacts"
+	@echo "$(COLOR_BLUE)Build & Run:$(COLOR_RESET)"
+	@echo "  $(COLOR_GREEN)make$(COLOR_RESET)                    - Build project (with demos)"
+	@echo "  $(COLOR_GREEN)make run$(COLOR_RESET)                - Build and run MiniEngine"
+	@echo "  $(COLOR_GREEN)make run-only$(COLOR_RESET)           - Run MiniEngine (no build)"
+	@echo "  $(COLOR_GREEN)make release$(COLOR_RESET)            - Build without demos (production)"
+	@echo ""
+	@echo "$(COLOR_BLUE)Demos:$(COLOR_RESET)"
+	@echo "  $(COLOR_GREEN)make demo-smoke$(COLOR_RESET)         - Run RHI smoke test"
+	@echo "  $(COLOR_GREEN)make demo-instancing$(COLOR_RESET)    - Run GPU instancing demo (1000 cubes)"
+	@echo ""
+	@echo "$(COLOR_BLUE)Maintenance:$(COLOR_RESET)"
+	@echo "  $(COLOR_GREEN)make clean$(COLOR_RESET)              - Remove all build artifacts"
+	@echo "  $(COLOR_GREEN)make re$(COLOR_RESET)                 - Clean and rebuild"
+	@echo "  $(COLOR_GREEN)make info$(COLOR_RESET)               - Display build configuration"
+	@echo ""
+	@echo "$(COLOR_BLUE)WebAssembly (WebGPU):$(COLOR_RESET)"
+	@echo "  $(COLOR_GREEN)make setup-emscripten$(COLOR_RESET)   - Install Emscripten SDK (one-time)"
+	@echo "  $(COLOR_GREEN)make wasm$(COLOR_RESET)               - Build WebAssembly version"
+	@echo "  $(COLOR_GREEN)make serve-wasm$(COLOR_RESET)         - Build and serve on localhost:8000"
+	@echo "  $(COLOR_GREEN)make wasm-instancing$(COLOR_RESET)    - Build WebGPU instancing demo"
+	@echo "  $(COLOR_GREEN)make serve-instancing$(COLOR_RESET)   - Serve instancing demo"
+	@echo "  $(COLOR_GREEN)make clean-wasm$(COLOR_RESET)         - Remove WASM build artifacts"
 	@echo ""
 	@echo "$(COLOR_BLUE)Environment:$(COLOR_RESET)"
 	@echo "  VULKAN_SDK=$(VULKAN_SDK)"
-	@echo "  VK_LAYER_PATH=$(VULKAN_LAYER_PATH)"
 	@echo ""
-	@echo "$(COLOR_YELLOW)First time using WebAssembly? Run:$(COLOR_RESET)"
-	@echo "  $(COLOR_GREEN)make setup-emscripten$(COLOR_RESET)"
-	@echo ""
-	@echo "  $(COLOR_GREEN)make help$(COLOR_RESET)              - Display this help message"
 
 # =============================================================================
 # WebAssembly (WebGPU) Build Targets

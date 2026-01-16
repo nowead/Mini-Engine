@@ -1,6 +1,7 @@
 #include "Renderer.hpp"
 #include "src/ui/ImGuiManager.hpp"
 #include "InstancedRenderData.hpp"
+#include "src/utils/Logger.hpp"
 
 // Phase 9: Vulkan-specific includes for platform-specific functionality
 // TODO Phase 10: Consider adding getRenderPass() to RHI interface to remove this last dependency
@@ -8,19 +9,16 @@
 #include <rhi/vulkan/VulkanRHICommandEncoder.hpp>
 
 #include <stdexcept>
-#include <iostream>
 
 // Phase 7: LegacyCommandBufferAdapter removed - ImGui now uses RHI directly
 
 Renderer::Renderer(GLFWwindow* window,
                    const std::vector<const char*>& validationLayers,
-                   bool enableValidation,
-                   bool useFdfMode)
+                   bool enableValidation)
     : window(window),
       startTime(std::chrono::high_resolution_clock::now()),
       viewMatrix(glm::mat4(1.0f)),
-      projectionMatrix(glm::mat4(1.0f)),
-      fdfMode(useFdfMode) {
+      projectionMatrix(glm::mat4(1.0f)) {
 
     // Initialize RHI Bridge (handles device creation, surface, and lifecycle)
     rhiBridge = std::make_unique<rendering::RendererBridge>(window, enableValidation);
@@ -41,11 +39,6 @@ Renderer::Renderer(GLFWwindow* window,
     createRHIUniformBuffers();
     createRHIBindGroups();
 
-    // Only create main pipeline if we have model data to render
-    if (fdfMode) {
-        createRHIPipeline();
-    }
-
     // Always create building pipeline for game world rendering
     createBuildingPipeline();
 }
@@ -59,8 +52,7 @@ Renderer::~Renderer() {
 }
 
 void Renderer::loadModel(const std::string& modelPath) {
-    currentModelPath = modelPath;
-    sceneManager->loadMesh(modelPath, zScale);  // Delegates to SceneManager
+    sceneManager->loadMesh(modelPath);  // Delegates to SceneManager
 
     // Phase 4.5: Create RHI buffers after loading mesh
     createRHIBuffers();
@@ -87,24 +79,6 @@ void Renderer::updateCamera(const glm::mat4& view, const glm::mat4& projection) 
 void Renderer::submitInstancedRenderData(const rendering::InstancedRenderData& data) {
     // Store copy of data for this frame (fixes dangling pointer issue)
     pendingInstancedData = data;
-}
-
-void Renderer::adjustZScale(float delta) {
-    if (!fdfMode || currentModelPath.empty()) {
-        return;  // Only works in FDF mode with a loaded model
-    }
-
-    zScale += delta;
-    zScale = std::max(0.1f, std::min(zScale, 50.0f));  // Clamp between 0.1 and 50.0
-
-    // Wait for device idle before reloading
-    rhiBridge->waitIdle();
-
-    // Clear existing meshes and reload with new Z-scale
-    auto* rhiDevice = rhiBridge->getDevice();
-    auto* rhiQueue = rhiDevice->getQueue(rhi::QueueType::Graphics);
-    sceneManager = std::make_unique<SceneManager>(rhiDevice, rhiQueue);
-    sceneManager->loadMesh(currentModelPath, zScale);
 }
 
 glm::vec3 Renderer::getMeshCenter() const {
@@ -226,14 +200,12 @@ void Renderer::createRHIBindGroups() {
     uboEntry.type = rhi::BindingType::UniformBuffer;
     layoutDesc.entries.push_back(uboEntry);
 
-    // Binding 1: Combined image sampler (only for OBJ mode)
-    if (!fdfMode) {
-        rhi::BindGroupLayoutEntry samplerEntry;
-        samplerEntry.binding = 1;
-        samplerEntry.visibility = rhi::ShaderStage::Fragment;
-        samplerEntry.type = rhi::BindingType::SampledTexture;
-        layoutDesc.entries.push_back(samplerEntry);
-    }
+    // Binding 1: Combined image sampler
+    rhi::BindGroupLayoutEntry samplerEntry;
+    samplerEntry.binding = 1;
+    samplerEntry.visibility = rhi::ShaderStage::Fragment;
+    samplerEntry.type = rhi::BindingType::SampledTexture;
+    layoutDesc.entries.push_back(samplerEntry);
 
     layoutDesc.label = "RHI Main Bind Group Layout";
     rhiBindGroupLayout = rhiDevice->createBindGroupLayout(layoutDesc);
@@ -270,8 +242,8 @@ void Renderer::createRHIPipeline() {
         rhiBridge->createSwapchain(static_cast<uint32_t>(width), static_cast<uint32_t>(height), true);
     }
 
-    // Select shader path based on mode
-    std::string shaderPath = fdfMode ? "shaders/fdf.spv" : "shaders/slang.spv";
+    // Select shader path
+    std::string shaderPath = "shaders/slang.spv";
 
     // Create vertex shader
     rhiVertexShader = rhiBridge->createShaderFromFile(
@@ -288,7 +260,7 @@ void Renderer::createRHIPipeline() {
     );
 
     if (!rhiVertexShader || !rhiFragmentShader) {
-        std::cerr << "[Renderer] Failed to create RHI shaders\n";
+        LOG_ERROR("Renderer") << "Failed to create RHI shaders";
         return;
     }
 
@@ -298,7 +270,7 @@ void Renderer::createRHIPipeline() {
     rhiPipelineLayout = rhiBridge->createPipelineLayout(layoutDesc);
 
     if (!rhiPipelineLayout) {
-        std::cerr << "[Renderer] Failed to create RHI pipeline layout\n";
+        LOG_ERROR("Renderer") << "Failed to create RHI pipeline layout";
         return;
     }
 
@@ -319,19 +291,15 @@ void Renderer::createRHIPipeline() {
     pipelineDesc.layout = rhiPipelineLayout.get();
     pipelineDesc.vertex.buffers.push_back(vertexLayout);
 
-    // Primitive state - wireframe for FDF mode
-    pipelineDesc.primitive.topology = fdfMode
-        ? rhi::PrimitiveTopology::LineList
-        : rhi::PrimitiveTopology::TriangleList;
-    pipelineDesc.primitive.cullMode = fdfMode
-        ? rhi::CullMode::None
-        : rhi::CullMode::Back;
+    // Primitive state
+    pipelineDesc.primitive.topology = rhi::PrimitiveTopology::TriangleList;
+    pipelineDesc.primitive.cullMode = rhi::CullMode::Back;
     pipelineDesc.primitive.frontFace = rhi::FrontFace::CounterClockwise;
 
     // Depth-stencil state
     rhi::DepthStencilState depthStencilState;
     depthStencilState.depthTestEnabled = true;
-    depthStencilState.depthWriteEnabled = !fdfMode;  // Disable depth write for wireframe
+    depthStencilState.depthWriteEnabled = true;
     depthStencilState.depthCompare = rhi::CompareOp::Less;
     depthStencilState.format = rhi::TextureFormat::Depth32Float;
     pipelineDesc.depthStencil = &depthStencilState;
@@ -369,9 +337,9 @@ void Renderer::createRHIPipeline() {
     rhiPipeline = rhiBridge->createRenderPipeline(pipelineDesc);
 
     if (rhiPipeline) {
-        std::cout << "[Renderer] RHI Pipeline created successfully\n";
+        LOG_INFO("Renderer") << "RHI Pipeline created successfully";
     } else {
-        std::cerr << "[Renderer] Failed to create RHI pipeline\n";
+        LOG_ERROR("Renderer") << "Failed to create RHI pipeline";
     }
 }
 
@@ -484,9 +452,9 @@ void Renderer::createRHIBuffers() {
             }
         }
 
-        std::cout << "[Renderer] RHI buffers uploaded: " 
+        LOG_INFO("Renderer") << "RHI buffers uploaded: " 
                   << vertexCount << " vertices (" << vertexBufferSize << " bytes), " 
-                  << indexCount << " indices (" << indexBufferSize << " bytes)\n";
+                  << indexCount << " indices (" << indexBufferSize << " bytes)";
     }
 }
 
@@ -519,10 +487,10 @@ void Renderer::createBuildingPipeline() {
         "main"
     );
 
-    std::cout << "[Renderer] Using building shaders (simplified instancing format)\n";
+    LOG_DEBUG("Renderer") << "Using building shaders (simplified instancing format)";
 
     if (!buildingVertexShader || !buildingFragmentShader) {
-        std::cerr << "[Renderer] Failed to create building shaders\n";
+        LOG_ERROR("Renderer") << "Failed to create building shaders";
         return;
     }
 
@@ -538,7 +506,7 @@ void Renderer::createBuildingPipeline() {
     buildingBindGroupLayout = rhiBridge->getDevice()->createBindGroupLayout(buildingLayoutDesc);
 
     if (!buildingBindGroupLayout) {
-        std::cerr << "[Renderer] Failed to create building bind group layout\n";
+        LOG_ERROR("Renderer") << "Failed to create building bind group layout";
         return;
     }
 
@@ -560,7 +528,7 @@ void Renderer::createBuildingPipeline() {
     buildingPipelineLayout = rhiBridge->createPipelineLayout(layoutDesc);
 
     if (!buildingPipelineLayout) {
-        std::cerr << "[Renderer] Failed to create building pipeline layout\n";
+        LOG_ERROR("Renderer") << "Failed to create building pipeline layout";
         return;
     }
 
@@ -637,9 +605,9 @@ void Renderer::createBuildingPipeline() {
     buildingPipeline = rhiBridge->createRenderPipeline(pipelineDesc);
 
     if (buildingPipeline) {
-        std::cout << "[Renderer] Building instancing pipeline created successfully\n";
+        LOG_INFO("Renderer") << "Building instancing pipeline created successfully";
     } else {
-        std::cerr << "[Renderer] Failed to create building pipeline\n";
+        LOG_ERROR("Renderer") << "Failed to create building pipeline";
     }
 }
 

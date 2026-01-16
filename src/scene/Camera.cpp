@@ -1,8 +1,8 @@
 #include "Camera.hpp"
+#include "src/utils/Logger.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/constants.hpp>
 #include <algorithm>
-#include <iostream>
 
 Camera::Camera(float aspectRatio, ProjectionMode mode)
     : position(80.0f, 80.0f, 100.0f),  // Higher and farther back for better view
@@ -18,7 +18,7 @@ Camera::Camera(float aspectRatio, ProjectionMode mode)
       farPlane(1000.0f),
       orthoSize(40.0f) {
     // Don't call updateCameraVectors() - use fixed position/target
-    std::cout << "[Camera] Initialized at pos=(80, 80, 100), target=(0, 15, 0), FOV=70deg" << std::endl;
+    LOG_DEBUG("Camera") << "Initialized at pos=(80, 80, 100), target=(0, 15, 0), FOV=70deg";
 }
 
 glm::mat4 Camera::getViewMatrix() const {

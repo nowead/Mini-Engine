@@ -32,27 +32,12 @@ void ImGuiManager::newFrame() {
     backend->newFrame();
 }
 
-void ImGuiManager::renderUI(Camera& camera, bool isFdfMode, float zScale,
-                            std::function<void()> onModeToggle,
-                            std::function<void(const std::string&)> onFileLoad) {
+void ImGuiManager::renderUI(Camera& camera, uint32_t buildingCount) {
     // Main control window - fixed to top-left corner
     ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_Always);
-    ImGui::Begin("FdF Controls", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove);
+    ImGui::Begin("Mini-Engine", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove);
 
-    ImGui::Text("Vulkan FdF Wireframe Visualizer");
-    ImGui::Separator();
-
-    // Mode control
-    ImGui::Text("Rendering Mode:");
-    if (ImGui::Button(isFdfMode ? "Mode: FDF (Wireframe)" : "Mode: OBJ (Solid)")) {
-        if (onModeToggle) onModeToggle();
-    }
-    ImGui::SameLine();
-    ImGui::TextDisabled("(?)");
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Toggle between FDF wireframe and OBJ solid rendering");
-    }
-
+    ImGui::Text("Building Visualization Engine");
     ImGui::Separator();
 
     // Camera controls
@@ -72,49 +57,23 @@ void ImGuiManager::renderUI(Camera& camera, bool isFdfMode, float zScale,
         if (ImGui::Button("Reset Camera")) {
             camera.reset();
         }
-
-        // Display Z-scale
-        if (isFdfMode) {
-            ImGui::Separator();
-            ImGui::Text("Z-Axis Scale:");
-            ImGui::Text("  Scale: %.2f", zScale);
-            ImGui::TextDisabled("  (Q/E keys to adjust)");
-        }
-
-        ImGui::Separator();
-        ImGui::Text("Speed Controls:");
-        ImGui::SliderFloat("Move Speed", &moveSpeed, 0.1f, 5.0f);
-        ImGui::SliderFloat("Rotate Speed", &rotateSpeed, 0.1f, 2.0f);
-        ImGui::SliderFloat("Zoom Speed", &zoomSpeed, 0.1f, 3.0f);
     }
 
     ImGui::Separator();
 
-    // File loading
-    if (ImGui::CollapsingHeader("File Loading")) {
-        ImGui::InputText("File Path", filePathBuffer, sizeof(filePathBuffer));
-        if (ImGui::Button("Load File")) {
-            if (onFileLoad) onFileLoad(std::string(filePathBuffer));
-        }
-
-        ImGui::Text("Quick Load:");
-        if (ImGui::Button("test.fdf")) {
-            if (onFileLoad) onFileLoad("models/test.fdf");
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("pyramid.fdf")) {
-            if (onFileLoad) onFileLoad("models/pyramid.fdf");
-        }
+    // Scene info
+    if (ImGui::CollapsingHeader("Scene", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Text("Buildings: %u", buildingCount);
+        ImGui::Text("Rendering: GPU Instancing");
     }
 
     ImGui::Separator();
 
     // Controls help
-    if (ImGui::CollapsingHeader("Controls Help")) {
+    if (ImGui::CollapsingHeader("Controls")) {
         ImGui::BulletText("Left Mouse + Drag: Rotate camera");
         ImGui::BulletText("Mouse Wheel: Zoom in/out");
         ImGui::BulletText("W/A/S/D: Move camera");
-        ImGui::BulletText("Q/E: Adjust Z-axis scale (FDF mode)");
         ImGui::BulletText("P or I: Toggle projection");
         ImGui::BulletText("R: Reset camera");
         ImGui::BulletText("ESC: Exit");

@@ -1,6 +1,5 @@
 #include "Mesh.hpp"
 #include "src/loaders/OBJLoader.hpp"
-#include "src/loaders/FDFLoader.hpp"
 #include <cstring>
 
 Mesh::Mesh(rhi::RHIDevice* device, rhi::RHIQueue* queue)
@@ -20,13 +19,6 @@ Mesh::Mesh(rhi::RHIDevice* device, rhi::RHIQueue* queue,
 
 void Mesh::loadFromOBJ(const std::string& filename) {
     OBJLoader::load(filename, vertices, indices);
-    createBuffers();
-}
-
-void Mesh::loadFromFDF(const std::string& filename, float zScale) {
-    auto fdfData = FDFLoader::load(filename, zScale);
-    vertices = std::move(fdfData.vertices);
-    indices = std::move(fdfData.indices);
     createBuffers();
 }
 

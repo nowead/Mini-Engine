@@ -1,7 +1,7 @@
 #include "InstancingTest.hpp"
+#include "src/utils/Logger.hpp"
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
-#include <iostream>
 #include <cmath>
 #include <fstream>
 #include <vector>
@@ -46,23 +46,23 @@ struct CameraUBO {
 InstancingTest::InstancingTest(rhi::RHIDevice* device, int width, int height, void* nativeRenderPass)
     : m_device(device), m_nativeRenderPass(nativeRenderPass), m_width(width), m_height(height) {
 
-    std::cout << "[InstancingTest] Initializing with " << width << "x" << height << std::endl;
+    LOG_DEBUG("InstancingTest") << "Initializing with " << width << "x" << height;
 }
 
 InstancingTest::~InstancingTest() {
-    std::cout << "[InstancingTest] Cleanup" << std::endl;
+    LOG_DEBUG("InstancingTest") << "Cleanup";
 }
 
 void InstancingTest::init() {
-    std::cout << "[InstancingTest] Creating resources..." << std::endl;
+    LOG_DEBUG("InstancingTest") << "Creating resources...";
 
     createCubeGeometry();
     createInstanceData();
     createUniformBuffer();
     createPipeline();
 
-    std::cout << "[InstancingTest] Initialization complete! Ready to render "
-              << INSTANCE_COUNT << " cubes." << std::endl;
+    LOG_INFO("InstancingTest") << "Initialization complete! Ready to render "
+              << INSTANCE_COUNT << " cubes.";
 }
 
 void InstancingTest::createCubeGeometry() {
@@ -134,7 +134,7 @@ void InstancingTest::createCubeGeometry() {
     m_indexBuffer = m_device->createBuffer(indexBufferDesc);
     m_indexBuffer->write(indices, sizeof(indices));
 
-    std::cout << "[InstancingTest] Cube geometry created: " << m_indexCount << " indices" << std::endl;
+    LOG_DEBUG("InstancingTest") << "Cube geometry created: " << m_indexCount << " indices";
 }
 
 void InstancingTest::createInstanceData() {
@@ -177,7 +177,7 @@ void InstancingTest::createInstanceData() {
     m_instanceBuffer = m_device->createBuffer(instanceBufferDesc);
     m_instanceBuffer->write(instances.data(), instanceBufferDesc.size);
 
-    std::cout << "[InstancingTest] Instance data created: " << INSTANCE_COUNT << " instances" << std::endl;
+    LOG_DEBUG("InstancingTest") << "Instance data created: " << INSTANCE_COUNT << " instances";
 }
 
 void InstancingTest::createUniformBuffer() {
@@ -188,14 +188,14 @@ void InstancingTest::createUniformBuffer() {
 
     m_uniformBuffer = m_device->createBuffer(uniformBufferDesc);
 
-    std::cout << "[InstancingTest] Uniform buffer created" << std::endl;
+    LOG_DEBUG("InstancingTest") << "Uniform buffer created";
 }
 
 void InstancingTest::createPipeline() {
-    std::cout << "[InstancingTest] Creating pipeline..." << std::endl;
+    LOG_DEBUG("InstancingTest") << "Creating pipeline...";
 
     // Load shaders
-    std::cout << "  Loading shaders..." << std::endl;
+    LOG_DEBUG("InstancingTest") << "  Loading shaders...";
 
 #ifdef __EMSCRIPTEN__
     // WebGPU/WASM: Use WGSL shaders
@@ -220,7 +220,7 @@ void InstancingTest::createPipeline() {
     m_fragmentShader = m_device->createShader(fragShaderDesc);
 
     // Create bind group layout (for uniform buffer)
-    std::cout << "  Creating bind group layout..." << std::endl;
+    LOG_DEBUG("InstancingTest") << "  Creating bind group layout...";
     rhi::BindGroupLayoutEntry uboEntry(0, rhi::ShaderStage::Vertex, rhi::BindingType::UniformBuffer);
 
     rhi::BindGroupLayoutDesc bindGroupLayoutDesc;
@@ -230,7 +230,7 @@ void InstancingTest::createPipeline() {
     m_bindGroupLayout = m_device->createBindGroupLayout(bindGroupLayoutDesc);
 
     // Create bind group (bind actual uniform buffer)
-    std::cout << "  Creating bind group..." << std::endl;
+    LOG_DEBUG("InstancingTest") << "  Creating bind group...";
     auto bufferEntry = rhi::BindGroupEntry::Buffer(0, m_uniformBuffer.get(), 0, m_uniformBuffer->getSize());
 
     rhi::BindGroupDesc bindGroupDesc;
@@ -241,7 +241,7 @@ void InstancingTest::createPipeline() {
     m_bindGroup = m_device->createBindGroup(bindGroupDesc);
 
     // Create pipeline layout
-    std::cout << "  Creating pipeline layout..." << std::endl;
+    LOG_DEBUG("InstancingTest") << "  Creating pipeline layout...";
     rhi::PipelineLayoutDesc pipelineLayoutDesc;
     pipelineLayoutDesc.bindGroupLayouts = {m_bindGroupLayout.get()};
     pipelineLayoutDesc.label = "Instancing Pipeline Layout";
@@ -249,7 +249,7 @@ void InstancingTest::createPipeline() {
     m_pipelineLayout = m_device->createPipelineLayout(pipelineLayoutDesc);
 
     // Define vertex input layout
-    std::cout << "  Setting up vertex layout..." << std::endl;
+    LOG_DEBUG("InstancingTest") << "  Setting up vertex layout...";
 
     // Binding 0: Per-vertex data
     rhi::VertexBufferLayout vertexLayout;
@@ -272,8 +272,8 @@ void InstancingTest::createPipeline() {
     };
 
     // Create render pipeline
-    std::cout << "  Creating render pipeline..." << std::endl;
-    std::cout << "  nativeRenderPass: " << m_nativeRenderPass << std::endl;
+    LOG_DEBUG("InstancingTest") << "  Creating render pipeline...";
+    LOG_DEBUG("InstancingTest") << "  nativeRenderPass: " << m_nativeRenderPass;
     rhi::RenderPipelineDesc pipelineDesc;
     pipelineDesc.vertexShader = m_vertexShader.get();
     pipelineDesc.fragmentShader = m_fragmentShader.get();
@@ -307,7 +307,7 @@ void InstancingTest::createPipeline() {
 
     m_pipeline = m_device->createRenderPipeline(pipelineDesc);
 
-    std::cout << "[InstancingTest] Pipeline created successfully!" << std::endl;
+    LOG_INFO("InstancingTest") << "Pipeline created successfully!";
 }
 
 void InstancingTest::update(float deltaTime) {

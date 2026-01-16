@@ -1,5 +1,5 @@
 #include "WorldManager.hpp"
-#include <iostream>
+#include "src/utils/Logger.hpp"
 #include <algorithm>
 
 WorldManager::WorldManager(rhi::RHIDevice* device, rhi::RHIQueue* queue)
@@ -12,7 +12,7 @@ WorldManager::WorldManager(rhi::RHIDevice* device, rhi::RHIQueue* queue)
 }
 
 void WorldManager::initialize() {
-    std::cout << "WorldManager: Initializing world..." << std::endl;
+    LOG_INFO("WorldManager") << "Initializing world...";
 
     // Create default sectors
     createDefaultSectors();
@@ -20,21 +20,21 @@ void WorldManager::initialize() {
     // Create default building mesh
     buildingManager->createDefaultMesh();
 
-    std::cout << "WorldManager: Initialization complete - "
-              << sectors.size() << " sectors created" << std::endl;
+    LOG_INFO("WorldManager") << "Initialization complete - "
+              << sectors.size() << " sectors created";
 }
 
 void WorldManager::initializeFromConfig(const std::string& configPath) {
     // TODO: Load configuration from JSON file
     // For now, just use default initialization
     initialize();
-    std::cout << "WorldManager: Config loading not yet implemented, using defaults" << std::endl;
+    LOG_WARN("WorldManager") << "Config loading not yet implemented, using defaults";
 }
 
 void WorldManager::createSector(const Sector& sector) {
     // Check if sector already exists
     if (sectorIdToIndex.find(sector.id) != sectorIdToIndex.end()) {
-        std::cerr << "WorldManager: Sector '" << sector.id << "' already exists!" << std::endl;
+        LOG_WARN("WorldManager") << "Sector '" << sector.id << "' already exists!";
         return;
     }
 
@@ -46,10 +46,9 @@ void WorldManager::createSector(const Sector& sector) {
     // Calculate grid dimensions
     sectors[index].calculateGridDimensions();
 
-    std::cout << "WorldManager: Created sector '" << sectors[index].id
+    LOG_DEBUG("WorldManager") << "Created sector '" << sectors[index].id
               << "' with " << sectors[index].maxBuildings << " slots ("
-              << sectors[index].gridRows << "x" << sectors[index].gridColumns << " grid)"
-              << std::endl;
+              << sectors[index].gridRows << "x" << sectors[index].gridColumns << " grid)";
 }
 
 Sector* WorldManager::getSector(const std::string& sectorId) {
@@ -68,13 +67,13 @@ uint64_t WorldManager::spawnBuilding(
     // Get sector
     Sector* sector = getSector(sectorId);
     if (!sector) {
-        std::cerr << "WorldManager: Sector '" << sectorId << "' not found!" << std::endl;
+        LOG_ERROR("WorldManager") << "Sector '" << sectorId << "' not found!";
         return 0;
     }
 
     // Check sector capacity
     if (!sector->hasCapacity()) {
-        std::cerr << "WorldManager: Sector '" << sectorId << "' is full!" << std::endl;
+        LOG_WARN("WorldManager") << "Sector '" << sectorId << "' is full!";
         return 0;
     }
 
@@ -97,8 +96,8 @@ void WorldManager::spawnMultipleBuildings(
     const std::string& sectorId,
     float basePrice
 ) {
-    std::cout << "WorldManager: Spawning " << tickers.size()
-              << " buildings in sector '" << sectorId << "'..." << std::endl;
+    LOG_DEBUG("WorldManager") << "Spawning " << tickers.size()
+              << " buildings in sector '" << sectorId << "'...";
 
     size_t successCount = 0;
     for (const auto& ticker : tickers) {
@@ -108,8 +107,8 @@ void WorldManager::spawnMultipleBuildings(
         }
     }
 
-    std::cout << "WorldManager: Successfully spawned " << successCount
-              << "/" << tickers.size() << " buildings" << std::endl;
+    LOG_INFO("WorldManager") << "Successfully spawned " << successCount
+              << "/" << tickers.size() << " buildings";
 }
 
 void WorldManager::updateMarketData(const PriceUpdateBatch& updates) {

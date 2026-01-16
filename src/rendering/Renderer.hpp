@@ -36,12 +36,10 @@ public:
      * @param window GLFW window for surface creation
      * @param validationLayers Validation layers to enable
      * @param enableValidation Whether to enable validation
-     * @param useFdfMode Use FDF wireframe mode (default: false)
      */
     Renderer(GLFWwindow* window,
              const std::vector<const char*>& validationLayers,
-             bool enableValidation,
-             bool useFdfMode = false);
+             bool enableValidation);
 
     ~Renderer();
 
@@ -85,21 +83,6 @@ public:
      */
     void updateCamera(const glm::mat4& view, const glm::mat4& projection);
 
-    /**
-     * @brief Check if FDF mode is active
-     */
-    bool isFdfMode() const { return fdfMode; }
-
-    /**
-     * @brief Adjust Z-scale for FDF visualization
-     * @param delta Change in Z-scale (can be positive or negative)
-     */
-    void adjustZScale(float delta);
-
-    /**
-     * @brief Get current Z-scale value
-     */
-    float getZScale() const { return zScale; }
 
     /**
      * @brief Get mesh bounding box center (for camera targeting)
@@ -197,12 +180,6 @@ private:
     glm::mat4 viewMatrix;
     glm::mat4 projectionMatrix;
 
-    // Mode flag
-    bool fdfMode;
-
-    // FDF Z-scale factor
-    float zScale = 1.0f;
-    std::string currentModelPath;
 
     // Instanced rendering data (submitted per-frame) - stored by value
     std::optional<rendering::InstancedRenderData> pendingInstancedData;

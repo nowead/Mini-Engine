@@ -47,10 +47,7 @@ private:
     // Window configuration
     static constexpr uint32_t WINDOW_WIDTH = 800;
     static constexpr uint32_t WINDOW_HEIGHT = 600;
-    static constexpr const char* WINDOW_TITLE = "Vulkan";
-
-    // Configuration
-    static constexpr bool ENABLE_IMGUI = true;  // Enable ImGui UI
+    static constexpr const char* WINDOW_TITLE = "Mini-Engine";
 
     // Validation layers
     const std::vector<const char*> validationLayers = {
@@ -82,7 +79,8 @@ private:
 
     // Initialization
     void initWindow();
-    void initVulkan();
+    void initRenderer();
+    void initGameLogic();
 
     // Main loop
     void mainLoop();

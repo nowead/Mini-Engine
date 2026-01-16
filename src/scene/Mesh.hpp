@@ -14,7 +14,7 @@
  * - Store vertex and index data
  * - Manage vertex and index buffers (RHI)
  * - Provide buffer accessors for rendering
- * - Support loading from various formats (OBJ, FDF)
+ * - Support loading from OBJ format
  *
  * Note: Migrated to RHI in Phase 5 (Scene Layer Migration)
  */
@@ -52,14 +52,6 @@ public:
      * @throws std::runtime_error if loading fails
      */
     void loadFromOBJ(const std::string& filename);
-
-    /**
-     * @brief Load mesh from FDF file
-     * @param filename Path to FDF file
-     * @param zScale Scale factor for Z-axis (default 1.0)
-     * @throws std::runtime_error if loading fails
-     */
-    void loadFromFDF(const std::string& filename, float zScale = 1.0f);
 
     /**
      * @brief Set mesh data and create GPU buffers

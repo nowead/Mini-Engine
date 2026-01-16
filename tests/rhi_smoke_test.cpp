@@ -1,14 +1,14 @@
 /**
  * @file rhi_smoke_test.cpp
- * @brief Phase 3-4 Smoke Test - RHI Factory, Bridge & Command Recording
+ * @brief RHI Smoke Test - RHI Factory, Bridge & Command Recording
  *
  * Tests:
  * 1. RHIFactory::createDevice() works
  * 2. Backend enumeration
  * 3. RendererBridge initialization
  * 4. Basic device queries
- * 5. Command encoding (Phase 4)
- * 6. Queue submission (Phase 4)
+ * 5. Command encoding
+ * 6. Queue submission
  */
 
 #include <rhi/RHI.hpp>
@@ -149,7 +149,7 @@ bool testResourceCreation(GLFWwindow* window) {
 }
 
 bool testCommandEncoding(GLFWwindow* window) {
-    std::cout << "\n=== Test 4: Command Encoding (Phase 4) ===\n";
+    std::cout << "\n=== Test 4: Command Encoding ===\n";
     
     try {
         auto bridge = std::make_unique<rendering::RendererBridge>(window, true);
@@ -179,7 +179,7 @@ bool testCommandEncoding(GLFWwindow* window) {
 }
 
 bool testPipelineCreation(GLFWwindow* window) {
-    std::cout << "\n=== Test 6: Pipeline Creation (Phase 4.4) ===\n";
+    std::cout << "\n=== Test 6: Pipeline Creation ===\n";
     
     try {
         auto bridge = std::make_unique<rendering::RendererBridge>(window, true);
@@ -304,7 +304,7 @@ bool testPipelineCreation(GLFWwindow* window) {
 }
 
 bool testQueueSubmission(GLFWwindow* window) {
-    std::cout << "\n=== Test 5: Queue Submission (Phase 4) ===\n";
+    std::cout << "\n=== Test 5: Queue Submission ===\n";
     
     try {
         auto bridge = std::make_unique<rendering::RendererBridge>(window, true);
@@ -341,9 +341,9 @@ bool testQueueSubmission(GLFWwindow* window) {
 }
 
 int main() {
-    std::cout << "╔════════════════════════════════════════╗\n";
-    std::cout << "║ Phase 3-4: RHI Integration Smoke Test  ║\n";
-    std::cout << "╚════════════════════════════════════════╝\n";
+    std::cout << "\n========================================\n";
+    std::cout << "  MiniEngine RHI Smoke Test\n";
+    std::cout << "========================================\n";
     
     // Initialize GLFW
     if (!glfwInit()) {
@@ -377,23 +377,23 @@ int main() {
     glfwTerminate();
     
     // Results
-    std::cout << "\n╔════════════════════════════════════════╗\n";
-    std::cout << "║          Test Results                  ║\n";
-    std::cout << "╠════════════════════════════════════════╣\n";
-    std::cout << "║ RHI Factory:        " << (test1 ? "✓ PASS" : "✗ FAIL") << "              ║\n";
-    std::cout << "║ Renderer Bridge:    " << (test2 ? "✓ PASS" : "✗ FAIL") << "              ║\n";
-    std::cout << "║ Resource Creation:  " << (test3 ? "✓ PASS" : "✗ FAIL") << "              ║\n";
-    std::cout << "║ Command Encoding:   " << (test4 ? "✓ PASS" : "✗ FAIL") << "              ║\n";
-    std::cout << "║ Queue Submission:   " << (test5 ? "✓ PASS" : "✗ FAIL") << "              ║\n";
-    std::cout << "║ Pipeline Creation:  " << (test6 ? "✓ PASS" : "✗ FAIL") << "              ║\n";
-    std::cout << "╚════════════════════════════════════════╝\n";
+    std::cout << "\n========================================\n";
+    std::cout << "  Test Results\n";
+    std::cout << "========================================\n";
+    std::cout << "  RHI Factory:       " << (test1 ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Renderer Bridge:   " << (test2 ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Resource Creation: " << (test3 ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Command Encoding:  " << (test4 ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Queue Submission:  " << (test5 ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Pipeline Creation: " << (test6 ? "PASS" : "FAIL") << "\n";
+    std::cout << "========================================\n";
     
     bool allPassed = test1 && test2 && test3 && test4 && test5 && test6;
     if (allPassed) {
-        std::cout << "\n🎉 Phase 4.4 Smoke Test: ALL TESTS PASSED\n";
+        std::cout << "\nRHI Smoke Test: ALL TESTS PASSED\n";
         return 0;
     } else {
-        std::cout << "\n❌ Phase 4.4 Smoke Test: SOME TESTS FAILED\n";
+        std::cout << "\nRHI Smoke Test: SOME TESTS FAILED\n";
         return 1;
     }
 }

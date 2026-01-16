@@ -37,3 +37,6 @@ docs/blog
 
 #ImGui
 imgui.ini
+
+# Local development docs (not tracked)
+REFACTORING_TODO.md

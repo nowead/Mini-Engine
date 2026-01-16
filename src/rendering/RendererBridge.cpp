@@ -1,8 +1,8 @@
 #include "RendererBridge.hpp"
 #include "RHIFactory.hpp"
+#include "src/utils/Logger.hpp"
 #include <GLFW/glfw3.h>
 #include <stdexcept>
-#include <iostream>
 #include <fstream>
 
 namespace rendering {
@@ -17,9 +17,9 @@ RendererBridge::RendererBridge(GLFWwindow* window, bool enableValidation)
     initializeRHI(window, enableValidation);
     createSyncObjects();
 
-    std::cout << "[RendererBridge] Initialized with "
+    LOG_INFO("RendererBridge") << "Initialized with "
               << rhi::RHIFactory::getBackendName(getBackendType())
-              << " backend\n";
+              << " backend";
 }
 
 RendererBridge::~RendererBridge() {
@@ -217,7 +217,7 @@ void RendererBridge::submitCommandBuffer(
     // Get the graphics queue
     auto* queue = m_device->getQueue(rhi::QueueType::Graphics);
     if (!queue) {
-        std::cerr << "[RendererBridge] No graphics queue available\n";
+        LOG_ERROR("RendererBridge") << "No graphics queue available";
         return;
     }
 

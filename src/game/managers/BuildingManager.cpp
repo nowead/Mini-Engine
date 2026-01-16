@@ -1,9 +1,9 @@
 #include "BuildingManager.hpp"
 #include "src/scene/Mesh.hpp"
 #include "src/utils/Vertex.hpp"
+#include "src/utils/Logger.hpp"
 #include <chrono>
 #include <algorithm>
-#include <iostream>
 
 BuildingManager::BuildingManager(rhi::RHIDevice* device, rhi::RHIQueue* queue)
     : rhiDevice(device)
@@ -24,7 +24,7 @@ uint64_t BuildingManager::createBuilding(
 ) {
     // Check if ticker already exists
     if (tickerToEntityId.find(ticker) != tickerToEntityId.end()) {
-        std::cerr << "BuildingManager: Ticker '" << ticker << "' already exists!" << std::endl;
+        LOG_WARN("BuildingManager") << "Ticker '" << ticker << "' already exists!";
         return 0; // Invalid ID
     }
 
@@ -80,9 +80,9 @@ uint64_t BuildingManager::createBuilding(
     // Mark instance buffer as dirty (needs update)
     instanceBufferDirty = true;
 
-    std::cout << "BuildingManager: Created building '" << ticker
+    LOG_DEBUG("BuildingManager") << "Created building '" << ticker
               << "' at (" << position.x << ", " << position.y << ", " << position.z << ")"
-              << " with initial height " << building.currentHeight << "m" << std::endl;
+              << " with initial height " << building.currentHeight << "m";
 
     return entityId;
 }
