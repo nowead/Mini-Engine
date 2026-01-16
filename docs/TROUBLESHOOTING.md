@@ -502,6 +502,63 @@ ${SLANGC_EXECUTABLE} ${SHADER_SOURCES} ... -Wno-41012 -o slang.spv
 
 ---
 
+### Shader Version Mismatch (GLSL/SPIR-V)
+
+**Error:**
+```
+[Vulkan] Validation Error: Shader expects Location N but vertex input state doesn't provide it
+```
+
+**Cause:**
+- GLSL source code was modified
+- SPIR-V (.spv) files not recompiled
+- Cached outdated binaries being used
+
+**Solution:**
+
+1. **Automatic recompilation (recommended):**
+   ```bash
+   make clean
+   make  # CMake will recompile all modified shaders
+   ```
+
+2. **Manual shader compilation:**
+   ```bash
+   cd shaders
+   # For building shaders (instanced rendering)
+   glslc -fshader-stage=vertex building.vert.glsl -o building.vert.spv
+   glslc -fshader-stage=fragment building.frag.glsl -o building.frag.spv
+   
+   # For instancing test shaders
+   glslc -fshader-stage=vertex instancing_test.vert.glsl -o instancing_test.vert.spv
+   glslc -fshader-stage=fragment instancing_test.frag.glsl -o instancing_test.frag.spv
+   ```
+
+3. **Verify compiled shader inputs:**
+   ```bash
+   spirv-cross --reflect shaders/building.vert.spv | grep -A30 '"inputs"'
+   # Check that locations match your vertex input state
+   ```
+
+**Prevention:**
+- CMake is configured to automatically track GLSL files as dependencies
+- Running `make` will detect changes and recompile shaders
+- Never manually copy `.spv` files between machines/branches
+
+**CMake Automatic Shader Compilation:**
+```cmake
+# CMakeLists.txt already configured:
+add_custom_command(
+    OUTPUT ${SHADER_DIR}/building.vert.spv
+    COMMAND glslc -fshader-stage=vertex ...
+    DEPENDS ${SHADER_DIR}/building.vert.glsl
+    COMMENT "Compiling building.vert.glsl -> SPIR-V"
+)
+add_dependencies(MiniEngine building_shaders)
+```
+
+---
+
 ## Platform-Specific Issues
 
 ### Linux: lavapipe Software Renderer Warning
@@ -648,6 +705,158 @@ WARNING: lavapipe is not a conformant Vulkan implementation
    ```bash
    vulkaninfo | grep deviceName
    # Should show your actual GPU, not llvmpipe
+   ```
+
+---
+
+### Linux: Vulkan 1.3 Dynamic Rendering Not Supported (lavapipe)
+
+**Error:**
+```
+[Vulkan] Validation Error: dynamicRendering feature was not enabled
+Function <vkCmdBeginRendering> requires <VK_KHR_dynamic_rendering> or <VK_VERSION_1_3>
+```
+
+**Cause:**
+- lavapipe (software renderer) only supports Vulkan 1.1.182
+- Dynamic rendering is a Vulkan 1.3 feature
+- macOS with MoltenVK supports Vulkan 1.3 features
+
+**Solution:**
+
+The engine automatically uses traditional render passes on Linux. If you still see this error:
+
+1. **Verify platform-specific code is being compiled:**
+   ```bash
+   # Check if __linux__ is defined
+   gcc -dM -E - < /dev/null | grep __linux__
+   ```
+
+2. **Code uses conditional compilation:**
+   - **macOS**: Uses dynamic rendering (Vulkan 1.3)
+   - **Linux**: Uses traditional render pass (Vulkan 1.1)
+
+3. **Ensure render pass is created:**
+   ```cpp
+   #ifdef __linux__
+   // Traditional render pass for Vulkan 1.1 compatibility
+   vulkanSwapchain->ensureRenderResourcesReady(depthView);
+   #endif
+   ```
+
+**Platform Compatibility Matrix:**
+
+| Feature | macOS (MoltenVK) | Linux (lavapipe) | Linux (Native GPU) |
+|---------|------------------|------------------|-------------------|
+| Vulkan Version | 1.3 | 1.1.182 | 1.2+ |
+| Dynamic Rendering | ✅ | ❌ | ✅ (1.3+) |
+| Traditional Render Pass | ✅ | ✅ | ✅ |
+
+---
+
+### Linux: Shader Validation Errors - Missing Vertex Input Locations
+
+**Error:**
+```
+[Vulkan] Validation Error: VUID-VkGraphicsPipelineCreateInfo-Input-07904
+pVertexInputState does not have a Location 3/4/5 but vertex shader has an input variable
+```
+
+**Cause:**
+- GLSL source code modified but SPIR-V not recompiled
+- Cached `.spv` files are outdated
+- Vertex input state doesn't match shader inputs
+
+**Solution:**
+
+1. **Clean and rebuild to recompile shaders:**
+   ```bash
+   make clean
+   make
+   ```
+
+2. **Manual shader recompilation:**
+   ```bash
+   cd shaders
+   glslc -fshader-stage=vertex building.vert.glsl -o building.vert.spv
+   glslc -fshader-stage=fragment building.frag.glsl -o building.frag.spv
+   ```
+
+3. **Verify shader inputs match vertex attributes:**
+   ```bash
+   # Inspect compiled shader
+   spirv-cross --reflect shaders/building.vert.spv | grep -A30 '"inputs"'
+   ```
+
+**Prevention:**
+- CMake now automatically recompiles shaders when GLSL files change
+- Always use `make` instead of manually copying `.spv` files
+
+---
+
+### Linux: Render Pass Compatibility Errors
+
+**Error:**
+```
+[Vulkan] Validation Error: VUID-VkFramebufferCreateInfo-attachmentCount-00876
+pCreateInfo->attachmentCount does not match renderPass attachment count
+```
+
+**Cause:**
+- Framebuffer created with different attachment count than render pass
+- Render pass expects depth attachment but framebuffer doesn't provide it
+
+**Solution:**
+
+1. **Ensure framebuffers match render pass:**
+   ```cpp
+   // If render pass has depth, framebuffer must too
+   vulkanSwapchain->ensureRenderResourcesReady(depthView);
+   ```
+
+2. **Check render pass and framebuffer attachment counts:**
+   - Render pass: color + depth = 2 attachments
+   - Framebuffer: must also have 2 attachments
+
+3. **Provide depth view when creating framebuffers:**
+   ```cpp
+   auto* vulkanSwapchain = static_cast<RHI::Vulkan::VulkanRHISwapchain*>(swapchain);
+   vulkanSwapchain->ensureRenderResourcesReady(m_depthView.get());
+   ```
+
+---
+
+### Validation Layers Not Found
+
+**Error:**
+```
+Validation layers requested but not available!
+```
+
+**Solution:**
+
+1. **Linux - Set validation layer path:**
+   ```bash
+   export VK_LAYER_PATH=/path/to/vulkan-sdk/share/vulkan/explicit_layer.d
+   # Example:
+   export VK_LAYER_PATH=$HOME/1.3.296.0/x86_64/share/vulkan/explicit_layer.d
+   ```
+
+2. **macOS - Use Homebrew paths:**
+   ```bash
+   export VK_LAYER_PATH=$(brew --prefix)/opt/vulkan-validationlayers/share/vulkan/explicit_layer.d
+   ```
+
+3. **Verify layers are available:**
+   ```bash
+   vulkaninfo | grep -A5 "Instance Layers"
+   # Should show: VK_LAYER_KHRONOS_validation
+   ```
+
+4. **Using Makefile:**
+   ```bash
+   make run        # Automatically sets VK_LAYER_PATH
+   make demo-smoke # For smoke tests with validation
    ```
 
 ---

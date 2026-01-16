@@ -209,7 +209,7 @@ void VulkanRHIDevice::createLogicalDevice() {
     }
     std::cout << std::endl;
 #else
-    // Device create info
+    // Linux/Windows: Use traditional device creation (no dynamic rendering)
     vk::DeviceCreateInfo createInfo{
         .queueCreateInfoCount = 1,
         .pQueueCreateInfos = &queueCreateInfo,

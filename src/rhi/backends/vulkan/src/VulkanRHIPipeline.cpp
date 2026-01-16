@@ -191,12 +191,86 @@ VulkanRHIRenderPipeline::VulkanRHIRenderPipeline(VulkanRHIDevice* device, const 
 
     // Platform-specific rendering setup
 #ifdef __linux__
-    // Linux: Use traditional render pass (lavapipe/Vulkan 1.1 doesn't support dynamic rendering)
-    vk::RenderPass renderPass = VK_NULL_HANDLE;
-    if (desc.nativeRenderPass) {
-        // Convert void* back to VkRenderPass
-        renderPass = reinterpret_cast<VkRenderPass>(desc.nativeRenderPass);
+    // Linux: Create a compatible render pass for pipelines (Vulkan 1.1 compatible)
+    // This is a minimal render pass for pipeline compatibility
+    std::vector<vk::AttachmentDescription> attachments;
+    std::vector<vk::AttachmentReference> colorReferences;
+    vk::AttachmentReference depthReference;
+    
+    // Color attachments
+    for (uint32_t i = 0; i < desc.colorTargets.size(); i++) {
+        const auto& target = desc.colorTargets[i];
+        vk::AttachmentDescription colorAttachment{
+            .format = ToVkFormat(target.format),
+            .samples = vk::SampleCountFlagBits::e1,
+            .loadOp = vk::AttachmentLoadOp::eClear,
+            .storeOp = vk::AttachmentStoreOp::eStore,
+            .stencilLoadOp = vk::AttachmentLoadOp::eDontCare,
+            .stencilStoreOp = vk::AttachmentStoreOp::eDontCare,
+            .initialLayout = vk::ImageLayout::eUndefined,
+            .finalLayout = vk::ImageLayout::ePresentSrcKHR
+        };
+        attachments.push_back(colorAttachment);
+        
+        colorReferences.push_back({
+            .attachment = i,
+            .layout = vk::ImageLayout::eColorAttachmentOptimal
+        });
     }
+    
+    // Depth attachment if present
+    bool hasDepth = desc.depthStencil != nullptr;
+    if (hasDepth) {
+        vk::AttachmentDescription depthAttachment{
+            .format = ToVkFormat(desc.depthStencil->format),
+            .samples = vk::SampleCountFlagBits::e1,
+            .loadOp = vk::AttachmentLoadOp::eClear,
+            .storeOp = vk::AttachmentStoreOp::eDontCare,
+            .stencilLoadOp = vk::AttachmentLoadOp::eDontCare,
+            .stencilStoreOp = vk::AttachmentStoreOp::eDontCare,
+            .initialLayout = vk::ImageLayout::eUndefined,
+            .finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal
+        };
+        attachments.push_back(depthAttachment);
+        
+        depthReference = {
+            .attachment = static_cast<uint32_t>(attachments.size() - 1),
+            .layout = vk::ImageLayout::eDepthStencilAttachmentOptimal
+        };
+    }
+    
+    // Subpass
+    vk::SubpassDescription subpass{
+        .pipelineBindPoint = vk::PipelineBindPoint::eGraphics,
+        .colorAttachmentCount = static_cast<uint32_t>(colorReferences.size()),
+        .pColorAttachments = colorReferences.data(),
+        .pDepthStencilAttachment = hasDepth ? &depthReference : nullptr
+    };
+    
+    // Subpass dependency - must match Swapchain render pass for compatibility
+    vk::SubpassDependency dependency{
+        .srcSubpass = VK_SUBPASS_EXTERNAL,
+        .dstSubpass = 0,
+        .srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput |
+                        vk::PipelineStageFlagBits::eEarlyFragmentTests,
+        .dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput |
+                        vk::PipelineStageFlagBits::eEarlyFragmentTests,
+        .srcAccessMask = vk::AccessFlagBits::eNone,
+        .dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite |
+                         vk::AccessFlagBits::eDepthStencilAttachmentWrite
+    };
+    
+    // Create render pass
+    vk::RenderPassCreateInfo renderPassInfo{
+        .attachmentCount = static_cast<uint32_t>(attachments.size()),
+        .pAttachments = attachments.data(),
+        .subpassCount = 1,
+        .pSubpasses = &subpass,
+        .dependencyCount = 1,
+        .pDependencies = &dependency
+    };
+    
+    m_renderPass = vk::raii::RenderPass(m_device->getVkDevice(), renderPassInfo);
 
     // Pipeline create info
     vk::GraphicsPipelineCreateInfo pipelineInfo;
@@ -212,10 +286,10 @@ VulkanRHIRenderPipeline::VulkanRHIRenderPipeline(VulkanRHIDevice* device, const 
     pipelineInfo.pColorBlendState = &colorBlending;
     pipelineInfo.pDynamicState = &dynamicState;
     pipelineInfo.layout = vulkanLayout->getVkPipelineLayout();
-    pipelineInfo.renderPass = renderPass;  // Traditional render pass
+    pipelineInfo.renderPass = *m_renderPass;  // Use our created render pass
     pipelineInfo.subpass = 0;
 #else
-    // macOS/Windows: Use dynamic rendering (Vulkan 1.3)
+    // macOS: Use dynamic rendering (Vulkan 1.3)
     std::vector<vk::Format> colorFormats;
     for (const auto& target : desc.colorTargets) {
         colorFormats.push_back(ToVkFormat(target.format));
@@ -248,6 +322,7 @@ VulkanRHIRenderPipeline::VulkanRHIRenderPipeline(VulkanRHIDevice* device, const 
     pipelineInfo.layout = vulkanLayout->getVkPipelineLayout();
     pipelineInfo.renderPass = nullptr;  // Using dynamic rendering
     pipelineInfo.subpass = 0;
+
 #endif
 
     m_pipeline = vk::raii::Pipeline(m_device->getVkDevice(), nullptr, pipelineInfo);
@@ -261,6 +336,9 @@ VulkanRHIRenderPipeline::VulkanRHIRenderPipeline(VulkanRHIRenderPipeline&& other
     : m_device(other.m_device)
     , m_pipeline(std::move(other.m_pipeline))
     , m_layout(other.m_layout)
+#ifdef __linux__
+    , m_renderPass(std::move(other.m_renderPass))
+#endif
 {
 }
 
@@ -269,6 +347,9 @@ VulkanRHIRenderPipeline& VulkanRHIRenderPipeline::operator=(VulkanRHIRenderPipel
         m_device = other.m_device;
         m_pipeline = std::move(other.m_pipeline);
         m_layout = other.m_layout;
+#ifdef __linux__
+        m_renderPass = std::move(other.m_renderPass);
+#endif
     }
     return *this;
 }

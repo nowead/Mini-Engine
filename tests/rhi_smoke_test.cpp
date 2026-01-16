@@ -187,9 +187,9 @@ bool testPipelineCreation(GLFWwindow* window) {
         
         // Create shader from SPIR-V file
         auto vertShader = bridge->createShaderFromFile(
-            "shaders/slang.spv", 
+            "shaders/building.vert.spv", 
             rhi::ShaderStage::Vertex, 
-            "vertMain"
+            "main"
         );
         if (!vertShader) {
             std::cerr << "✗ Failed to create vertex shader\n";
@@ -198,9 +198,9 @@ bool testPipelineCreation(GLFWwindow* window) {
         std::cout << "✓ Vertex shader created from SPIR-V\n";
         
         auto fragShader = bridge->createShaderFromFile(
-            "shaders/slang.spv",
+            "shaders/building.frag.spv",
             rhi::ShaderStage::Fragment,
-            "fragMain"
+            "main"
         );
         if (!fragShader) {
             std::cerr << "✗ Failed to create fragment shader\n";
@@ -271,6 +271,37 @@ bool testPipelineCreation(GLFWwindow* window) {
         vertexBufferLayout.attributes.push_back(texAttr);
         
         pipelineDesc.vertex.buffers.push_back(vertexBufferLayout);
+        
+        // Instance buffer layout (binding 1)
+        rhi::VertexBufferLayout instanceBufferLayout;
+        instanceBufferLayout.stride = sizeof(float) * 9; // 3 (pos) + 3 (color) + 3 (scale)
+        instanceBufferLayout.inputRate = rhi::VertexInputRate::Instance;
+        
+        // Instance position - vec3
+        rhi::VertexAttribute instPosAttr;
+        instPosAttr.location = 3;
+        instPosAttr.binding = 1;
+        instPosAttr.format = rhi::TextureFormat::RGB32Float;
+        instPosAttr.offset = 0;
+        instanceBufferLayout.attributes.push_back(instPosAttr);
+        
+        // Instance color - vec3
+        rhi::VertexAttribute instColorAttr;
+        instColorAttr.location = 4;
+        instColorAttr.binding = 1;
+        instColorAttr.format = rhi::TextureFormat::RGB32Float;
+        instColorAttr.offset = sizeof(float) * 3;
+        instanceBufferLayout.attributes.push_back(instColorAttr);
+        
+        // Instance scale - vec3
+        rhi::VertexAttribute instScaleAttr;
+        instScaleAttr.location = 5;
+        instScaleAttr.binding = 1;
+        instScaleAttr.format = rhi::TextureFormat::RGB32Float;
+        instScaleAttr.offset = sizeof(float) * 6;
+        instanceBufferLayout.attributes.push_back(instScaleAttr);
+        
+        pipelineDesc.vertex.buffers.push_back(instanceBufferLayout);
         
         // Color target
         rhi::ColorTargetState colorTarget;

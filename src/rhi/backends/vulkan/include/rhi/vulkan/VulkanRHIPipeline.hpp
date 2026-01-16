@@ -71,11 +71,21 @@ public:
     // Vulkan-specific accessors
     vk::Pipeline getVkPipeline() const { return *m_pipeline; }
     RHIPipelineLayout* getPipelineLayout() const { return m_layout; }
+    
+#ifdef __linux__
+    // Linux: Provide render pass for compatibility
+    vk::RenderPass getRenderPass() const { return *m_renderPass ? *m_renderPass : VK_NULL_HANDLE; }
+#endif
 
 private:
     VulkanRHIDevice* m_device;
     vk::raii::Pipeline m_pipeline;
     RHIPipelineLayout* m_layout;  // Phase 7.5: Store layout for descriptor set binding
+    
+#ifdef __linux__
+    // Linux: Store render pass for traditional rendering
+    vk::raii::RenderPass m_renderPass = nullptr;
+#endif
 };
 
 /**

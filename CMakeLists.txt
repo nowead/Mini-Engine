@@ -223,6 +223,35 @@ if(NOT EMSCRIPTEN)
 
     add_slang_shader_target(shader_compilation SOURCES ${SHADER_SLANG_SOURCES})
     add_dependencies(MiniEngine shader_compilation)
+
+    # Building shader GLSL compilation (REQUIRED for main application)
+    find_program(GLSLC_EXECUTABLE glslc HINTS $ENV{VULKAN_SDK}/bin REQUIRED)
+    set(BUILDING_SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
+    
+    add_custom_command(
+        OUTPUT ${BUILDING_SHADER_DIR}/building.vert.spv
+        COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=vertex
+                -o ${BUILDING_SHADER_DIR}/building.vert.spv
+                ${BUILDING_SHADER_DIR}/building.vert.glsl
+        DEPENDS ${BUILDING_SHADER_DIR}/building.vert.glsl
+        COMMENT "Compiling building.vert.glsl -> SPIR-V"
+    )
+    
+    add_custom_command(
+        OUTPUT ${BUILDING_SHADER_DIR}/building.frag.spv
+        COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=fragment
+                -o ${BUILDING_SHADER_DIR}/building.frag.spv
+                ${BUILDING_SHADER_DIR}/building.frag.glsl
+        DEPENDS ${BUILDING_SHADER_DIR}/building.frag.glsl
+        COMMENT "Compiling building.frag.glsl -> SPIR-V"
+    )
+    
+    add_custom_target(building_shaders DEPENDS
+        ${BUILDING_SHADER_DIR}/building.vert.spv
+        ${BUILDING_SHADER_DIR}/building.frag.spv
+    )
+    
+    add_dependencies(MiniEngine building_shaders)
 endif()
 
 # =============================================================================
