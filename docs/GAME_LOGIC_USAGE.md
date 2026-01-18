@@ -1,62 +1,91 @@
 # Game Logic Layer - Usage Guide
 
-**Document Version**: 1.0
+**Document Version**: 2.0
 **Created**: 2026-01-07
-**Status**: Implementation Complete - Integration Pending
+**Updated**: 2026-01-18
+**Status**: ✅ Fully Integrated and Running
 
 ---
 
 ## Quick Start
 
-### 1. Basic Usage Example
+### 1. Current Implementation (Application.cpp)
+
+The Game Logic Layer is **fully integrated** in the main application. Here's the actual implementation:
 
 ```cpp
-#include "src/game/managers/WorldManager.hpp"
-#include "src/game/sync/MockDataGenerator.hpp"
+// From src/Application.cpp - initGameLogic()
+void Application::initGameLogic() {
+    // Get RHI device and queue from renderer
+    auto* rhiDevice = renderer->getRHIDevice();
+    auto* rhiQueue = renderer->getGraphicsQueue();
 
-// In Application::initVulkan() or similar
-void setupGameWorld() {
     // Create WorldManager
-    worldManager = std::make_unique<WorldManager>(rhiDevice, graphicsQueue);
-
-    // Initialize with default sectors (NASDAQ, KOSDAQ, CRYPTO)
+    worldManager = std::make_unique<WorldManager>(rhiDevice, rhiQueue);
     worldManager->initialize();
 
-    // Create mock data generator
+    // Initialize mock data generator
     mockDataGen = std::make_unique<MockDataGenerator>();
 
-    // Spawn buildings
-    std::vector<std::string> nasdaqTickers = {"AAPL", "MSFT", "GOOGL", "AMZN", "META"};
-    worldManager->spawnMultipleBuildings(nasdaqTickers, "NASDAQ", 150.0f);
+    // Create sample buildings in a grid pattern
+    auto* buildingManager = worldManager->getBuildingManager();
+    if (buildingManager) {
+        int gridSize = 4;
+        float spacing = 30.0f;
+        float startX = -(gridSize - 1) * spacing / 2.0f;
+        float startZ = -(gridSize - 1) * spacing / 2.0f;
 
-    std::vector<std::string> cryptoTickers = {"BTC-USD", "ETH-USD", "BNB-USD"};
-    worldManager->spawnMultipleBuildings(cryptoTickers, "CRYPTO", 30000.0f);
+        for (int x = 0; x < gridSize; x++) {
+            for (int z = 0; z < gridSize; z++) {
+                float posX = startX + x * spacing;
+                float posZ = startZ + z * spacing;
+                float height = 15.0f + (x + z) * 5.0f;
 
-    // Register tickers with mock generator
-    mockDataGen->registerTickers(nasdaqTickers, 150.0f);
-    mockDataGen->registerTickers(cryptoTickers, 30000.0f);
-    mockDataGen->setVolatility(0.01f);  // 1% volatility
-}
+                std::string ticker = "BUILDING_" + std::to_string(x) + "_" + std::to_string(z);
+                buildingManager->createBuilding(ticker, "NASDAQ",
+                    glm::vec3(posX, 0.0f, posZ), height);
 
-// In Application::mainLoop()
-void updateGameWorld(float deltaTime) {
-    // Generate mock price updates (every frame or every N seconds)
-    static float updateTimer = 0.0f;
-    updateTimer += deltaTime;
-
-    if (updateTimer >= 1.0f) {  // Update every 1 second
-        updateTimer = 0.0f;
-
-        // Generate random price changes
-        PriceUpdateBatch updates = mockDataGen->generateUpdates();
-
-        // Apply to world
-        worldManager->updateMarketData(updates);
+                float initialPrice = 100.0f + (x * 10.0f + z * 5.0f);
+                mockDataGen->registerTicker(ticker, initialPrice);
+            }
+        }
     }
-
-    // Update animations
-    worldManager->update(deltaTime);
 }
+
+// From src/Application.cpp - mainLoop()
+// Price updates every 1 second
+priceUpdateTimer += deltaTime;
+if (priceUpdateTimer >= priceUpdateInterval) {
+    priceUpdateTimer = 0.0f;
+    PriceUpdateBatch updates = mockDataGen->generateUpdates();
+    worldManager->updateMarketData(updates);
+}
+
+// Update animations every frame
+worldManager->update(deltaTime);
+
+// Extract rendering data (clean layer separation)
+rendering::InstancedRenderData renderData;
+renderData.mesh = buildingManager->getBuildingMesh();
+renderData.instanceBuffer = buildingManager->getInstanceBuffer();
+renderData.instanceCount = buildingManager->getBuildingCount();
+renderer->submitInstancedRenderData(renderData);
+```
+
+### 2. Alternative: Sector-Based Spawning
+
+```cpp
+// Use sector system for organized building placement
+std::vector<std::string> nasdaqTickers = {"AAPL", "MSFT", "GOOGL", "AMZN", "META"};
+worldManager->spawnMultipleBuildings(nasdaqTickers, "NASDAQ", 150.0f);
+
+std::vector<std::string> cryptoTickers = {"BTC-USD", "ETH-USD", "BNB-USD"};
+worldManager->spawnMultipleBuildings(cryptoTickers, "CRYPTO", 30000.0f);
+
+// Register tickers with mock generator
+mockDataGen->registerTickers(nasdaqTickers, 150.0f);
+mockDataGen->registerTickers(cryptoTickers, 30000.0f);
+mockDataGen->setVolatility(0.01f);  // 1% volatility
 ```
 
 ---
@@ -315,27 +344,29 @@ void testMockDataGenerator() {
 
 ---
 
-## 7. Next Steps
+## 7. Current Status & Next Steps
 
-### Phase 1: Basic Integration (This Week)
+### ✅ Completed
 
-1. Modify `Application.cpp` to create WorldManager
-2. Spawn test buildings (10-20 buildings)
-3. Integrate with existing Renderer (manual rendering first)
-4. Test mock data updates
+1. **Basic Integration** - WorldManager created in Application.cpp
+2. **Building Spawning** - 4x4 grid of buildings (16 total)
+3. **Renderer Integration** - GPU instanced rendering working
+4. **Mock Data Updates** - Price updates every 1 second
+5. **Animation System** - Smooth height transitions with easing
+6. **Per-Instance Data** - Position, height, color per building
+7. **Instance Buffer Management** - Dirty flag optimization
 
-### Phase 2: Instanced Rendering (Next Week)
+### ⏳ In Progress (Phase 1.2)
 
-1. Extend instancing system to support per-instance colors
-2. Upload instance data every frame
-3. Test with 1000+ buildings
+1. Compute Shader Support - For advanced GPU animations
 
-### Phase 3: Advanced Features (Phase 3-4)
+### 🔲 Pending (Phase 2-4)
 
-1. Particle system integration (rocket, confetti effects)
-2. Real-time WebSocket data (replace mock generator)
-3. User interaction (click to select building, show info)
-4. Sector visualization (borders, grid lines)
+1. **Scene Management** - Scene graph, spatial partitioning
+2. **Particle System** - Rocket, confetti effects on price surges
+3. **WebSocket Integration** - Real-time market data
+4. **User Interaction** - Click to select building, show info
+5. **Sector Visualization** - Borders, grid lines
 
 ---
 
@@ -425,6 +456,6 @@ std::cout << "Generated " << updates.size() << " updates" << std::endl;
 
 ---
 
-**Status**: ✅ Game Logic Layer Implementation Complete
-**Next**: Integration with Application and Renderer
-**Estimated Integration Time**: 2-3 hours
+**Status**: ✅ Game Logic Layer Fully Integrated and Running
+**Current**: 16 buildings with real-time price updates at 60 FPS
+**Next Phase**: Compute Shaders (Phase 1.2) → Scene Management (Phase 2)
