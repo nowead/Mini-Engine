@@ -246,6 +246,7 @@ VulkanRHIComputePassEncoder::VulkanRHIComputePassEncoder(VulkanRHIDevice* device
     : m_device(device)
     , m_commandBuffer(cmdBuffer)
     , m_ended(false)
+    , m_currentPipelineLayout(nullptr)
 {
 }
 
@@ -255,11 +256,30 @@ VulkanRHIComputePassEncoder::~VulkanRHIComputePassEncoder() {
 void VulkanRHIComputePassEncoder::setPipeline(rhi::RHIComputePipeline* pipeline) {
     auto* vulkanPipeline = static_cast<VulkanRHIComputePipeline*>(pipeline);
     m_commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, vulkanPipeline->getVkPipeline());
+
+    // Store pipeline layout for descriptor set binding
+    m_currentPipelineLayout = vulkanPipeline->getPipelineLayout();
 }
 
 void VulkanRHIComputePassEncoder::setBindGroup(uint32_t index, rhi::RHIBindGroup* bindGroup, const std::vector<uint32_t>& dynamicOffsets) {
-    // Similar to render pass, needs pipeline layout
-    // TODO: Implement with pipeline layout tracking
+    auto* vulkanBindGroup = static_cast<VulkanRHIBindGroup*>(bindGroup);
+
+    // Use stored pipeline layout for descriptor set binding
+    if (!m_currentPipelineLayout) {
+        std::cerr << "[VulkanRHIComputePassEncoder] Warning: setPipeline must be called before setBindGroup\n";
+        return;
+    }
+
+    auto* vulkanLayout = static_cast<VulkanRHIPipelineLayout*>(m_currentPipelineLayout);
+    vk::DescriptorSet descriptorSet = vulkanBindGroup->getVkDescriptorSet();
+
+    m_commandBuffer.bindDescriptorSets(
+        vk::PipelineBindPoint::eCompute,
+        vulkanLayout->getVkPipelineLayout(),
+        index,
+        descriptorSet,
+        dynamicOffsets
+    );
 }
 
 void VulkanRHIComputePassEncoder::dispatch(uint32_t workgroupCountX, uint32_t workgroupCountY, uint32_t workgroupCountZ) {

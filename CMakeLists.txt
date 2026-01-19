@@ -113,12 +113,24 @@ if(NOT EMSCRIPTEN)
         src/rendering/Renderer.hpp
         src/rendering/RendererBridge.hpp
         src/rendering/RendererBridge.cpp
+        src/rendering/BatchRenderer.cpp
+        src/rendering/BatchRenderer.hpp
         src/scene/Mesh.cpp
         src/scene/Mesh.hpp
         src/scene/SceneManager.cpp
         src/scene/SceneManager.hpp
         src/scene/Camera.cpp
         src/scene/Camera.hpp
+        src/scene/SceneNode.cpp
+        src/scene/SceneNode.hpp
+        src/scene/SceneGraph.cpp
+        src/scene/SceneGraph.hpp
+        src/scene/SectorNode.cpp
+        src/scene/SectorNode.hpp
+        src/scene/AABB.hpp
+        src/scene/Quadtree.cpp
+        src/scene/Quadtree.hpp
+        src/scene/Frustum.hpp
         src/loaders/OBJLoader.cpp
         src/loaders/OBJLoader.hpp
         src/ui/ImGuiBackend.hpp

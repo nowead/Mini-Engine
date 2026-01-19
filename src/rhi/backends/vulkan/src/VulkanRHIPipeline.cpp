@@ -361,6 +361,7 @@ VulkanRHIRenderPipeline& VulkanRHIRenderPipeline::operator=(VulkanRHIRenderPipel
 VulkanRHIComputePipeline::VulkanRHIComputePipeline(VulkanRHIDevice* device, const ComputePipelineDesc& desc)
     : m_device(device)
     , m_pipeline(nullptr)
+    , m_layout(desc.layout)
 {
     if (!desc.computeShader) {
         throw std::runtime_error("Compute shader is required");
@@ -393,6 +394,7 @@ VulkanRHIComputePipeline::~VulkanRHIComputePipeline() {
 VulkanRHIComputePipeline::VulkanRHIComputePipeline(VulkanRHIComputePipeline&& other) noexcept
     : m_device(other.m_device)
     , m_pipeline(std::move(other.m_pipeline))
+    , m_layout(other.m_layout)
 {
 }
 
@@ -400,6 +402,7 @@ VulkanRHIComputePipeline& VulkanRHIComputePipeline::operator=(VulkanRHIComputePi
     if (this != &other) {
         m_device = other.m_device;
         m_pipeline = std::move(other.m_pipeline);
+        m_layout = other.m_layout;
     }
     return *this;
 }
