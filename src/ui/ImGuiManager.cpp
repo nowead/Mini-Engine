@@ -97,6 +97,63 @@ void ImGuiManager::renderUI(Camera& camera, uint32_t buildingCount,
 
     ImGui::Separator();
 
+    // Phase 3.3: Lighting controls
+    if (ImGui::CollapsingHeader("Lighting")) {
+        // Sun direction using azimuth/elevation
+        bool dirChanged = false;
+        dirChanged |= ImGui::SliderFloat("Sun Azimuth", &m_sunAzimuth, 0.0f, 360.0f, "%.1f deg");
+        dirChanged |= ImGui::SliderFloat("Sun Elevation", &m_sunElevation, 5.0f, 90.0f, "%.1f deg");
+
+        if (dirChanged) {
+            // Convert spherical to cartesian
+            float azimuthRad = glm::radians(m_sunAzimuth);
+            float elevationRad = glm::radians(m_sunElevation);
+            m_lightingSettings.sunDirection = glm::vec3(
+                cos(elevationRad) * sin(azimuthRad),
+                sin(elevationRad),
+                cos(elevationRad) * cos(azimuthRad)
+            );
+        }
+
+        // Sun intensity
+        ImGui::SliderFloat("Sun Intensity", &m_lightingSettings.sunIntensity, 0.0f, 2.0f);
+
+        // Sun color
+        ImGui::ColorEdit3("Sun Color", &m_lightingSettings.sunColor.x);
+
+        // Ambient intensity
+        ImGui::SliderFloat("Ambient", &m_lightingSettings.ambientIntensity, 0.0f, 0.5f);
+
+        // Presets
+        ImGui::Separator();
+        ImGui::Text("Presets:");
+        if (ImGui::Button("Noon")) {
+            m_sunAzimuth = 0.0f;
+            m_sunElevation = 80.0f;
+            m_lightingSettings.sunIntensity = 1.2f;
+            m_lightingSettings.sunColor = glm::vec3(1.0f, 0.98f, 0.95f);
+            m_lightingSettings.ambientIntensity = 0.2f;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Sunset")) {
+            m_sunAzimuth = 270.0f;
+            m_sunElevation = 15.0f;
+            m_lightingSettings.sunIntensity = 0.8f;
+            m_lightingSettings.sunColor = glm::vec3(1.0f, 0.5f, 0.2f);
+            m_lightingSettings.ambientIntensity = 0.1f;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Night")) {
+            m_sunAzimuth = 180.0f;
+            m_sunElevation = 10.0f;
+            m_lightingSettings.sunIntensity = 0.1f;
+            m_lightingSettings.sunColor = glm::vec3(0.4f, 0.5f, 0.7f);
+            m_lightingSettings.ambientIntensity = 0.05f;
+        }
+    }
+
+    ImGui::Separator();
+
     // Controls help
     if (ImGui::CollapsingHeader("Controls")) {
         ImGui::BulletText("Left Mouse + Drag: Rotate camera");

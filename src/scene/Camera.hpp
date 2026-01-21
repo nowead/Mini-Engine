@@ -61,6 +61,12 @@ public:
      */
     void reset();
 
+    /**
+     * @brief Get camera world position
+     * @return Camera position in world space
+     */
+    glm::vec3 getPosition() const { return position; }
+
 private:
     // Camera parameters
     glm::vec3 position;

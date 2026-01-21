@@ -25,4 +25,11 @@ struct UniformBufferObject {
 	alignas(16) glm::mat4 model;
 	alignas(16) glm::mat4 view;
 	alignas(16) glm::mat4 proj;
+	// Phase 3.3: Lighting parameters
+	alignas(16) glm::vec3 sunDirection;    // Normalized direction TO the sun
+	float sunIntensity;                     // Sun light intensity (default: 1.0)
+	alignas(16) glm::vec3 sunColor;        // Sun light color (default: warm white)
+	float ambientIntensity;                 // Ambient light intensity (default: 0.2)
+	alignas(16) glm::vec3 cameraPos;       // Camera position for specular
+	float _padding;
 };

@@ -158,6 +158,9 @@ if(NOT EMSCRIPTEN)
         src/effects/ParticleSystem.hpp
         src/effects/ParticleRenderer.cpp
         src/effects/ParticleRenderer.hpp
+        # Phase 3.3: Skybox
+        src/rendering/SkyboxRenderer.cpp
+        src/rendering/SkyboxRenderer.hpp
     )
 
     target_include_directories(MiniEngine BEFORE PRIVATE

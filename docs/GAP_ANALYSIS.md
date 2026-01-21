@@ -1,8 +1,8 @@
 # Gap Analysis: SRS Requirements vs Mini-Engine Implementation
 
-**Document Version**: 3.1
+**Document Version**: 3.2
 **Last Updated**: 2026-01-21
-**Status**: Phase 3 In Progress - Particle System Complete
+**Status**: Phase 3 Complete - Visual Effects & Polish Done
 
 **Recent Progress**:
 
@@ -12,8 +12,10 @@
 - ✅ Building rendering with real-time price updates
 - ✅ Compute shader support complete (2026-01-18)
 - ✅ Scene Management complete (Scene Graph, Quadtree, Frustum Culling, Batch Rendering - 2026-01-19)
-- ✅ **Particle System complete** (6 effect types, billboard rendering - 2026-01-21)
-- ✅ **Camera simplified** (Perspective only, Isometric removed - 2026-01-21)
+- ✅ Particle System complete (6 effect types, billboard rendering - 2026-01-21)
+- ✅ Camera simplified (Perspective only, Isometric removed - 2026-01-21)
+- ✅ **Skybox rendering** (Procedural sky gradient, sun disk - 2026-01-21)
+- ✅ **Directional Lighting** (Blinn-Phong, ImGui controls, presets - 2026-01-21)
 
 ---
 
@@ -27,8 +29,8 @@ This document analyzes the gap between the [Software Requirements Specification 
 - **Performance Systems**: ✅ GPU instancing implemented, ✅ compute shader support complete
 - **Game Logic**: ✅ WorldManager, BuildingManager, animation system fully integrated
 - **Scene Management**: ✅ Scene Graph, Quadtree, Frustum Culling, Batch Rendering complete
-- **Visual Effects**: ✅ **Particle System complete**, Animation framework complete
-- **Advanced Rendering**: 🔲 Lighting, post-processing pending
+- **Visual Effects**: ✅ Particle System complete, Animation framework complete
+- **Advanced Rendering**: ✅ **Skybox, Directional Lighting complete**
 
 **Original Estimate**: 3-4 months (single developer)
 **Revised Estimate**: 1-1.5 months remaining (Phase 1-3.1 complete)
@@ -469,7 +471,7 @@ class BatchRenderer {
 
 ---
 
-### Phase 3: Visual Effects (Medium - 4-5 weeks) ⏳ IN PROGRESS
+### Phase 3: Visual Effects (Medium - 4-5 weeks) ✅ COMPLETE
 
 **Goal**: Eye-catching market events
 
@@ -477,11 +479,17 @@ class BatchRenderer {
 |------|----------|--------|--------|--------------|
 | 9. Particle System | Medium | ✅ Complete | 2-3 weeks | Compute shaders |
 | 10. Animation System | Medium | ✅ Complete | 1-2 weeks | None |
-| 11. Advanced Rendering | Low | 🔲 Not Started | 1-2 weeks | None |
+| 11. Advanced Rendering | Low | ✅ Complete | 1-2 weeks | None |
 
-**Progress**: 2/3 tasks complete (67%)
+**Progress**: 3/3 tasks complete (100%)
 
-**Deliverable**: Rocket launch effects, building burial animations ✅
+**Deliverable**: Rocket launch effects, building animations, skybox, lighting ✅
+
+**Advanced Rendering Details** (2026-01-21):
+
+- ✅ Procedural skybox (sky gradient, sun disk with glow)
+- ✅ Directional lighting (Blinn-Phong shading)
+- ✅ ImGui lighting controls (azimuth/elevation, color, intensity, presets)
 
 ---
 

@@ -111,7 +111,7 @@ void Application::mainLoop() {
 
         glfwPollEvents();
         processInput();
-        renderer->updateCamera(camera->getViewMatrix(), camera->getProjectionMatrix());
+        renderer->updateCamera(camera->getViewMatrix(), camera->getProjectionMatrix(), camera->getPosition());
 
         // NEW: Update Game World
         if (worldManager) {
@@ -176,6 +176,13 @@ void Application::mainLoop() {
                     particleRequest.duration
                 );
             }
+
+            // Phase 3.3: Apply lighting settings from UI
+            auto& lighting = imgui->getLightingSettings();
+            renderer->setSunDirection(lighting.sunDirection);
+            renderer->setSunIntensity(lighting.sunIntensity);
+            renderer->setSunColor(lighting.sunColor);
+            renderer->setAmbientIntensity(lighting.ambientIntensity);
         }
 
         // Renderer handles both scene and ImGui rendering

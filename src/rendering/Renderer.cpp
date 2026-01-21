@@ -44,6 +44,9 @@ Renderer::Renderer(GLFWwindow* window,
 
     // Create particle renderer
     createParticleRenderer();
+
+    // Phase 3.3: Create skybox renderer
+    createSkyboxRenderer();
 }
 
 Renderer::~Renderer() {
@@ -74,9 +77,10 @@ void Renderer::handleFramebufferResize() {
     recreateSwapchain();
 }
 
-void Renderer::updateCamera(const glm::mat4& view, const glm::mat4& projection) {
+void Renderer::updateCamera(const glm::mat4& view, const glm::mat4& projection, const glm::vec3& position) {
     viewMatrix = view;
     projectionMatrix = projection;
+    cameraPosition = position;
 }
 
 void Renderer::submitInstancedRenderData(const rendering::InstancedRenderData& data) {
@@ -505,7 +509,7 @@ void Renderer::createBuildingPipeline() {
     rhi::BindGroupLayoutDesc buildingLayoutDesc;
     rhi::BindGroupLayoutEntry uboEntry;
     uboEntry.binding = 0;
-    uboEntry.visibility = rhi::ShaderStage::Vertex;
+    uboEntry.visibility = rhi::ShaderStage::Vertex | rhi::ShaderStage::Fragment;  // Phase 3.3: Fragment needs lighting data
     uboEntry.type = rhi::BindingType::UniformBuffer;
     buildingLayoutDesc.entries.push_back(uboEntry);
     buildingLayoutDesc.label = "Building Bind Group Layout";
@@ -660,6 +664,47 @@ void Renderer::createParticleRenderer() {
 }
 
 // ============================================================================
+// Phase 3.3: Skybox Renderer Creation
+// ============================================================================
+
+void Renderer::createSkyboxRenderer() {
+    if (!rhiBridge || !rhiBridge->isReady()) {
+        return;
+    }
+
+    auto* rhiDevice = rhiBridge->getDevice();
+    auto* rhiQueue = rhiBridge->getGraphicsQueue();
+    auto* swapchain = rhiBridge->getSwapchain();
+
+    if (!rhiDevice || !rhiQueue || !swapchain) {
+        return;
+    }
+
+    // Create skybox renderer
+    skyboxRenderer = std::make_unique<rendering::SkyboxRenderer>(rhiDevice, rhiQueue);
+
+    // Initialize with swapchain format and depth format
+    rhi::TextureFormat colorFormat = swapchain->getFormat();
+    rhi::TextureFormat depthFormat = rhi::TextureFormat::Depth32Float;
+
+    // Get native render pass for Linux
+    void* nativeRenderPass = nullptr;
+#ifdef __linux__
+    auto* vulkanSwapchain = dynamic_cast<RHI::Vulkan::VulkanRHISwapchain*>(swapchain);
+    if (vulkanSwapchain) {
+        nativeRenderPass = vulkanSwapchain->getRenderPass();
+    }
+#endif
+
+    if (skyboxRenderer->initialize(colorFormat, depthFormat, nativeRenderPass)) {
+        LOG_INFO("Renderer") << "Skybox renderer initialized successfully";
+    } else {
+        LOG_ERROR("Renderer") << "Failed to initialize skybox renderer";
+        skyboxRenderer.reset();
+    }
+}
+
+// ============================================================================
 // Phase 8: RHI Uniform Buffer Update
 // ============================================================================
 
@@ -672,6 +717,13 @@ void Renderer::updateRHIUniformBuffer(uint32_t currentImage) {
     ubo.model = glm::mat4(1.0f);  // Identity matrix (no model transform)
     ubo.view = viewMatrix;
     ubo.proj = projectionMatrix;
+
+    // Phase 3.3: Lighting parameters
+    ubo.sunDirection = sunDirection;
+    ubo.sunIntensity = sunIntensity;
+    ubo.sunColor = sunColor;
+    ubo.ambientIntensity = ambientIntensity;
+    ubo.cameraPos = cameraPosition;
 
     // Copy to RHI uniform buffer (if mapped)
     auto* buffer = rhiUniformBuffers[currentImage].get();
@@ -813,6 +865,19 @@ void Renderer::drawFrame() {
             static_cast<float>(renderPassDesc.height),
             0.0f, 1.0f);
         renderPass->setScissorRect(0, 0, renderPassDesc.width, renderPassDesc.height);
+
+        // Phase 3.3: Render skybox first (background)
+        if (skyboxRenderer) {
+            // Calculate inverse view-projection matrix for ray direction
+            glm::mat4 viewProj = projectionMatrix * viewMatrix;
+            glm::mat4 invViewProj = glm::inverse(viewProj);
+
+            // Calculate elapsed time for animation
+            auto currentTime = std::chrono::high_resolution_clock::now();
+            float time = std::chrono::duration<float>(currentTime - startTime).count();
+
+            skyboxRenderer->render(renderPass.get(), frameIndex, invViewProj, time);
+        }
 
         // Bind pipeline (if created)
         if (rhiPipeline) {

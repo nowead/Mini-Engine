@@ -6,6 +6,7 @@
 #include "src/rendering/RendererBridge.hpp"
 #include "src/rendering/InstancedRenderData.hpp"
 #include "src/effects/ParticleRenderer.hpp"
+#include "src/rendering/SkyboxRenderer.hpp"
 
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
@@ -78,11 +79,12 @@ public:
     void handleFramebufferResize();
 
     /**
-     * @brief Update camera matrices
+     * @brief Update camera matrices and position
      * @param view View matrix
      * @param projection Projection matrix
+     * @param position Camera world position (for specular lighting)
      */
-    void updateCamera(const glm::mat4& view, const glm::mat4& projection);
+    void updateCamera(const glm::mat4& view, const glm::mat4& projection, const glm::vec3& position);
 
 
     /**
@@ -137,6 +139,15 @@ public:
      */
     void submitParticleSystem(effects::ParticleSystem* particleSystem);
 
+    // Phase 3.3: Lighting configuration
+    void setSunDirection(const glm::vec3& dir) { sunDirection = glm::normalize(dir); }
+    glm::vec3 getSunDirection() const { return sunDirection; }
+    void setSunIntensity(float intensity) { sunIntensity = intensity; }
+    float getSunIntensity() const { return sunIntensity; }
+    void setSunColor(const glm::vec3& color) { sunColor = color; }
+    glm::vec3 getSunColor() const { return sunColor; }
+    void setAmbientIntensity(float intensity) { ambientIntensity = intensity; }
+    float getAmbientIntensity() const { return ambientIntensity; }
 
 private:
     // Window reference
@@ -186,7 +197,13 @@ private:
     // Camera matrices
     glm::mat4 viewMatrix;
     glm::mat4 projectionMatrix;
+    glm::vec3 cameraPosition = glm::vec3(0.0f);
 
+    // Phase 3.3: Lighting parameters
+    glm::vec3 sunDirection = glm::normalize(glm::vec3(0.5f, 0.8f, 0.3f));
+    float sunIntensity = 1.0f;
+    glm::vec3 sunColor = glm::vec3(1.0f, 0.95f, 0.85f);  // Warm white
+    float ambientIntensity = 0.15f;
 
     // Instanced rendering data (submitted per-frame) - stored by value
     std::optional<rendering::InstancedRenderData> pendingInstancedData;
@@ -194,6 +211,9 @@ private:
     // Particle rendering
     std::unique_ptr<effects::ParticleRenderer> particleRenderer;
     effects::ParticleSystem* pendingParticleSystem = nullptr;
+
+    // Phase 3.3: Skybox rendering
+    std::unique_ptr<rendering::SkyboxRenderer> skyboxRenderer;
 
     // RHI initialization methods (Phase 4)
     void createRHIDepthResources();
@@ -203,6 +223,7 @@ private:
     void createRHIBuffers();   // Phase 4.5 - vertex/index buffers
     void createBuildingPipeline();  // Building instancing pipeline
     void createParticleRenderer();  // Particle rendering pipeline
+    void createSkyboxRenderer();    // Phase 3.3: Skybox rendering
 
     // RHI command recording (Phase 4.2)
     void updateRHIUniformBuffer(uint32_t currentImage);
