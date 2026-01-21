@@ -4,6 +4,7 @@
 #include "src/scene/Camera.hpp"
 #include "src/game/managers/WorldManager.hpp"
 #include "src/game/sync/MockDataGenerator.hpp"
+#include "src/effects/ParticleSystem.hpp"
 
 #include <GLFW/glfw3.h>
 #include <memory>
@@ -65,11 +66,14 @@ private:
     std::unique_ptr<Camera> camera;              // Destroyed first (no dependencies)
     std::unique_ptr<Renderer> renderer;          // Destroyed second (now owns ImGuiManager)
 
-    // Game Logic Layer (NEW)
+    // Game Logic Layer
     std::unique_ptr<WorldManager> worldManager;
     std::unique_ptr<MockDataGenerator> mockDataGen;
     float priceUpdateTimer = 0.0f;
     float priceUpdateInterval = 1.0f;            // Update prices every N seconds
+
+    // Particle System
+    std::unique_ptr<effects::ParticleSystem> particleSystem;
 
     // Mouse state
     bool firstMouse = true;

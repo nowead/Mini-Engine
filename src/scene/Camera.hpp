@@ -3,20 +3,11 @@
 #include <glm/glm.hpp>
 
 /**
- * @brief Projection mode for camera
- */
-enum class ProjectionMode {
-    Perspective,
-    Isometric
-};
-
-/**
  * @brief Camera class for view and projection transformations
  *
  * Responsibilities:
  * - Manage camera position and orientation
- * - Provide view and projection matrices
- * - Support both perspective and isometric projections
+ * - Provide view and projection matrices (perspective only)
  * - Handle user input for camera controls
  */
 class Camera {
@@ -24,9 +15,8 @@ public:
     /**
      * @brief Construct camera with initial parameters
      * @param aspectRatio Viewport aspect ratio (width/height)
-     * @param mode Initial projection mode
      */
-    Camera(float aspectRatio, ProjectionMode mode = ProjectionMode::Isometric);
+    Camera(float aspectRatio);
 
     /**
      * @brief Get view matrix
@@ -61,22 +51,6 @@ public:
     void zoom(float delta);
 
     /**
-     * @brief Toggle between perspective and isometric projection
-     */
-    void toggleProjectionMode();
-
-    /**
-     * @brief Set projection mode
-     * @param mode New projection mode
-     */
-    void setProjectionMode(ProjectionMode mode);
-
-    /**
-     * @brief Get current projection mode
-     */
-    ProjectionMode getProjectionMode() const { return projectionMode; }
-
-    /**
      * @brief Update aspect ratio (call when window resizes)
      * @param aspectRatio New aspect ratio
      */
@@ -101,14 +75,10 @@ private:
     float distance;
 
     // Projection parameters
-    ProjectionMode projectionMode;
     float aspectRatio;
     float fov;        // Field of view for perspective projection
     float nearPlane;
     float farPlane;
-
-    // Isometric projection parameters
-    float orthoSize;  // Half-size of orthographic view
 
     // Update camera vectors based on rotation angles
     void updateCameraVectors();

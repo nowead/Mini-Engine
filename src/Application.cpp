@@ -47,7 +47,7 @@ void Application::initWindow() {
 void Application::initRenderer() {
     // Create camera
     float aspectRatio = static_cast<float>(WINDOW_WIDTH) / static_cast<float>(WINDOW_HEIGHT);
-    camera = std::make_unique<Camera>(aspectRatio, ProjectionMode::Perspective);
+    camera = std::make_unique<Camera>(aspectRatio);
 
     // Create renderer
     renderer = std::make_unique<Renderer>(window, validationLayers, enableValidationLayers);
@@ -67,6 +67,9 @@ void Application::initGameLogic() {
 
     // Initialize mock data generator
     mockDataGen = std::make_unique<MockDataGenerator>();
+
+    // Initialize Particle System
+    particleSystem = std::make_unique<effects::ParticleSystem>(rhiDevice, rhiQueue);
 
     // Create sample buildings in a grid pattern
     auto* buildingManager = worldManager->getBuildingManager();
@@ -147,6 +150,13 @@ void Application::mainLoop() {
             }
         }
 
+        // Update Particle System
+        if (particleSystem) {
+            particleSystem->update(deltaTime);
+            // Submit particle system to renderer
+            renderer->submitParticleSystem(particleSystem.get());
+        }
+
         // Render ImGui UI
         if (auto* imgui = renderer->getImGuiManager()) {
             imgui->newFrame();
@@ -155,7 +165,17 @@ void Application::mainLoop() {
             if (worldManager && worldManager->getBuildingManager()) {
                 buildingCount = static_cast<uint32_t>(worldManager->getBuildingManager()->getBuildingCount());
             }
-            imgui->renderUI(*camera, buildingCount);
+            imgui->renderUI(*camera, buildingCount, particleSystem.get());
+
+            // Handle particle effect requests from UI
+            auto particleRequest = imgui->getAndClearParticleRequest();
+            if (particleRequest.requested && particleSystem) {
+                particleSystem->spawnEffect(
+                    particleRequest.type,
+                    particleRequest.position,
+                    particleRequest.duration
+                );
+            }
         }
 
         // Renderer handles both scene and ImGui rendering
@@ -171,7 +191,7 @@ void Application::processInput() {
     }
 
     // WASD for camera translation
-    float moveSpeed = 1.0f;
+    float moveSpeed = 2.0f;
     if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
         camera->translate(0.0f, moveSpeed);
     }
@@ -245,10 +265,6 @@ void Application::keyCallback(GLFWwindow* window, int key, int scancode, int act
 
     if (action == GLFW_PRESS) {
         switch (key) {
-            case GLFW_KEY_P:
-            case GLFW_KEY_I:
-                app->camera->toggleProjectionMode();
-                break;
             case GLFW_KEY_R:
                 app->camera->reset();
                 break;

@@ -1,5 +1,6 @@
 #include "ImGuiManager.hpp"
 #include "ImGuiVulkanBackend.hpp"
+#include "src/effects/ParticleSystem.hpp"
 #include <imgui.h>
 #include <stdexcept>
 
@@ -32,7 +33,8 @@ void ImGuiManager::newFrame() {
     backend->newFrame();
 }
 
-void ImGuiManager::renderUI(Camera& camera, uint32_t buildingCount) {
+void ImGuiManager::renderUI(Camera& camera, uint32_t buildingCount,
+                            effects::ParticleSystem* particleSystem) {
     // Main control window - fixed to top-left corner
     ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_Always);
     ImGui::Begin("Mini-Engine", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove);
@@ -42,17 +44,6 @@ void ImGuiManager::renderUI(Camera& camera, uint32_t buildingCount) {
 
     // Camera controls
     if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
-        // Projection mode
-        ProjectionMode currentMode = camera.getProjectionMode();
-        const char* projectionModes[] = { "Perspective", "Isometric" };
-        int currentProjection = (currentMode == ProjectionMode::Perspective) ? 0 : 1;
-
-        if (ImGui::Combo("Projection", &currentProjection, projectionModes, 2)) {
-            camera.setProjectionMode(
-                currentProjection == 0 ? ProjectionMode::Perspective : ProjectionMode::Isometric
-            );
-        }
-
         // Reset camera
         if (ImGui::Button("Reset Camera")) {
             camera.reset();
@@ -69,12 +60,48 @@ void ImGuiManager::renderUI(Camera& camera, uint32_t buildingCount) {
 
     ImGui::Separator();
 
+    // Particle Effects
+    if (ImGui::CollapsingHeader("Particle Effects", ImGuiTreeNodeFlags_DefaultOpen)) {
+        // Effect type selection
+        const char* effectTypes[] = {
+            "Rocket Launch",
+            "Confetti",
+            "Smoke Fall",
+            "Sparks",
+            "Glow",
+            "Rain"
+        };
+        ImGui::Combo("Effect Type", &m_selectedEffectType, effectTypes, 6);
+
+        // Position
+        ImGui::DragFloat3("Position", m_effectPosition, 1.0f, -100.0f, 100.0f);
+
+        // Duration
+        ImGui::SliderFloat("Duration (s)", &m_effectDuration, 0.5f, 10.0f);
+
+        // Spawn button
+        if (ImGui::Button("Spawn Effect")) {
+            m_particleRequest.requested = true;
+            m_particleRequest.type = static_cast<effects::ParticleEffectType>(m_selectedEffectType);
+            m_particleRequest.position = glm::vec3(m_effectPosition[0], m_effectPosition[1], m_effectPosition[2]);
+            m_particleRequest.duration = m_effectDuration;
+        }
+
+        // Particle statistics
+        if (particleSystem) {
+            ImGui::Separator();
+            ImGui::Text("Active Particles: %u", particleSystem->getTotalActiveParticles());
+            ImGui::Text("Emitters: %zu", particleSystem->getEmitterCount());
+        }
+    }
+
+    ImGui::Separator();
+
     // Controls help
     if (ImGui::CollapsingHeader("Controls")) {
         ImGui::BulletText("Left Mouse + Drag: Rotate camera");
         ImGui::BulletText("Mouse Wheel: Zoom in/out");
         ImGui::BulletText("W/A/S/D: Move camera");
-        ImGui::BulletText("P or I: Toggle projection");
         ImGui::BulletText("R: Reset camera");
         ImGui::BulletText("ESC: Exit");
     }

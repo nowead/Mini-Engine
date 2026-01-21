@@ -4,19 +4,17 @@
 #include <glm/gtc/constants.hpp>
 #include <algorithm>
 
-Camera::Camera(float aspectRatio, ProjectionMode mode)
+Camera::Camera(float aspectRatio)
     : position(80.0f, 80.0f, 100.0f),  // Higher and farther back for better view
       target(0.0f, 15.0f, 0.0f),       // Look at center of building grid
       up(0.0f, 1.0f, 0.0f),
       yaw(glm::radians(45.0f)),
       pitch(glm::radians(20.0f)),
       distance(150.0f),
-      projectionMode(mode),
       aspectRatio(aspectRatio),
       fov(glm::radians(70.0f)),        // Wider FOV for better visibility
       nearPlane(0.1f),
-      farPlane(1000.0f),
-      orthoSize(40.0f) {
+      farPlane(1000.0f) {
     // Don't call updateCameraVectors() - use fixed position/target
     LOG_DEBUG("Camera") << "Initialized at pos=(80, 80, 100), target=(0, 15, 0), FOV=70deg";
 }
@@ -26,23 +24,10 @@ glm::mat4 Camera::getViewMatrix() const {
 }
 
 glm::mat4 Camera::getProjectionMatrix() const {
-    if (projectionMode == ProjectionMode::Perspective) {
-        glm::mat4 proj = glm::perspective(fov, aspectRatio, nearPlane, farPlane);
-        // Vulkan NDC has Y pointing down, flip it
-        proj[1][1] *= -1;
-        return proj;
-    } else {
-        // Isometric projection
-        float left = -orthoSize * aspectRatio;
-        float right = orthoSize * aspectRatio;
-        float bottom = -orthoSize;
-        float top = orthoSize;
-
-        glm::mat4 proj = glm::ortho(left, right, bottom, top, nearPlane, farPlane);
-        // Vulkan NDC has Y pointing down, flip it
-        proj[1][1] *= -1;
-        return proj;
-    }
+    glm::mat4 proj = glm::perspective(fov, aspectRatio, nearPlane, farPlane);
+    // Vulkan NDC has Y pointing down, flip it
+    proj[1][1] *= -1;
+    return proj;
 }
 
 void Camera::rotate(float deltaX, float deltaY) {
@@ -68,28 +53,10 @@ void Camera::translate(float deltaX, float deltaY) {
 }
 
 void Camera::zoom(float delta) {
-    if (projectionMode == ProjectionMode::Perspective) {
-        // Move camera closer/farther from target
-        distance -= delta * 0.5f;
-        distance = std::clamp(distance, 1.0f, 200.0f);  // Allow zooming out much further
-        updateCameraVectors();
-    } else {
-        // Change orthographic size
-        orthoSize -= delta * 0.1f;
-        orthoSize = std::clamp(orthoSize, 1.0f, 100.0f);  // Allow much wider isometric view
-    }
-}
-
-void Camera::toggleProjectionMode() {
-    if (projectionMode == ProjectionMode::Perspective) {
-        projectionMode = ProjectionMode::Isometric;
-    } else {
-        projectionMode = ProjectionMode::Perspective;
-    }
-}
-
-void Camera::setProjectionMode(ProjectionMode mode) {
-    projectionMode = mode;
+    // Move camera closer/farther from target
+    distance -= delta * 0.5f;
+    distance = std::clamp(distance, 1.0f, 200.0f);  // Allow zooming out much further
+    updateCameraVectors();
 }
 
 void Camera::setAspectRatio(float newAspectRatio) {
@@ -103,7 +70,6 @@ void Camera::reset() {
     yaw = glm::radians(45.0f);
     pitch = glm::radians(30.0f);  // Match constructor
     distance = 80.0f;  // Match initial distance
-    orthoSize = 40.0f;  // Match initial ortho size
     updateCameraVectors();
 }
 

@@ -5,6 +5,7 @@
 #include "src/utils/Vertex.hpp"
 #include "src/rendering/RendererBridge.hpp"
 #include "src/rendering/InstancedRenderData.hpp"
+#include "src/effects/ParticleRenderer.hpp"
 
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
@@ -130,6 +131,12 @@ public:
      */
     void submitInstancedRenderData(const rendering::InstancedRenderData& data);
 
+    /**
+     * @brief Submit particle system for rendering this frame
+     * @param particleSystem Particle system to render
+     */
+    void submitParticleSystem(effects::ParticleSystem* particleSystem);
+
 
 private:
     // Window reference
@@ -184,6 +191,10 @@ private:
     // Instanced rendering data (submitted per-frame) - stored by value
     std::optional<rendering::InstancedRenderData> pendingInstancedData;
 
+    // Particle rendering
+    std::unique_ptr<effects::ParticleRenderer> particleRenderer;
+    effects::ParticleSystem* pendingParticleSystem = nullptr;
+
     // RHI initialization methods (Phase 4)
     void createRHIDepthResources();
     void createRHIUniformBuffers();
@@ -191,6 +202,7 @@ private:
     void createRHIPipeline();  // Phase 4.4
     void createRHIBuffers();   // Phase 4.5 - vertex/index buffers
     void createBuildingPipeline();  // Building instancing pipeline
+    void createParticleRenderer();  // Particle rendering pipeline
 
     // RHI command recording (Phase 4.2)
     void updateRHIUniformBuffer(uint32_t currentImage);

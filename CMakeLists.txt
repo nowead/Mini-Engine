@@ -152,6 +152,12 @@ if(NOT EMSCRIPTEN)
         src/game/sync/MockDataGenerator.hpp
         src/game/utils/AnimationUtils.hpp
         src/game/utils/HeightCalculator.hpp
+        # Effects Layer
+        src/effects/Particle.hpp
+        src/effects/ParticleSystem.cpp
+        src/effects/ParticleSystem.hpp
+        src/effects/ParticleRenderer.cpp
+        src/effects/ParticleRenderer.hpp
     )
 
     target_include_directories(MiniEngine BEFORE PRIVATE

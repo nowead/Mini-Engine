@@ -41,6 +41,9 @@ Renderer::Renderer(GLFWwindow* window,
 
     // Always create building pipeline for game world rendering
     createBuildingPipeline();
+
+    // Create particle renderer
+    createParticleRenderer();
 }
 
 Renderer::~Renderer() {
@@ -79,6 +82,10 @@ void Renderer::updateCamera(const glm::mat4& view, const glm::mat4& projection) 
 void Renderer::submitInstancedRenderData(const rendering::InstancedRenderData& data) {
     // Store copy of data for this frame (fixes dangling pointer issue)
     pendingInstancedData = data;
+}
+
+void Renderer::submitParticleSystem(effects::ParticleSystem* particleSystem) {
+    pendingParticleSystem = particleSystem;
 }
 
 glm::vec3 Renderer::getMeshCenter() const {
@@ -612,6 +619,47 @@ void Renderer::createBuildingPipeline() {
 }
 
 // ============================================================================
+// Phase 3.1: Particle Renderer Creation
+// ============================================================================
+
+void Renderer::createParticleRenderer() {
+    if (!rhiBridge || !rhiBridge->isReady()) {
+        return;
+    }
+
+    auto* rhiDevice = rhiBridge->getDevice();
+    auto* rhiQueue = rhiBridge->getGraphicsQueue();
+    auto* swapchain = rhiBridge->getSwapchain();
+
+    if (!rhiDevice || !rhiQueue || !swapchain) {
+        return;
+    }
+
+    // Create particle renderer
+    particleRenderer = std::make_unique<effects::ParticleRenderer>(rhiDevice, rhiQueue);
+
+    // Initialize with swapchain format and depth format
+    rhi::TextureFormat colorFormat = swapchain->getFormat();
+    rhi::TextureFormat depthFormat = rhi::TextureFormat::Depth32Float;
+
+    // Get native render pass for Linux
+    void* nativeRenderPass = nullptr;
+#ifdef __linux__
+    auto* vulkanSwapchain = dynamic_cast<RHI::Vulkan::VulkanRHISwapchain*>(swapchain);
+    if (vulkanSwapchain) {
+        nativeRenderPass = vulkanSwapchain->getRenderPass();
+    }
+#endif
+
+    if (particleRenderer->initialize(colorFormat, depthFormat, nativeRenderPass)) {
+        LOG_INFO("Renderer") << "Particle renderer initialized successfully";
+    } else {
+        LOG_ERROR("Renderer") << "Failed to initialize particle renderer";
+        particleRenderer.reset();
+    }
+}
+
+// ============================================================================
 // Phase 8: RHI Uniform Buffer Update
 // ============================================================================
 
@@ -821,6 +869,18 @@ void Renderer::drawFrame() {
 
             // Clear pending data after rendering
             pendingInstancedData.reset();
+        }
+
+        // Phase 3.1: Render particles (after opaque geometry, before ImGui)
+        if (particleRenderer && pendingParticleSystem) {
+            // Update particle renderer camera
+            particleRenderer->updateCamera(viewMatrix, projectionMatrix);
+
+            // Render particles
+            particleRenderer->render(renderPass.get(), *pendingParticleSystem, frameIndex);
+
+            // Clear pending particle system
+            pendingParticleSystem = nullptr;
         }
 
         // Phase 7: Render ImGui UI (if initialized)
