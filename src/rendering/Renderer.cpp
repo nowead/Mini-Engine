@@ -47,6 +47,9 @@ Renderer::Renderer(GLFWwindow* window,
 
     // Phase 3.3: Create skybox renderer
     createSkyboxRenderer();
+
+    // Phase 3.3: Create shadow renderer
+    createShadowRenderer();
 }
 
 Renderer::~Renderer() {
@@ -305,7 +308,7 @@ void Renderer::createRHIPipeline() {
     // Primitive state
     pipelineDesc.primitive.topology = rhi::PrimitiveTopology::TriangleList;
     pipelineDesc.primitive.cullMode = rhi::CullMode::Back;
-    pipelineDesc.primitive.frontFace = rhi::FrontFace::CounterClockwise;
+    pipelineDesc.primitive.frontFace = rhi::FrontFace::Clockwise;  // Cube mesh uses CW winding
 
     // Depth-stencil state
     rhi::DepthStencilState depthStencilState;
@@ -505,13 +508,30 @@ void Renderer::createBuildingPipeline() {
         return;
     }
 
-    // Create dedicated bind group layout for buildings (only UBO, no texture)
+    // Create dedicated bind group layout for buildings (UBO + shadow map)
     rhi::BindGroupLayoutDesc buildingLayoutDesc;
+
+    // Binding 0: Uniform buffer (vertex + fragment)
     rhi::BindGroupLayoutEntry uboEntry;
     uboEntry.binding = 0;
-    uboEntry.visibility = rhi::ShaderStage::Vertex | rhi::ShaderStage::Fragment;  // Phase 3.3: Fragment needs lighting data
+    uboEntry.visibility = rhi::ShaderStage::Vertex | rhi::ShaderStage::Fragment;
     uboEntry.type = rhi::BindingType::UniformBuffer;
     buildingLayoutDesc.entries.push_back(uboEntry);
+
+    // Binding 1: Shadow map texture (fragment only)
+    rhi::BindGroupLayoutEntry shadowTexEntry;
+    shadowTexEntry.binding = 1;
+    shadowTexEntry.visibility = rhi::ShaderStage::Fragment;
+    shadowTexEntry.type = rhi::BindingType::SampledTexture;
+    buildingLayoutDesc.entries.push_back(shadowTexEntry);
+
+    // Binding 2: Shadow sampler (fragment only)
+    rhi::BindGroupLayoutEntry shadowSamplerEntry;
+    shadowSamplerEntry.binding = 2;
+    shadowSamplerEntry.visibility = rhi::ShaderStage::Fragment;
+    shadowSamplerEntry.type = rhi::BindingType::Sampler;
+    buildingLayoutDesc.entries.push_back(shadowSamplerEntry);
+
     buildingLayoutDesc.label = "Building Bind Group Layout";
 
     buildingBindGroupLayout = rhiBridge->getDevice()->createBindGroupLayout(buildingLayoutDesc);
@@ -521,16 +541,12 @@ void Renderer::createBuildingPipeline() {
         return;
     }
 
-    // Create bind groups for building rendering (one per frame)
+    // Note: Bind groups will be created/updated in updateBuildingBindGroups() after shadow renderer is ready
+    // For now, create bind groups without shadow map (will be updated later)
     buildingBindGroups.clear();
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        rhi::BindGroupDesc bindGroupDesc;
-        bindGroupDesc.layout = buildingBindGroupLayout.get();
-        bindGroupDesc.entries.push_back(
-            rhi::BindGroupEntry::Buffer(0, rhiUniformBuffers[i].get())
-        );
-        bindGroupDesc.label = "Building Bind Group";
-        buildingBindGroups.push_back(rhiBridge->getDevice()->createBindGroup(bindGroupDesc));
+        // Create placeholder bind group - will be recreated when shadow renderer is ready
+        buildingBindGroups.push_back(nullptr);
     }
 
     // Create pipeline layout
@@ -575,7 +591,7 @@ void Renderer::createBuildingPipeline() {
     // Primitive state
     pipelineDesc.primitive.topology = rhi::PrimitiveTopology::TriangleList;
     pipelineDesc.primitive.cullMode = rhi::CullMode::Back;
-    pipelineDesc.primitive.frontFace = rhi::FrontFace::CounterClockwise;
+    pipelineDesc.primitive.frontFace = rhi::FrontFace::Clockwise;  // Cube mesh uses CW winding
 
     // Depth-stencil state
     rhi::DepthStencilState depthStencilState;
@@ -704,6 +720,51 @@ void Renderer::createSkyboxRenderer() {
     }
 }
 
+void Renderer::createShadowRenderer() {
+    if (!rhiBridge || !rhiBridge->isReady()) {
+        return;
+    }
+
+    auto* rhiDevice = rhiBridge->getDevice();
+    auto* rhiQueue = rhiBridge->getGraphicsQueue();
+
+    if (!rhiDevice || !rhiQueue) {
+        return;
+    }
+
+    // Create shadow renderer
+    shadowRenderer = std::make_unique<rendering::ShadowRenderer>(rhiDevice, rhiQueue);
+
+    // Initialize shadow renderer (no native render pass needed - creates its own)
+    if (shadowRenderer->initialize(nullptr)) {
+        LOG_INFO("Renderer") << "Shadow renderer initialized successfully";
+
+        // Update building bind groups with shadow map
+        if (buildingBindGroupLayout && shadowRenderer->getShadowMapView() && shadowRenderer->getShadowSampler()) {
+            buildingBindGroups.clear();
+            for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+                rhi::BindGroupDesc bindGroupDesc;
+                bindGroupDesc.layout = buildingBindGroupLayout.get();
+                bindGroupDesc.entries.push_back(
+                    rhi::BindGroupEntry::Buffer(0, rhiUniformBuffers[i].get())
+                );
+                bindGroupDesc.entries.push_back(
+                    rhi::BindGroupEntry::TextureView(1, shadowRenderer->getShadowMapView())
+                );
+                bindGroupDesc.entries.push_back(
+                    rhi::BindGroupEntry::Sampler(2, shadowRenderer->getShadowSampler())
+                );
+                bindGroupDesc.label = "Building Bind Group with Shadow";
+                buildingBindGroups.push_back(rhiBridge->getDevice()->createBindGroup(bindGroupDesc));
+            }
+            LOG_INFO("Renderer") << "Building bind groups updated with shadow map";
+        }
+    } else {
+        LOG_ERROR("Renderer") << "Failed to initialize shadow renderer";
+        shadowRenderer.reset();
+    }
+}
+
 // ============================================================================
 // Phase 8: RHI Uniform Buffer Update
 // ============================================================================
@@ -724,6 +785,16 @@ void Renderer::updateRHIUniformBuffer(uint32_t currentImage) {
     ubo.sunColor = sunColor;
     ubo.ambientIntensity = ambientIntensity;
     ubo.cameraPos = cameraPosition;
+
+    // Phase 3.3: Shadow mapping parameters
+    if (shadowRenderer && shadowRenderer->isInitialized()) {
+        ubo.lightSpaceMatrix = shadowRenderer->getLightSpaceMatrix();
+    } else {
+        ubo.lightSpaceMatrix = glm::mat4(1.0f);
+    }
+    ubo.shadowMapSize = glm::vec2(rendering::ShadowRenderer::SHADOW_MAP_SIZE);
+    ubo.shadowBias = shadowBias;
+    ubo.shadowStrength = shadowStrength;
 
     // Copy to RHI uniform buffer (if mapped)
     auto* buffer = rhiUniformBuffers[currentImage].get();
@@ -768,13 +839,56 @@ void Renderer::drawFrame() {
 
     uint32_t frameIndex = rhiBridge->getCurrentFrameIndex();
 
-    // Step 2: Update uniform buffer with RHI
+    // Step 2: Update shadow light matrix (before uniform buffer update)
+    if (shadowRenderer && shadowRenderer->isInitialized()) {
+        // Calculate scene bounds for shadow frustum
+        // Buildings are in 4x4 grid with 30 spacing: -45 to +45
+        // Ground is 100x100: -50 to +50
+        // Use origin as center and set ortho to cover full ground
+        glm::vec3 sceneCenter = glm::vec3(0.0f, 0.0f, 0.0f);
+        float sceneRadius = 60.0f;  // Cover -60 to +60
+        shadowRenderer->updateLightMatrix(sunDirection, sceneCenter, sceneRadius);
+    }
+
+    // Step 3: Update uniform buffer with RHI (includes shadow matrix)
     updateRHIUniformBuffer(frameIndex);
 
-    // Step 3: Create and record command buffer
+    // Step 4: Create command encoder
     auto encoder = rhiBridge->createCommandEncoder();
     if (!encoder) {
         return;
+    }
+
+    // Step 5: Shadow pass (render scene from light's perspective)
+    if (shadowRenderer && shadowRenderer->isInitialized() && pendingInstancedData && pendingInstancedData->instanceCount > 1) {
+        auto* mesh = pendingInstancedData->mesh;
+        auto* instanceBuffer = pendingInstancedData->instanceBuffer;
+
+        if (mesh && mesh->hasData() && instanceBuffer) {
+            static int shadowFrameCount = 0;
+            if (shadowFrameCount++ % 60 == 0) {
+                std::cout << "[Renderer] Shadow pass rendering " << (pendingInstancedData->instanceCount - 1) 
+                          << " building instances" << std::endl;
+            }
+            
+            auto* shadowPass = shadowRenderer->beginShadowPass(encoder.get(), frameIndex);
+            if (shadowPass) {
+                // Bind vertex and instance buffers
+                shadowPass->setVertexBuffer(0, mesh->getVertexBuffer(), 0);
+                shadowPass->setVertexBuffer(1, instanceBuffer, 0);
+                shadowPass->setIndexBuffer(mesh->getIndexBuffer(), rhi::IndexFormat::Uint32, 0);
+
+                // Draw buildings only (skip first instance which is the ground plane)
+                // Ground should receive shadows but not cast them
+                shadowPass->drawIndexed(
+                    static_cast<uint32_t>(mesh->getIndexCount()),
+                    pendingInstancedData->instanceCount - 1,  // Exclude ground
+                    0, 0, 1  // Start from instance 1 (skip instance 0 = ground)
+                );
+
+                shadowRenderer->endShadowPass();
+            }
+        }
     }
 
     // Get swapchain view

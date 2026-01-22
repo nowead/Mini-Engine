@@ -132,17 +132,18 @@ void Application::mainLoop() {
         // Extract rendering data from game logic (clean layer separation)
         if (worldManager) {
             auto* buildingManager = worldManager->getBuildingManager();
-            if (buildingManager && buildingManager->getBuildingCount() > 0) {
-                // Update instance buffer if dirty
+            if (buildingManager) {
+                // Always update instance buffer if dirty (even with 0 buildings, we have ground)
                 if (buildingManager->isInstanceBufferDirty()) {
                     buildingManager->updateInstanceBuffer();
                 }
 
-                // Prepare rendering data (no game logic in Renderer)
+                // Always submit render data (ground plane + buildings)
                 rendering::InstancedRenderData renderData;
                 renderData.mesh = buildingManager->getBuildingMesh();
                 renderData.instanceBuffer = buildingManager->getInstanceBuffer();
-                renderData.instanceCount = static_cast<uint32_t>(buildingManager->getBuildingCount());
+                // Instance count = buildings + ground plane (1)
+                renderData.instanceCount = static_cast<uint32_t>(buildingManager->getBuildingCount() + 1);
                 renderData.needsUpdate = false;
 
                 // Submit to renderer (clean interface)

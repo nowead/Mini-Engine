@@ -11,7 +11,7 @@ layout(location = 4) in vec3 instanceColor;      // offset 12, 12 bytes
 layout(location = 5) in vec3 instanceScale;      // offset 24, 12 bytes (X/Z base, Y height)
 // padding at offset 36, 4 bytes - total 40 bytes
 
-// Uniform buffer (camera matrices + lighting)
+// Uniform buffer (camera matrices + lighting + shadow)
 layout(binding = 0) uniform UniformBufferObject {
     mat4 model;
     mat4 view;
@@ -22,12 +22,18 @@ layout(binding = 0) uniform UniformBufferObject {
     float ambientIntensity; // Ambient light intensity
     vec3 cameraPos;       // Camera position for specular
     float _padding;
+    // Shadow mapping
+    mat4 lightSpaceMatrix; // Light view-projection matrix
+    vec2 shadowMapSize;    // Shadow map dimensions
+    float shadowBias;      // Depth bias
+    float shadowStrength;  // Shadow darkness
 } ubo;
 
 // Outputs to fragment shader
 layout(location = 0) out vec3 fragColor;
 layout(location = 1) out vec3 fragNormal;
 layout(location = 2) out vec3 fragWorldPos;
+layout(location = 3) out vec4 fragPosLightSpace;
 
 void main() {
     // Apply instance transform with independent scale per axis
@@ -41,4 +47,7 @@ void main() {
     fragColor = instanceColor;
     fragNormal = inNormal;
     fragWorldPos = worldPos;
+
+    // Transform position to light space for shadow mapping
+    fragPosLightSpace = ubo.lightSpaceMatrix * vec4(worldPos, 1.0);
 }

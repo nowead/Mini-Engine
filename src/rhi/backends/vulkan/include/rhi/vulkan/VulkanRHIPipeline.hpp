@@ -85,6 +85,8 @@ private:
 #ifdef __linux__
     // Linux: Store render pass for traditional rendering
     vk::raii::RenderPass m_renderPass = nullptr;
+    // Flag to track if using external render pass (don't destroy it)
+    bool m_usesExternalRenderPass = false;
 #endif
 };
 

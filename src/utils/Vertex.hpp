@@ -32,4 +32,9 @@ struct UniformBufferObject {
 	float ambientIntensity;                 // Ambient light intensity (default: 0.2)
 	alignas(16) glm::vec3 cameraPos;       // Camera position for specular
 	float _padding;
+	// Shadow mapping parameters
+	alignas(16) glm::mat4 lightSpaceMatrix; // Light view-projection matrix
+	alignas(16) glm::vec2 shadowMapSize;    // Shadow map dimensions (2048x2048)
+	float shadowBias;                        // Depth bias to prevent shadow acne (default: 0.005)
+	float shadowStrength;                    // Shadow darkness (0.0-1.0, default: 0.5)
 };

@@ -252,9 +252,10 @@ void BuildingManager::update(float deltaTime) {
         }
     }
 
-    // Update instance buffer if any animation occurred or if it's dirty
-    if (animationOccurred || instanceBufferDirty) {
-        instanceBufferDirty = true;  // Mark as dirty to trigger update
+    // Mark instance buffer as dirty if any animation occurred
+    if (animationOccurred) {
+        instanceBufferDirty = true;
+        std::cout << "[BuildingManager] Animation occurred, marked instance buffer as dirty" << std::endl;
     }
 }
 
@@ -396,15 +397,19 @@ uint64_t BuildingManager::generateEntityId() {
 // ============================================================================
 
 void BuildingManager::updateInstanceBuffer() {
-    if (entities.empty()) {
-        instanceBufferDirty = false;
-        return;
-    }
-
-    // Collect instance data from all buildings
+    // Collect instance data from all buildings + ground plane
     std::vector<InstanceData> instanceData;
-    instanceData.reserve(entities.size());
+    instanceData.reserve(entities.size() + 1);  // +1 for ground
 
+    // Add ground plane first (large flat plane at y=0)
+    InstanceData groundData;
+    groundData.position = glm::vec3(0.0f, -0.05f, 0.0f);  // Slightly below origin
+    groundData.color = glm::vec3(0.3f, 0.35f, 0.3f);      // Dark gray-green
+    groundData.scale = glm::vec3(100.0f, 0.1f, 100.0f);   // Very large and flat
+    groundData._padding = 0.0f;
+    instanceData.push_back(groundData);
+
+    // Add all buildings
     for (const auto& [entityId, building] : entities) {
         InstanceData data;
         data.position = building.position;
@@ -414,30 +419,34 @@ void BuildingManager::updateInstanceBuffer() {
         data.scale = glm::vec3(building.baseScale.x, building.currentHeight, building.baseScale.z);
         data._padding = 0.0f;
 
+        // Debug: Print first building's height every 60 frames
+        static int debugFrameCount = 0;
+        if (debugFrameCount++ % 60 == 0 && &building == &entities.begin()->second) {
+            std::cout << "[BuildingManager] First building height: " << building.currentHeight 
+                      << " (animating: " << building.isAnimating << ")" << std::endl;
+        }
+
         instanceData.push_back(data);
     }
 
     // Create or resize buffer if needed
     size_t requiredSize = sizeof(InstanceData) * instanceData.size();
 
-    if (!instanceBuffer || instanceBuffer->getSize() < requiredSize) {
-        // Create new buffer
-        rhi::BufferDesc bufferDesc;
-        bufferDesc.size = requiredSize;
-        bufferDesc.usage = rhi::BufferUsage::Vertex | rhi::BufferUsage::CopyDst;
-        bufferDesc.mappedAtCreation = false;
-        bufferDesc.label = "Building Instance Buffer";
+    // Always recreate buffer for dynamic updates (Vulkan requires this for proper GPU sync)
+    // Create new buffer
+    rhi::BufferDesc bufferDesc;
+    bufferDesc.size = requiredSize;
+    bufferDesc.usage = rhi::BufferUsage::Vertex | rhi::BufferUsage::CopyDst;
+    bufferDesc.mappedAtCreation = false;
+    bufferDesc.label = "Building Instance Buffer";
 
-        instanceBuffer = rhiDevice->createBuffer(bufferDesc);
-
-        std::cout << "BuildingManager: Created instance buffer for "
-                  << instanceData.size() << " buildings ("
-                  << requiredSize << " bytes)" << std::endl;
-    }
+    instanceBuffer = rhiDevice->createBuffer(bufferDesc);
 
     // Upload instance data to GPU
     if (instanceBuffer) {
         instanceBuffer->write(instanceData.data(), requiredSize);
         instanceBufferDirty = false;
+        std::cout << "[BuildingManager] Instance buffer updated: " << instanceData.size() 
+                  << " instances (" << entities.size() << " buildings + ground)" << std::endl;
     }
 }

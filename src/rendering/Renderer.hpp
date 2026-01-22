@@ -7,6 +7,7 @@
 #include "src/rendering/InstancedRenderData.hpp"
 #include "src/effects/ParticleRenderer.hpp"
 #include "src/rendering/SkyboxRenderer.hpp"
+#include "src/rendering/ShadowRenderer.hpp"
 
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
@@ -215,6 +216,11 @@ private:
     // Phase 3.3: Skybox rendering
     std::unique_ptr<rendering::SkyboxRenderer> skyboxRenderer;
 
+    // Phase 3.3: Shadow mapping
+    std::unique_ptr<rendering::ShadowRenderer> shadowRenderer;
+    float shadowBias = 0.005f;
+    float shadowStrength = 0.8f;  // Higher value = darker shadows
+
     // RHI initialization methods (Phase 4)
     void createRHIDepthResources();
     void createRHIUniformBuffers();
@@ -224,6 +230,7 @@ private:
     void createBuildingPipeline();  // Building instancing pipeline
     void createParticleRenderer();  // Particle rendering pipeline
     void createSkyboxRenderer();    // Phase 3.3: Skybox rendering
+    void createShadowRenderer();    // Phase 3.3: Shadow mapping
 
     // RHI command recording (Phase 4.2)
     void updateRHIUniformBuffer(uint32_t currentImage);

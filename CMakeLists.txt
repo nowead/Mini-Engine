@@ -161,6 +161,9 @@ if(NOT EMSCRIPTEN)
         # Phase 3.3: Skybox
         src/rendering/SkyboxRenderer.cpp
         src/rendering/SkyboxRenderer.hpp
+        # Phase 3.3: Shadow Mapping
+        src/rendering/ShadowRenderer.cpp
+        src/rendering/ShadowRenderer.hpp
     )
 
     target_include_directories(MiniEngine BEFORE PRIVATE
@@ -266,10 +269,31 @@ if(NOT EMSCRIPTEN)
         DEPENDS ${BUILDING_SHADER_DIR}/building.frag.glsl
         COMMENT "Compiling building.frag.glsl -> SPIR-V"
     )
-    
+
+    # Shadow shader compilation (Phase 3.3)
+    add_custom_command(
+        OUTPUT ${BUILDING_SHADER_DIR}/shadow.vert.spv
+        COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=vertex
+                -o ${BUILDING_SHADER_DIR}/shadow.vert.spv
+                ${BUILDING_SHADER_DIR}/shadow.vert.glsl
+        DEPENDS ${BUILDING_SHADER_DIR}/shadow.vert.glsl
+        COMMENT "Compiling shadow.vert.glsl -> SPIR-V"
+    )
+
+    add_custom_command(
+        OUTPUT ${BUILDING_SHADER_DIR}/shadow.frag.spv
+        COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=fragment
+                -o ${BUILDING_SHADER_DIR}/shadow.frag.spv
+                ${BUILDING_SHADER_DIR}/shadow.frag.glsl
+        DEPENDS ${BUILDING_SHADER_DIR}/shadow.frag.glsl
+        COMMENT "Compiling shadow.frag.glsl -> SPIR-V"
+    )
+
     add_custom_target(building_shaders DEPENDS
         ${BUILDING_SHADER_DIR}/building.vert.spv
         ${BUILDING_SHADER_DIR}/building.frag.spv
+        ${BUILDING_SHADER_DIR}/shadow.vert.spv
+        ${BUILDING_SHADER_DIR}/shadow.frag.spv
     )
     
     add_dependencies(MiniEngine building_shaders)

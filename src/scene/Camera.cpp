@@ -47,14 +47,14 @@ void Camera::translate(float deltaX, float deltaY) {
     glm::vec3 upVector = glm::normalize(glm::cross(right, forward));
 
     // Translate both position and target to maintain view direction (inverted)
-    glm::vec3 translation = right * -deltaX * 0.01f + upVector * -deltaY * 0.01f;
+    glm::vec3 translation = right * -deltaX * 0.05f + upVector * -deltaY * 0.05f;
     position += translation;
     target += translation;
 }
 
 void Camera::zoom(float delta) {
     // Move camera closer/farther from target
-    distance -= delta * 0.5f;
+    distance -= delta * 1.5f;
     distance = std::clamp(distance, 1.0f, 200.0f);  // Allow zooming out much further
     updateCameraVectors();
 }

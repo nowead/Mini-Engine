@@ -21,21 +21,21 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                     Network Layer (Your Part)                    │
+│                     Network Layer (Your Part)                   │
 ├─────────────────────────────────────────────────────────────────┤
 │  WebSocket Client  ──>  FlatBuffers Decoder  ──>  PriceUpdate   │
 └───────────────────────────────┬─────────────────────────────────┘
                                 │
                                 ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                   Integration Interface                          │
+│                   Integration Interface                         │
 ├─────────────────────────────────────────────────────────────────┤
 │  WorldManager::applyPriceUpdates(PriceUpdateBatch& updates)     │
 └───────────────────────────────┬─────────────────────────────────┘
                                 │
                                 ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                  Rendering Engine (My Part)                      │
+│                  Rendering Engine (My Part)                     │
 ├─────────────────────────────────────────────────────────────────┤
 │  BuildingManager  ──>  Height Animation  ──>  GPU Instance      │
 │  ParticleSystem   ──>  Effect Spawning   ──>  Billboard Render  │
