@@ -150,6 +150,12 @@ public:
     void setAmbientIntensity(float intensity) { ambientIntensity = intensity; }
     float getAmbientIntensity() const { return ambientIntensity; }
 
+    // Shadow configuration
+    void setShadowBias(float bias) { shadowBias = bias; }
+    float getShadowBias() const { return shadowBias; }
+    void setShadowStrength(float strength) { shadowStrength = strength; }
+    float getShadowStrength() const { return shadowStrength; }
+
 private:
     // Window reference
     GLFWwindow* window;
@@ -200,11 +206,13 @@ private:
     glm::mat4 projectionMatrix;
     glm::vec3 cameraPosition = glm::vec3(0.0f);
 
-    // Phase 3.3: Lighting parameters
-    glm::vec3 sunDirection = glm::normalize(glm::vec3(0.5f, 0.8f, 0.3f));
-    float sunIntensity = 1.0f;
-    glm::vec3 sunColor = glm::vec3(1.0f, 0.95f, 0.85f);  // Warm white
-    float ambientIntensity = 0.15f;
+    // Phase 3.3: Lighting parameters (sunset defaults)
+    // Sun direction: pointing from corner, very low angle for long shadows
+    // X=1, Z=1 means sun is at corner, Y=0.15 means very low (long shadows)
+    glm::vec3 sunDirection = glm::normalize(glm::vec3(1.0f, 0.15f, 1.0f));  // Very low corner sun
+    float sunIntensity = 1.2f;
+    glm::vec3 sunColor = glm::vec3(1.0f, 0.6f, 0.3f);  // Warm orange sunset
+    float ambientIntensity = 0.12f;
 
     // Instanced rendering data (submitted per-frame) - stored by value
     std::optional<rendering::InstancedRenderData> pendingInstancedData;
@@ -218,8 +226,8 @@ private:
 
     // Phase 3.3: Shadow mapping
     std::unique_ptr<rendering::ShadowRenderer> shadowRenderer;
-    float shadowBias = 0.005f;
-    float shadowStrength = 0.8f;  // Higher value = darker shadows
+    float shadowBias = 0.008f;  // Constant bias to prevent shadow acne (uniform across all surfaces)
+    float shadowStrength = 0.7f;  // Shadow darkness
 
     // RHI initialization methods (Phase 4)
     void createRHIDepthResources();

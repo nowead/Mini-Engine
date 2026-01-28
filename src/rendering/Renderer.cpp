@@ -7,6 +7,8 @@
 // TODO Phase 10: Consider adding getRenderPass() to RHI interface to remove this last dependency
 #include <rhi/vulkan/VulkanRHISwapchain.hpp>
 #include <rhi/vulkan/VulkanRHICommandEncoder.hpp>
+#include <rhi/vulkan/VulkanRHITexture.hpp>
+#include <rhi/vulkan/VulkanRHIBuffer.hpp>
 
 #include <stdexcept>
 
@@ -796,13 +798,10 @@ void Renderer::updateRHIUniformBuffer(uint32_t currentImage) {
     ubo.shadowBias = shadowBias;
     ubo.shadowStrength = shadowStrength;
 
-    // Copy to RHI uniform buffer (if mapped)
+    // Copy to RHI uniform buffer - always use write() to ensure proper flush to GPU
     auto* buffer = rhiUniformBuffers[currentImage].get();
     if (buffer) {
-        void* mappedData = buffer->getMappedData();
-        if (mappedData) {
-            memcpy(mappedData, &ubo, sizeof(ubo));
-        }
+        buffer->write(&ubo, sizeof(ubo));
     }
 }
 
@@ -841,12 +840,10 @@ void Renderer::drawFrame() {
 
     // Step 2: Update shadow light matrix (before uniform buffer update)
     if (shadowRenderer && shadowRenderer->isInitialized()) {
-        // Calculate scene bounds for shadow frustum
-        // Buildings are in 4x4 grid with 30 spacing: -45 to +45
-        // Ground is 100x100: -50 to +50
-        // Use origin as center and set ortho to cover full ground
+        // Use fixed scene center at origin - shadows should only depend on sun direction
+        // not on camera position. This prevents shadows from shifting when camera moves.
         glm::vec3 sceneCenter = glm::vec3(0.0f, 0.0f, 0.0f);
-        float sceneRadius = 60.0f;  // Cover -60 to +60
+        float sceneRadius = 200.0f;  // Large enough to cover all buildings in NASDAQ sector
         shadowRenderer->updateLightMatrix(sunDirection, sceneCenter, sceneRadius);
     }
 
@@ -865,14 +862,69 @@ void Renderer::drawFrame() {
         auto* instanceBuffer = pendingInstancedData->instanceBuffer;
 
         if (mesh && mesh->hasData() && instanceBuffer) {
-            static int shadowFrameCount = 0;
-            if (shadowFrameCount++ % 60 == 0) {
-                std::cout << "[Renderer] Shadow pass rendering " << (pendingInstancedData->instanceCount - 1) 
-                          << " building instances" << std::endl;
+            // Add memory barrier to ensure host writes to instance buffer are visible to GPU
+            // This is critical for shadow pass to see updated building heights
+            auto* vulkanEncoder = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
+            auto* vulkanBuffer = dynamic_cast<RHI::Vulkan::VulkanRHIBuffer*>(instanceBuffer);
+            if (vulkanEncoder && vulkanBuffer) {
+                vulkanEncoder->getCommandBuffer().pipelineBarrier(
+                    vk::PipelineStageFlagBits::eHost,
+                    vk::PipelineStageFlagBits::eVertexInput,
+                    {},
+                    {},
+                    vk::BufferMemoryBarrier{
+                        .srcAccessMask = vk::AccessFlagBits::eHostWrite,
+                        .dstAccessMask = vk::AccessFlagBits::eVertexAttributeRead,
+                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .buffer = vulkanBuffer->getVkBuffer(),
+                        .offset = 0,
+                        .size = VK_WHOLE_SIZE
+                    },
+                    {}
+                );
             }
+
+#ifndef __linux__
+            // macOS/Windows: Transition shadow map to depth attachment for writing
+            // Use eUndefined as old layout to handle both first frame and subsequent frames
+            auto* shadowTexture = dynamic_cast<RHI::Vulkan::VulkanRHITexture*>(shadowRenderer->getShadowMapTexture());
+            if (vulkanEncoder && shadowTexture) {
+                vulkanEncoder->getCommandBuffer().pipelineBarrier(
+                    vk::PipelineStageFlagBits::eFragmentShader | vk::PipelineStageFlagBits::eEarlyFragmentTests,
+                    vk::PipelineStageFlagBits::eEarlyFragmentTests,
+                    {},
+                    {},
+                    {},
+                    vk::ImageMemoryBarrier{
+                        .srcAccessMask = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eDepthStencilAttachmentRead,
+                        .dstAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite,
+                        .oldLayout = vk::ImageLayout::eUndefined,  // Discard previous contents
+                        .newLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
+                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .image = shadowTexture->getVkImage(),
+                        .subresourceRange = vk::ImageSubresourceRange{
+                            .aspectMask = vk::ImageAspectFlagBits::eDepth,
+                            .baseMipLevel = 0,
+                            .levelCount = 1,
+                            .baseArrayLayer = 0,
+                            .layerCount = 1
+                        }
+                    }
+                );
+            }
+#endif
             
             auto* shadowPass = shadowRenderer->beginShadowPass(encoder.get(), frameIndex);
             if (shadowPass) {
+                // DEBUG: Log shadow pass execution
+                static int shadowFrameCount = 0;
+                if (++shadowFrameCount % 60 == 0) {
+                    LOG_DEBUG("Renderer") << "Shadow pass: instanceBuffer=" << (void*)instanceBuffer
+                                          << " instances=" << pendingInstancedData->instanceCount;
+                }
+
                 // Bind vertex and instance buffers
                 shadowPass->setVertexBuffer(0, mesh->getVertexBuffer(), 0);
                 shadowPass->setVertexBuffer(1, instanceBuffer, 0);
@@ -880,13 +932,46 @@ void Renderer::drawFrame() {
 
                 // Draw buildings only (skip first instance which is the ground plane)
                 // Ground should receive shadows but not cast them
+                uint32_t buildingCount = pendingInstancedData->instanceCount - 1;
                 shadowPass->drawIndexed(
                     static_cast<uint32_t>(mesh->getIndexCount()),
-                    pendingInstancedData->instanceCount - 1,  // Exclude ground
+                    buildingCount,
                     0, 0, 1  // Start from instance 1 (skip instance 0 = ground)
                 );
 
                 shadowRenderer->endShadowPass();
+
+#ifndef __linux__
+                // macOS/Windows: Transition shadow map from depth attachment to shader read
+                // Linux render pass handles this automatically via finalLayout
+                auto* vulkanEncoder = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
+                auto* shadowTexture = dynamic_cast<RHI::Vulkan::VulkanRHITexture*>(shadowRenderer->getShadowMapTexture());
+                if (vulkanEncoder && shadowTexture) {
+                    vulkanEncoder->getCommandBuffer().pipelineBarrier(
+                        vk::PipelineStageFlagBits::eLateFragmentTests,
+                        vk::PipelineStageFlagBits::eFragmentShader,
+                        {},
+                        {},
+                        {},
+                        vk::ImageMemoryBarrier{
+                            .srcAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite,
+                            .dstAccessMask = vk::AccessFlagBits::eShaderRead,
+                            .oldLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
+                            .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+                            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                            .image = shadowTexture->getVkImage(),
+                            .subresourceRange = vk::ImageSubresourceRange{
+                                .aspectMask = vk::ImageAspectFlagBits::eDepth,
+                                .baseMipLevel = 0,
+                                .levelCount = 1,
+                                .baseArrayLayer = 0,
+                                .layerCount = 1
+                            }
+                        }
+                    );
+                }
+#endif
             }
         }
     }

@@ -1,8 +1,8 @@
 # Gap Analysis: SRS Requirements vs Mini-Engine Implementation
 
-**Document Version**: 3.2
-**Last Updated**: 2026-01-21
-**Status**: Phase 3 Complete - Visual Effects & Polish Done
+**Document Version**: 3.3
+**Last Updated**: 2026-01-26
+**Status**: Phase 3 Complete - Visual Effects, Lighting & Shadows Done
 
 **Recent Progress**:
 
@@ -14,8 +14,9 @@
 - ✅ Scene Management complete (Scene Graph, Quadtree, Frustum Culling, Batch Rendering - 2026-01-19)
 - ✅ Particle System complete (6 effect types, billboard rendering - 2026-01-21)
 - ✅ Camera simplified (Perspective only, Isometric removed - 2026-01-21)
-- ✅ **Skybox rendering** (Procedural sky gradient, sun disk - 2026-01-21)
-- ✅ **Directional Lighting** (Blinn-Phong, ImGui controls, presets - 2026-01-21)
+- ✅ Skybox rendering (Procedural sky gradient, sun disk - 2026-01-21)
+- ✅ Directional Lighting (Blinn-Phong, ImGui controls, presets - 2026-01-21)
+- ✅ **Shadow Mapping** (Directional light shadows, PCF soft shadows, Vulkan depth range fix - 2026-01-26)
 
 ---
 
@@ -30,10 +31,10 @@ This document analyzes the gap between the [Software Requirements Specification 
 - **Game Logic**: ✅ WorldManager, BuildingManager, animation system fully integrated
 - **Scene Management**: ✅ Scene Graph, Quadtree, Frustum Culling, Batch Rendering complete
 - **Visual Effects**: ✅ Particle System complete, Animation framework complete
-- **Advanced Rendering**: ✅ **Skybox, Directional Lighting complete**
+- **Advanced Rendering**: ✅ **Skybox, Directional Lighting, Shadow Mapping complete**
 
 **Original Estimate**: 3-4 months (single developer)
-**Revised Estimate**: 1-1.5 months remaining (Phase 1-3.1 complete)
+**Revised Estimate**: 1-1.5 months remaining (Phase 1-3 complete)
 
 ---
 
@@ -485,11 +486,18 @@ class BatchRenderer {
 
 **Deliverable**: Rocket launch effects, building animations, skybox, lighting ✅
 
-**Advanced Rendering Details** (2026-01-21):
+**Advanced Rendering Details** (2026-01-21 ~ 2026-01-26):
 
 - ✅ Procedural skybox (sky gradient, sun disk with glow)
 - ✅ Directional lighting (Blinn-Phong shading)
 - ✅ ImGui lighting controls (azimuth/elevation, color, intensity, presets)
+- ✅ **Shadow Mapping** (2026-01-26):
+  - Directional light orthographic shadow mapping
+  - PCF (Percentage Closer Filtering) 3x3 soft shadows
+  - Vulkan depth range [0,1] conversion (glm::ortho OpenGL→Vulkan)
+  - Front-face culling in shadow pass for peter panning prevention
+  - ImGui shadow controls (bias, strength)
+  - Real-time shadow updates reflecting building height changes
 
 ---
 
@@ -554,10 +562,11 @@ class BatchRenderer {
 - ✅ Compute shaders - Full RHI compute pipeline support
 - ✅ Scene Management - Scene Graph, Quadtree, Frustum Culling, Batch Rendering
 - ✅ **Particle System** - 6 effect types, billboard rendering, additive blending
+- ✅ **Shadow Mapping** - Directional light shadows, PCF soft shadows, Vulkan depth range
 
 **SRS Additional Requirements** 🔲:
 
-- 🔲 Advanced rendering (lighting, post-processing)
+- 🔲 Post-processing (Bloom)
 - 🔲 LOD system
 - 🔲 WebSocket integration (network)
 - 🔲 Multi-user features
@@ -589,12 +598,13 @@ class BatchRenderer {
 3. **Scene Management** ✅ **COMPLETED**
 4. **Particle System** ✅ **COMPLETED**
 
-### Short-term (Week 1-2) 🔲
+### Short-term (Week 1-2) ✅ COMPLETE
 
-1. **Advanced Rendering**
-   - 🔲 Directional lighting (sun)
-   - 🔲 Bloom post-processing
-   - 🔲 Skybox/background
+1. **Advanced Rendering** ✅
+   - ✅ Directional lighting (sun) - Blinn-Phong shading
+   - ✅ Skybox/background - Procedural sky gradient
+   - ✅ Shadow Mapping - Directional light shadows, PCF
+   - 🔲 Bloom post-processing (Optional)
 
 ### Medium-term (Month 1-2) 🔲
 
@@ -637,7 +647,7 @@ class BatchRenderer {
 
 ## 9. Conclusion
 
-**Summary**: Mini-Engine has achieved all major rendering milestones including complete RHI abstraction, GPU instancing, compute shader support, full scene management system, and particle effects. The engine now meets all core SRS requirements for visual effects and rendering performance. Only advanced rendering (lighting, post-processing) and network integration remain.
+**Summary**: Mini-Engine has achieved all major rendering milestones including complete RHI abstraction, GPU instancing, compute shader support, full scene management system, particle effects, and shadow mapping. The engine now meets all core SRS requirements for visual effects and rendering performance. Only post-processing (bloom) and network integration remain.
 
 **Original Estimate**: 3-4 months (single developer, full-time)
 **Revised Estimate**: 1-1.5 months remaining
@@ -646,18 +656,18 @@ class BatchRenderer {
 
 - ✅ **Phase 1**: 100% complete (GPU instancing, compute shaders, game logic)
 - ✅ **Phase 2**: 100% complete (Scene Graph, Quadtree, Frustum Culling, Batch Rendering)
-- ⏳ **Phase 3**: 67% complete (Particle System + Animation done, advanced rendering pending)
+- ✅ **Phase 3**: 100% complete (Particle System, Animation, Skybox, Lighting, Shadow Mapping)
 - 🔲 **Phase 4**: Not started (Advanced Optimization)
 
 **Recommended Approach**:
 
 1. ✅ ~~Phase 1 (Core Performance)~~ → **COMPLETE**
 2. ✅ ~~Phase 2 (Scene Management)~~ → **COMPLETE**
-3. ✅ ~~Phase 3.1 (Particle System)~~ → **COMPLETE**
-4. 🔲 Phase 3.3 (Advanced Rendering) - Optional polish
-5. 🔲 Phase 4 (Network Integration) - WebSocket, multi-user
+3. ✅ ~~Phase 3 (Visual Effects)~~ → **COMPLETE** (Particles, Skybox, Lighting, Shadows)
+4. 🔲 Phase 4 (Network Integration) - WebSocket, multi-user
+5. 🔲 Phase 5 (Optimization & Polish) - Optional
 
-**Critical Path**: ~~GPU Instancing~~ ✅ → ~~Game Logic~~ ✅ → ~~Compute Shaders~~ ✅ → ~~Scene Graph~~ ✅ → ~~Particles~~ ✅ → **Network** 🔲 → Production Ready
+**Critical Path**: ~~GPU Instancing~~ ✅ → ~~Game Logic~~ ✅ → ~~Compute Shaders~~ ✅ → ~~Scene Graph~~ ✅ → ~~Particles~~ ✅ → ~~Shadows~~ ✅ → **Network** 🔲 → Production Ready
 
 **Key Achievements**:
 
@@ -679,16 +689,19 @@ class BatchRenderer {
 - ✅ **Billboard rendering with additive blending**
 - ✅ **ImGui integration for particle testing**
 - ✅ **Camera simplified (Perspective only)**
+- ✅ **Skybox with procedural sky gradient**
+- ✅ **Directional lighting (Blinn-Phong)**
+- ✅ **Shadow Mapping** (Directional light, PCF soft shadows, Vulkan depth range fix)
 
 **Next Priorities**:
 
-1. **Optional**: Advanced rendering (lighting, post-processing)
+1. **Optional**: Post-processing (Bloom)
 2. **Short-term**: WebSocket client and data synchronization
 3. **Medium-term**: Multi-user features and production polish
 
 ---
 
 **Document Prepared By**: Claude Sonnet 4.5 / Claude Opus 4.5
-**Review Status**: Updated with Particle System Complete
-**Last Reviewed**: 2026-01-21
+**Review Status**: Updated with Shadow Mapping Complete
+**Last Reviewed**: 2026-01-26
 **Next Update**: After Phase 4 (Network Integration)

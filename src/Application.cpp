@@ -127,6 +127,25 @@ void Application::mainLoop() {
 
             // Update animations
             worldManager->update(deltaTime);
+            
+            // DEBUG: Force dramatic height change on CENTER building to test shadow updates
+            static float debugTime = 0.0f;
+            debugTime += deltaTime;
+            auto* buildingManager = worldManager->getBuildingManager();
+            if (buildingManager) {
+                // Use center building (grid position 1,1 or 2,2)
+                auto* centerBuilding = buildingManager->getBuildingByTicker("BUILDING_1_1");
+                if (!centerBuilding) {
+                    centerBuilding = buildingManager->getBuildingByTicker("BUILDING_2_2");
+                }
+                if (centerBuilding) {
+                    // Oscillate between 20 and 150 height
+                    float newHeight = 85.0f + 65.0f * std::sin(debugTime * 1.5f);
+                    centerBuilding->currentHeight = newHeight;
+                    centerBuilding->targetHeight = newHeight;
+                    buildingManager->markInstanceBufferDirty();
+                }
+            }
         }
 
         // Extract rendering data from game logic (clean layer separation)
@@ -184,6 +203,8 @@ void Application::mainLoop() {
             renderer->setSunIntensity(lighting.sunIntensity);
             renderer->setSunColor(lighting.sunColor);
             renderer->setAmbientIntensity(lighting.ambientIntensity);
+            renderer->setShadowBias(lighting.shadowBias);
+            renderer->setShadowStrength(lighting.shadowStrength);
         }
 
         // Renderer handles both scene and ImGui rendering

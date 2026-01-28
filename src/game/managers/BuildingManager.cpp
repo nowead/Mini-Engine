@@ -222,7 +222,8 @@ std::vector<BuildingEntity*> BuildingManager::getAllBuildings() {
 }
 
 void BuildingManager::update(float deltaTime) {
-    bool animationOccurred = false;
+    // Mark dirty if we have any animating entities - shadows need updating
+    bool hasAnimatingEntities = !animatingEntities.empty();
 
     // Update all animating entities
     std::vector<uint64_t> toRemove;
@@ -236,7 +237,6 @@ void BuildingManager::update(float deltaTime) {
 
         BuildingEntity& building = it->second;
         updateAnimation(building, deltaTime);
-        animationOccurred = true;
 
         // Remove from animating list if animation complete
         if (building.isAnimationComplete()) {
@@ -252,10 +252,10 @@ void BuildingManager::update(float deltaTime) {
         }
     }
 
-    // Mark instance buffer as dirty if any animation occurred
-    if (animationOccurred) {
+    // Mark instance buffer as dirty if ANY entities were animating this frame
+    // This ensures shadow map gets updated with new building heights
+    if (hasAnimatingEntities) {
         instanceBufferDirty = true;
-        std::cout << "[BuildingManager] Animation occurred, marked instance buffer as dirty" << std::endl;
     }
 }
 
@@ -405,7 +405,7 @@ void BuildingManager::updateInstanceBuffer() {
     InstanceData groundData;
     groundData.position = glm::vec3(0.0f, -0.05f, 0.0f);  // Slightly below origin
     groundData.color = glm::vec3(0.3f, 0.35f, 0.3f);      // Dark gray-green
-    groundData.scale = glm::vec3(100.0f, 0.1f, 100.0f);   // Very large and flat
+    groundData.scale = glm::vec3(300.0f, 0.1f, 300.0f);   // Extra large for shadow debugging
     groundData._padding = 0.0f;
     instanceData.push_back(groundData);
 
@@ -419,34 +419,41 @@ void BuildingManager::updateInstanceBuffer() {
         data.scale = glm::vec3(building.baseScale.x, building.currentHeight, building.baseScale.z);
         data._padding = 0.0f;
 
-        // Debug: Print first building's height every 60 frames
-        static int debugFrameCount = 0;
-        if (debugFrameCount++ % 60 == 0 && &building == &entities.begin()->second) {
-            std::cout << "[BuildingManager] First building height: " << building.currentHeight 
-                      << " (animating: " << building.isAnimating << ")" << std::endl;
+        // DEBUG: Log center building height
+        if (building.ticker == "BUILDING_1_1") {
+            static int frameCount = 0;
+            if (++frameCount % 60 == 0) {  // Log every 60 frames
+                LOG_DEBUG("BuildingManager") << "BUILDING_1_1 height: " << building.currentHeight;
+            }
         }
 
         instanceData.push_back(data);
     }
 
-    // Create or resize buffer if needed
-    size_t requiredSize = sizeof(InstanceData) * instanceData.size();
+    size_t instanceCount = instanceData.size();
+    size_t requiredSize = sizeof(InstanceData) * instanceCount;
 
-    // Always recreate buffer for dynamic updates (Vulkan requires this for proper GPU sync)
-    // Create new buffer
+    // DEBUG: Force new buffer creation every frame to diagnose synchronization issues
+    // This is inefficient but helps rule out buffer reuse problems
+    currentBufferIndex = 0;
+
+    size_t newCapacity = std::max(instanceCount, size_t(64));
+
     rhi::BufferDesc bufferDesc;
-    bufferDesc.size = requiredSize;
-    bufferDesc.usage = rhi::BufferUsage::Vertex | rhi::BufferUsage::CopyDst;
-    bufferDesc.mappedAtCreation = false;
+    bufferDesc.size = sizeof(InstanceData) * newCapacity;
+    // Use MapWrite for direct CPU access (faster updates)
+    bufferDesc.usage = rhi::BufferUsage::Vertex | rhi::BufferUsage::MapWrite;
+    bufferDesc.mappedAtCreation = true;  // Keep mapped for fast updates
     bufferDesc.label = "Building Instance Buffer";
 
-    instanceBuffer = rhiDevice->createBuffer(bufferDesc);
+    instanceBuffers[currentBufferIndex] = rhiDevice->createBuffer(bufferDesc);
+    currentBufferCapacity = newCapacity;
 
     // Upload instance data to GPU
-    if (instanceBuffer) {
-        instanceBuffer->write(instanceData.data(), requiredSize);
+    // Always use write() to ensure proper flush to GPU
+    auto& currentBuffer = instanceBuffers[currentBufferIndex];
+    if (currentBuffer) {
+        currentBuffer->write(instanceData.data(), requiredSize);
         instanceBufferDirty = false;
-        std::cout << "[BuildingManager] Instance buffer updated: " << instanceData.size() 
-                  << " instances (" << entities.size() << " buildings + ground)" << std::endl;
     }
 }

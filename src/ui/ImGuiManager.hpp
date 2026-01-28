@@ -58,10 +58,13 @@ public:
 
     // Phase 3.3: Lighting settings (set by UI, read by Application)
     struct LightingSettings {
-        glm::vec3 sunDirection{0.5f, 0.8f, 0.3f};
-        float sunIntensity = 1.0f;
-        glm::vec3 sunColor{1.0f, 0.95f, 0.85f};
-        float ambientIntensity = 0.15f;
+        glm::vec3 sunDirection{0.7f, 0.25f, 0.5f};  // Low angle sunset
+        float sunIntensity = 1.2f;
+        glm::vec3 sunColor{1.0f, 0.6f, 0.3f};  // Warm orange sunset
+        float ambientIntensity = 0.12f;
+        // Shadow settings
+        float shadowBias = 0.008f;      // Depth bias to prevent shadow acne
+        float shadowStrength = 0.7f;    // Shadow darkness (0-1)
     };
 
     LightingSettings& getLightingSettings() { return m_lightingSettings; }
@@ -80,6 +83,6 @@ private:
 
     // Phase 3.3: Lighting UI state
     LightingSettings m_lightingSettings;
-    float m_sunAzimuth = 30.0f;   // Horizontal angle (degrees)
-    float m_sunElevation = 53.0f; // Vertical angle (degrees)
+    float m_sunAzimuth = 45.0f;   // Horizontal angle (degrees)
+    float m_sunElevation = 15.0f; // Low sunset angle (degrees)
 };

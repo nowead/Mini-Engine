@@ -17,7 +17,6 @@
 #include <iostream>
 #include <sstream>
 #include <string>
-
 namespace mini_engine {
 
 /**

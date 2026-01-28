@@ -36,17 +36,19 @@ float calculateShadow(vec4 posLightSpace, vec3 normal, vec3 lightDir) {
     // Perspective divide
     vec3 projCoords = posLightSpace.xyz / posLightSpace.w;
 
-    // Transform to [0,1] range (NDC to texture coords)
-    projCoords = projCoords * 0.5 + 0.5;
+    // Transform X/Y to [0,1] range for texture sampling
+    // Z is already in [0,1] from Vulkan-compatible projection matrix
+    projCoords.xy = projCoords.xy * 0.5 + 0.5;
 
     // Check if outside light frustum
-    if (projCoords.z > 1.0 || projCoords.x < 0.0 || projCoords.x > 1.0 ||
+    if (projCoords.z > 1.0 || projCoords.z < 0.0 ||
+        projCoords.x < 0.0 || projCoords.x > 1.0 ||
         projCoords.y < 0.0 || projCoords.y > 1.0) {
         return 0.0;  // No shadow outside light frustum
     }
 
-    // Bias to prevent shadow acne (adjust based on surface angle)
-    float bias = max(ubo.shadowBias * (1.0 - dot(normal, lightDir)), ubo.shadowBias * 0.1);
+    // Use minimal bias - PCF averaging helps reduce shadow acne
+    float bias = ubo.shadowBias * 0.01;  // Very minimal bias
 
     // Current fragment depth from light's perspective
     float currentDepth = projCoords.z;

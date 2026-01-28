@@ -7,6 +7,7 @@
 #include "src/scene/Mesh.hpp"
 #include <rhi/RHI.hpp>
 
+#include <array>
 #include <unordered_map>
 #include <vector>
 #include <memory>
@@ -191,7 +192,7 @@ public:
      * @return Pointer to instance buffer (may be null if not created)
      */
     rhi::RHIBuffer* getInstanceBuffer() const {
-        return instanceBuffer.get();
+        return instanceBuffers[currentBufferIndex].get();
     }
 
     /**
@@ -208,6 +209,13 @@ public:
         return instanceBufferDirty;
     }
 
+    /**
+     * @brief Mark instance buffer as dirty (needs update)
+     */
+    void markInstanceBufferDirty() {
+        instanceBufferDirty = true;
+    }
+
 private:
     // ========== RHI Resources ==========
     rhi::RHIDevice* rhiDevice;
@@ -221,8 +229,12 @@ private:
     std::unique_ptr<Mesh> buildingMesh;                             // Shared building mesh
 
     // ========== GPU Instancing Resources ==========
-    std::unique_ptr<rhi::RHIBuffer> instanceBuffer;                 // Instance data buffer for GPU instancing
-    bool instanceBufferDirty = true;                                // Flag indicating buffer needs update
+    // Double-buffered instance buffers to avoid GPU synchronization issues
+    static constexpr size_t NUM_INSTANCE_BUFFERS = 2;
+    std::array<std::unique_ptr<rhi::RHIBuffer>, NUM_INSTANCE_BUFFERS> instanceBuffers;
+    size_t currentBufferIndex = 0;
+    size_t currentBufferCapacity = 0;  // Current buffer capacity in instances
+    bool instanceBufferDirty = true;   // Flag indicating buffer needs update
 
     // ========== Animation Queue ==========
     std::vector<uint64_t> animatingEntities;                        // List of entities currently animating

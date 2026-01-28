@@ -87,8 +87,8 @@ private:
     std::array<std::unique_ptr<rhi::RHIBuffer>, MAX_FRAMES_IN_FLIGHT> m_uniformBuffers;
     std::array<std::unique_ptr<rhi::RHIBindGroup>, MAX_FRAMES_IN_FLIGHT> m_bindGroups;
 
-    // Parameters
-    glm::vec3 m_sunDirection = glm::normalize(glm::vec3(0.5f, 0.8f, 0.3f));
+    // Parameters (sunset defaults)
+    glm::vec3 m_sunDirection = glm::normalize(glm::vec3(0.7f, 0.25f, 0.5f));
 
     // Uniform buffer structure (must match shader)
     struct alignas(16) UniformData {

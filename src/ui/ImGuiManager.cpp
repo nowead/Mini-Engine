@@ -150,6 +150,12 @@ void ImGuiManager::renderUI(Camera& camera, uint32_t buildingCount,
             m_lightingSettings.sunColor = glm::vec3(0.4f, 0.5f, 0.7f);
             m_lightingSettings.ambientIntensity = 0.05f;
         }
+
+        // Shadow settings
+        ImGui::Separator();
+        ImGui::Text("Shadows:");
+        ImGui::SliderFloat("Shadow Bias", &m_lightingSettings.shadowBias, 0.001f, 0.02f, "%.4f");
+        ImGui::SliderFloat("Shadow Strength", &m_lightingSettings.shadowStrength, 0.0f, 1.0f, "%.2f");
     }
 
     ImGui::Separator();

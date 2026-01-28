@@ -96,6 +96,11 @@ public:
      */
     bool isInitialized() const { return m_initialized; }
 
+    /**
+     * @brief Get shadow map texture for layout transitions
+     */
+    rhi::RHITexture* getShadowMapTexture() const { return m_shadowMap.get(); }
+
 private:
     bool createShadowMap();
     bool createShadowSampler();

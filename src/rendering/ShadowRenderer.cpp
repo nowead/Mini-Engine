@@ -275,7 +275,7 @@ bool ShadowRenderer::createPipeline(void* nativeRenderPass) {
 
     // Primitive state
     pipelineDesc.primitive.topology = rhi::PrimitiveTopology::TriangleList;
-    pipelineDesc.primitive.cullMode = rhi::CullMode::Back;  // Cull back faces
+    pipelineDesc.primitive.cullMode = rhi::CullMode::Front;  // Cull front faces → render back faces only (fixes peter panning)
     pipelineDesc.primitive.frontFace = rhi::FrontFace::Clockwise;  // Match building pipeline
 
     // Depth state - write depth
@@ -305,22 +305,34 @@ bool ShadowRenderer::createPipeline(void* nativeRenderPass) {
 void ShadowRenderer::updateLightMatrix(const glm::vec3& lightDir,
                                         const glm::vec3& sceneCenter,
                                         float sceneRadius) {
-    // Orthographic projection for directional light
+    // Directional light shadow mapping with parallel rays
     // lightDir points TO the sun, so light comes FROM that direction
-    // Place light position along the sun direction from scene center
     glm::vec3 normalizedLightDir = glm::normalize(lightDir);
-    glm::vec3 lightPos = sceneCenter + normalizedLightDir * sceneRadius * 2.0f;
+
+    // Place light very far away to simulate parallel rays from infinity
+    float lightDistance = sceneRadius * 3.0f;
+    glm::vec3 lightPos = sceneCenter + normalizedLightDir * lightDistance;
 
     // Look from light position towards scene center
     glm::mat4 lightView = glm::lookAt(lightPos, sceneCenter, glm::vec3(0.0f, 1.0f, 0.0f));
 
-    // Orthographic projection to cover the scene
-    // Buildings: -45 to +45 (90 units), Ground: -50 to +50 (100 units)
-    // Use 55 to cover -55 to +55 with margin for full ground coverage
-    float orthoSize = 55.0f;
+    // Orthographic projection sized to cover entire scene
+    // Use sceneRadius to ensure full coverage regardless of scene size
+    float orthoSize = sceneRadius * 1.2f;  // 20% margin for safety
+    float nearPlane = 0.1f;
+    float farPlane = lightDistance * 2.0f;
+
+    // Use Vulkan-compatible depth range [0, 1] instead of OpenGL's [-1, 1]
+    // glm::ortho produces Z in [-1, 1], but Vulkan clips Z < 0, causing half the scene to be clipped
     glm::mat4 lightProj = glm::ortho(-orthoSize, orthoSize,
                                      -orthoSize, orthoSize,
-                                     0.1f, sceneRadius * 4.0f);
+                                     nearPlane, farPlane);
+
+    // Convert from OpenGL depth [-1, 1] to Vulkan depth [0, 1]
+    // OpenGL ortho: [2][2] = -2/(f-n), [3][2] = -(f+n)/(f-n)
+    // Vulkan ortho: [2][2] = -1/(f-n), [3][2] = -n/(f-n)
+    lightProj[2][2] = -1.0f / (farPlane - nearPlane);
+    lightProj[3][2] = -nearPlane / (farPlane - nearPlane);
 
     m_lightSpaceMatrix = lightProj * lightView;
 }

@@ -1,7 +1,7 @@
 # Project Roadmap: Stock/Crypto 3D Metaverse Platform
 
 **Document Version**: 3.5
-**Last Updated**: 2026-01-21
+**Last Updated**: 2026-01-26
 **Project Status**: Phase 3 Complete (100%)
 **Target Platform**: Web-based 3D Visualization (WebGPU + WASM)
 
@@ -17,7 +17,8 @@
 - ✅ Phase 2.3: Frustum Culling Complete (2026-01-19)
 - ✅ Phase 2.4: Batch Rendering Complete (2026-01-19)
 - ✅ Phase 3.1: Particle System Complete (2026-01-21)
-- ✅ **Phase 3.3: Advanced Rendering Complete** (2026-01-21) - Skybox, Directional Lighting
+- ✅ Phase 3.3: Advanced Rendering Complete (2026-01-21) - Skybox, Directional Lighting
+- ✅ **Phase 3.4: Shadow Mapping Complete** (2026-01-26) - Directional Light Shadow, PCF Soft Shadows
 
 ---
 
@@ -90,6 +91,7 @@ A web-based 3D metaverse platform that visualizes real-time stock and cryptocurr
 | UI Framework | ✅ Complete | ImGui integration |
 | Scene Management | ✅ Complete | Scene Graph, Quadtree, Frustum Culling, Batch Rendering |
 | Particle System | ✅ Complete | 6 effect types, billboard rendering, additive blending |
+| Shadow Mapping | ✅ Complete | Directional light shadows, PCF soft shadows, ImGui controls |
 
 **Code Statistics**:
 
@@ -114,10 +116,11 @@ A web-based 3D metaverse platform that visualizes real-time stock and cryptocurr
 - ✅ Compute Shader Support (full RHI compute pipeline - 2026-01-18)
 - ✅ Scene Management (Scene Graph, Quadtree, Frustum Culling, Batch Rendering - 2026-01-19)
 - ✅ **Particle System** (6 effect types, billboard rendering - 2026-01-21)
+- ✅ **Shadow Mapping** (Directional light shadows, PCF, Vulkan depth range - 2026-01-26)
 
 **Remaining Features**:
 
-- 🔲 Advanced Rendering (lighting, post-processing)
+- 🔲 Post-Processing (Bloom, etc.)
 - 🔲 WebSocket Integration (real-time market data)
 
 **Original Estimate**: 3-4 months (single full-time developer)
@@ -554,12 +557,12 @@ Market Data Stream (KIS API)
 
 ---
 
-### Phase 3: Visual Effects & Polish (Weeks 17-22) ⏳ IN PROGRESS
+### Phase 3: Visual Effects & Polish (Weeks 17-22) ✅ COMPLETE
 
 **Goal**: Eye-catching visual feedback for market events
 
-**Status**: ⏳ In Progress
-**Progress**: 2/3 tasks complete (67%)
+**Status**: ✅ Complete
+**Progress**: 4/4 tasks complete (100%)
 
 #### Phase 3.1: Particle System (Weeks 17-19) ✅ COMPLETE
 
@@ -676,39 +679,51 @@ Market Data Stream (KIS API)
    - [x] Fullscreen triangle rendering
    - [x] Synchronized with lighting direction
 
-3. **Post-Processing** (Optional - Future)
+3. **Shadow Mapping** (2026-01-26) ✅
+   - [x] Directional light shadow mapping (orthographic projection)
+   - [x] PCF (Percentage Closer Filtering) soft shadows
+   - [x] Vulkan depth range [0,1] conversion
+   - [x] Front-face culling for peter panning prevention
+   - [x] ImGui shadow controls (bias, strength)
+
+4. **Post-Processing** (Optional - Future)
    - [ ] Bloom (glow on surge buildings)
-   - [ ] Shadow mapping
 
 **Implementation Details**:
 
 - **SkyboxRenderer**: Fullscreen triangle approach, procedural sky
-- **Building Shaders**: Extended UBO with lighting parameters
-- **ImGui Lighting Panel**: Azimuth/elevation controls, color picker, presets
+- **ShadowRenderer**: Depth-only pass, orthographic light projection, shadow map texture
+- **Building Shaders**: Extended UBO with lighting + shadow parameters
+- **ImGui Lighting Panel**: Azimuth/elevation controls, color picker, presets, shadow bias/strength
 
 **Files Created/Modified**:
 
 - `src/rendering/SkyboxRenderer.hpp/cpp` - Skybox rendering (~200 LOC)
+- `src/rendering/ShadowRenderer.hpp/cpp` - Shadow map rendering (~560 LOC)
 - `shaders/skybox.vert.glsl` - Fullscreen triangle vertex shader
 - `shaders/skybox.frag.glsl` - Procedural sky fragment shader
-- `shaders/building.vert.glsl` - Extended with lighting outputs
-- `shaders/building.frag.glsl` - Blinn-Phong lighting
-- `src/utils/Vertex.hpp` - Extended UBO with lighting data
+- `shaders/shadow.vert.glsl` - Shadow depth vertex shader
+- `shaders/shadow.frag.glsl` - Shadow depth fragment shader (empty)
+- `shaders/building.vert.glsl` - Extended with lighting + shadow outputs
+- `shaders/building.frag.glsl` - Blinn-Phong lighting + shadow sampling (PCF)
+- `src/utils/Vertex.hpp` - Extended UBO with lighting + shadow data
 
 **Success Criteria**: ✅ All met
-- [x] Enhanced visual appeal (skybox, lighting)
+- [x] Enhanced visual appeal (skybox, lighting, shadows)
 - [x] 60 FPS maintained
-- [x] Configurable lighting via ImGui
+- [x] Configurable lighting and shadow via ImGui
+- [x] Shadows reflect building height changes in real-time
+- [x] Parallel light rays across entire scene
 
-**Code Added**: ~400 LOC + shaders
+**Code Added**: ~1,000 LOC + shaders
 
 ---
 
 **Phase 3 Summary**:
-- **Duration**: 6 weeks (completed in 3 days: 2026-01-19 to 2026-01-21)
-- **Total Code**: ~1,400 LOC (actual)
-- **Progress**: 3/3 tasks complete (100%)
-- **Key Deliverable**: Production-quality visual effects
+- **Duration**: 6 weeks (completed in 8 days: 2026-01-19 to 2026-01-26)
+- **Total Code**: ~2,400 LOC (actual, including shadow system)
+- **Progress**: 4/4 tasks complete (100%)
+- **Key Deliverable**: Production-quality visual effects with shadow mapping
 
 ---
 
@@ -933,7 +948,7 @@ Phase 5 (Testing & Release)
 ```
 
 **Estimated Critical Path Duration**: 24 weeks (6 months)
-**Actual Progress**: Weeks 1-19 complete (Phase 1-3.1 done)
+**Actual Progress**: Weeks 1-22 complete (Phase 1-3 done)
 
 ---
 
@@ -1107,10 +1122,11 @@ Tasks that can be developed concurrently:
 - [x] Frustum culling with AABB intersection
 - [x] Batch rendering with material sorting
 
-**Phase 3 Complete**: ⏳ (67% - 2/3 tasks)
+**Phase 3 Complete**: ✅ (100% - 4/4 tasks)
 - [x] 10,000 particles at 60 FPS ✅ **COMPLETE**
 - [x] Smooth height animations (configurable duration) ✅ **COMPLETE**
-- [ ] Advanced rendering (lighting, post-processing)
+- [x] Advanced rendering (skybox, directional lighting) ✅ **COMPLETE**
+- [x] Shadow mapping (directional light shadows, PCF) ✅ **COMPLETE**
 
 **Phase 4 Complete**:
 - [ ] WebSocket connection stable for >1 hour
@@ -1143,7 +1159,8 @@ Week  | Phase                              | Status | Milestone
 16    | Phase 2.4: Batch Rendering         | ✅      | Phase 2 COMPLETE (2026-01-19)
 17-19 | Phase 3.1: Particle System         | ✅      | Particles rendering (2026-01-21)
 20-21 | Phase 3.2: Animation System        | ✅      | Animations working (DONE EARLY)
-22    | Phase 3.3: Advanced Rendering      | 🔲      | Phase 3 COMPLETE
+22    | Phase 3.3: Advanced Rendering      | ✅      | Skybox + Lighting (2026-01-21)
+--    | Phase 3.4: Shadow Mapping          | ✅      | Shadow mapping (2026-01-26)
 23    | Phase 4.1: WebSocket Client        | 🔲      | Network connected
 24    | Phase 4.2: Data Synchronization    | 🔲      | Data updates working
 25-26 | Phase 4.3: Multi-User Features     | 🔲      | Phase 4 COMPLETE
@@ -1162,7 +1179,7 @@ Week  | Phase                              | Status | Milestone
 | **M1: Rendering Foundation** | Week 10 | ✅ | Instancing + compute shaders working |
 | **M1.5: Game Logic** | Week 10 | ✅ | WorldManager, BuildingManager integrated |
 | **M2: Scene Management** | Week 16 | ✅ | Phase 2 COMPLETE (2026-01-19) |
-| **M3: Visual Effects** | Week 22 | ⏳ | Particles done, advanced rendering pending |
+| **M3: Visual Effects** | Week 22 | ✅ | Phase 3 COMPLETE (2026-01-26) - Particles, Skybox, Lighting, Shadows |
 | **M4: Network Integration** | Week 26 | 🔲 | Real-time data connected |
 | **M5: MVP Release** | Week 30 | 🔲 | Production deployment |
 
@@ -1228,10 +1245,11 @@ Week  | Phase                              | Status | Milestone
 | 3.2 | 2026-01-19 | Scene Graph complete - Phase 2.1 (SceneNode, SectorNode, hierarchical transforms) | Claude Opus 4.5 |
 | 3.3 | 2026-01-19 | Phase 2 COMPLETE - Spatial Partitioning, Frustum Culling, Batch Rendering | Claude Opus 4.5 |
 | 3.4 | 2026-01-21 | **Phase 3.1 Particle System COMPLETE** - 6 effect types, billboard rendering, ImGui integration, Camera simplified (Perspective only) | Claude Opus 4.5 |
+| 3.5 | 2026-01-26 | **Phase 3.4 Shadow Mapping COMPLETE** - Directional light shadow mapping, Vulkan depth range fix, PCF soft shadows, peter panning fix (front-face culling), ImGui shadow controls | Claude Opus 4.5 |
 
 ---
 
-**Document Status**: Active Development - Phase 3 In Progress (67%)
-**Next Review Date**: After Phase 3.3 completion (Advanced Rendering)
-**Last Updated**: 2026-01-21
+**Document Status**: Active Development - Phase 3 Complete (100%)
+**Next Review Date**: After Phase 4 start (Network Integration)
+**Last Updated**: 2026-01-26
 **Contact**: Technical Lead
