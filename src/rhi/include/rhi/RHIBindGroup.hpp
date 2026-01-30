@@ -18,8 +18,11 @@ class RHIBindGroupLayout;
 enum class BindingType {
     UniformBuffer,      // Uniform buffer (UBO)
     StorageBuffer,      // Storage buffer (SSBO)
-    Sampler,            // Sampler
+    Sampler,            // Sampler (for filtering)
+    NonFilteringSampler,// Sampler without filtering (for depth textures)
+    ComparisonSampler,  // Sampler for depth comparison
     SampledTexture,     // Sampled texture (for reading in shaders)
+    DepthTexture,       // Depth texture (for shadow mapping)
     StorageTexture      // Storage texture (for read-write in compute shaders)
 };
 

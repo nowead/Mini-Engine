@@ -255,10 +255,22 @@ std::unique_ptr<RHIRenderPassEncoder> WebGPURHICommandEncoder::beginRenderPass(c
         depthStencilAttachment.depthClearValue = desc.depthStencilAttachment->depthClearValue;
         depthStencilAttachment.depthReadOnly = false;
 
-        depthStencilAttachment.stencilLoadOp = ToWGPULoadOp(desc.depthStencilAttachment->stencilLoadOp);
-        depthStencilAttachment.stencilStoreOp = ToWGPUStoreOp(desc.depthStencilAttachment->stencilStoreOp);
-        depthStencilAttachment.stencilClearValue = desc.depthStencilAttachment->stencilClearValue;
-        depthStencilAttachment.stencilReadOnly = false;
+        // Check if texture format has stencil aspect
+        auto format = depthView->getFormat();
+        bool hasStencil = (format == rhi::TextureFormat::Depth24PlusStencil8);
+
+        if (hasStencil) {
+            depthStencilAttachment.stencilLoadOp = ToWGPULoadOp(desc.depthStencilAttachment->stencilLoadOp);
+            depthStencilAttachment.stencilStoreOp = ToWGPUStoreOp(desc.depthStencilAttachment->stencilStoreOp);
+            depthStencilAttachment.stencilClearValue = desc.depthStencilAttachment->stencilClearValue;
+            depthStencilAttachment.stencilReadOnly = false;
+        } else {
+            // For depth-only formats, stencil ops must be undefined
+            depthStencilAttachment.stencilLoadOp = WGPULoadOp_Undefined;
+            depthStencilAttachment.stencilStoreOp = WGPUStoreOp_Undefined;
+            depthStencilAttachment.stencilClearValue = 0;
+            depthStencilAttachment.stencilReadOnly = true;
+        }
 
         pDepthStencil = &depthStencilAttachment;
     }

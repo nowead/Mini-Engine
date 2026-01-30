@@ -115,13 +115,15 @@ public:
      */
     rhi::RHIQueue* getGraphicsQueue() { return rhiBridge ? rhiBridge->getGraphicsQueue() : nullptr; }
 
+#ifndef __EMSCRIPTEN__
     /**
      * @brief Get ImGui manager (for external UI updates)
      */
     class ImGuiManager* getImGuiManager() { return imguiManager.get(); }
+#endif
 
     /**
-     * @brief Initialize ImGui subsystem
+     * @brief Initialize ImGui subsystem (no-op on WASM)
      */
     void initImGui(GLFWwindow* window);
 
@@ -166,7 +168,9 @@ private:
     // High-level managers
     std::unique_ptr<ResourceManager> resourceManager;
     std::unique_ptr<SceneManager> sceneManager;
+#ifndef __EMSCRIPTEN__
     std::unique_ptr<class ImGuiManager> imguiManager;  // Phase 6: ImGui integration
+#endif
 
     // RHI resources (Phase 4 migration - parallel to legacy resources)
     std::unique_ptr<rhi::RHITexture> rhiDepthImage;
@@ -206,13 +210,13 @@ private:
     glm::mat4 projectionMatrix;
     glm::vec3 cameraPosition = glm::vec3(0.0f);
 
-    // Phase 3.3: Lighting parameters (sunset defaults)
-    // Sun direction: pointing from corner, very low angle for long shadows
-    // X=1, Z=1 means sun is at corner, Y=0.15 means very low (long shadows)
-    glm::vec3 sunDirection = glm::normalize(glm::vec3(1.0f, 0.15f, 1.0f));  // Very low corner sun
-    float sunIntensity = 1.2f;
-    glm::vec3 sunColor = glm::vec3(1.0f, 0.6f, 0.3f);  // Warm orange sunset
-    float ambientIntensity = 0.12f;
+    // Phase 3.3: Lighting parameters (daytime defaults for better visibility)
+    // Sun direction: pointing from corner, medium-high angle for visible shadows
+    // X=1, Z=1 means sun is at corner, Y=0.6 means ~30 degree elevation
+    glm::vec3 sunDirection = glm::normalize(glm::vec3(1.0f, 0.6f, 1.0f));  // Medium-high sun
+    float sunIntensity = 1.5f;
+    glm::vec3 sunColor = glm::vec3(1.0f, 0.95f, 0.9f);  // Slightly warm white sunlight
+    float ambientIntensity = 0.25f;
 
     // Instanced rendering data (submitted per-frame) - stored by value
     std::optional<rendering::InstancedRenderData> pendingInstancedData;

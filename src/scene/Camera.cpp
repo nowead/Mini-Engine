@@ -25,8 +25,11 @@ glm::mat4 Camera::getViewMatrix() const {
 
 glm::mat4 Camera::getProjectionMatrix() const {
     glm::mat4 proj = glm::perspective(fov, aspectRatio, nearPlane, farPlane);
+#ifndef __EMSCRIPTEN__
     // Vulkan NDC has Y pointing down, flip it
+    // WebGPU uses OpenGL-style coordinates, so no flip needed
     proj[1][1] *= -1;
+#endif
     return proj;
 }
 

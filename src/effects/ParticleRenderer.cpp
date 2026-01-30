@@ -39,7 +39,26 @@ bool ParticleRenderer::initialize(rhi::TextureFormat colorFormat, rhi::TextureFo
 }
 
 bool ParticleRenderer::createShaders() {
-    // Load vertex shader
+#ifdef __EMSCRIPTEN__
+    // WebGPU/Emscripten: Load WGSL shader
+    auto wgslCodeRaw = FileUtils::readFile("shaders/particle.wgsl");
+    if (wgslCodeRaw.empty()) {
+        std::cerr << "[ParticleRenderer] Failed to load particle.wgsl\n";
+        return false;
+    }
+    std::vector<uint8_t> wgslCode(wgslCodeRaw.begin(), wgslCodeRaw.end());
+
+    rhi::ShaderSource vertSource(rhi::ShaderLanguage::WGSL, wgslCode, rhi::ShaderStage::Vertex, "vs_main");
+    rhi::ShaderDesc vertDesc(vertSource, "ParticleVertexShader");
+    m_vertexShader = m_device->createShader(vertDesc);
+    if (!m_vertexShader) return false;
+
+    rhi::ShaderSource fragSource(rhi::ShaderLanguage::WGSL, wgslCode, rhi::ShaderStage::Fragment, "fs_main");
+    rhi::ShaderDesc fragDesc(fragSource, "ParticleFragmentShader");
+    m_fragmentShader = m_device->createShader(fragDesc);
+    return m_fragmentShader != nullptr;
+#else
+    // Vulkan/Native: Load SPIR-V shaders
     auto vertCodeRaw = FileUtils::readFile("shaders/particle.vert.spv");
     if (vertCodeRaw.empty()) {
         std::cerr << "[ParticleRenderer] Failed to load particle.vert.spv\n";
@@ -53,7 +72,6 @@ bool ParticleRenderer::createShaders() {
     m_vertexShader = m_device->createShader(vertDesc);
     if (!m_vertexShader) return false;
 
-    // Load fragment shader
     auto fragCodeRaw = FileUtils::readFile("shaders/particle.frag.spv");
     if (fragCodeRaw.empty()) {
         std::cerr << "[ParticleRenderer] Failed to load particle.frag.spv\n";
@@ -66,6 +84,7 @@ bool ParticleRenderer::createShaders() {
 
     m_fragmentShader = m_device->createShader(fragDesc);
     return m_fragmentShader != nullptr;
+#endif
 }
 
 bool ParticleRenderer::createUniformBuffers() {

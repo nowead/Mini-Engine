@@ -40,9 +40,12 @@ VulkanRHIBindGroupLayout::VulkanRHIBindGroupLayout(VulkanRHIDevice* device, cons
                     : vk::DescriptorType::eStorageBuffer;
                 break;
             case rhi::BindingType::Sampler:
+            case rhi::BindingType::NonFilteringSampler:
+            case rhi::BindingType::ComparisonSampler:
                 binding.descriptorType = vk::DescriptorType::eSampler;
                 break;
             case rhi::BindingType::SampledTexture:
+            case rhi::BindingType::DepthTexture:
                 binding.descriptorType = vk::DescriptorType::eSampledImage;
                 break;
             case rhi::BindingType::StorageTexture:

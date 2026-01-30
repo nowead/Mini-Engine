@@ -41,7 +41,32 @@ bool SkyboxRenderer::initialize(rhi::TextureFormat colorFormat, rhi::TextureForm
 }
 
 bool SkyboxRenderer::createShaders() {
-    // Load vertex shader (pre-compiled SPIR-V)
+#ifdef __EMSCRIPTEN__
+    // WebGPU/Emscripten: Load WGSL shader
+    auto wgslCodeRaw = FileUtils::readFile("shaders/skybox.wgsl");
+    if (wgslCodeRaw.empty()) {
+        std::cerr << "[SkyboxRenderer] Failed to load skybox.wgsl\n";
+        return false;
+    }
+    std::vector<uint8_t> wgslCode(wgslCodeRaw.begin(), wgslCodeRaw.end());
+
+    rhi::ShaderSource vertSource(rhi::ShaderLanguage::WGSL, wgslCode, rhi::ShaderStage::Vertex, "vs_main");
+    rhi::ShaderDesc vertDesc(vertSource, "SkyboxVertexShader");
+    m_vertexShader = m_device->createShader(vertDesc);
+    if (!m_vertexShader) {
+        std::cerr << "[SkyboxRenderer] Failed to create vertex shader\n";
+        return false;
+    }
+
+    rhi::ShaderSource fragSource(rhi::ShaderLanguage::WGSL, wgslCode, rhi::ShaderStage::Fragment, "fs_main");
+    rhi::ShaderDesc fragDesc(fragSource, "SkyboxFragmentShader");
+    m_fragmentShader = m_device->createShader(fragDesc);
+    if (!m_fragmentShader) {
+        std::cerr << "[SkyboxRenderer] Failed to create fragment shader\n";
+        return false;
+    }
+#else
+    // Vulkan/Native: Load SPIR-V shaders
     auto vertCodeRaw = FileUtils::readFile("shaders/skybox.vert.spv");
     if (vertCodeRaw.empty()) {
         std::cerr << "[SkyboxRenderer] Failed to load skybox.vert.spv\n";
@@ -58,7 +83,6 @@ bool SkyboxRenderer::createShaders() {
         return false;
     }
 
-    // Load fragment shader (pre-compiled SPIR-V)
     auto fragCodeRaw = FileUtils::readFile("shaders/skybox.frag.spv");
     if (fragCodeRaw.empty()) {
         std::cerr << "[SkyboxRenderer] Failed to load skybox.frag.spv\n";
@@ -74,6 +98,7 @@ bool SkyboxRenderer::createShaders() {
         std::cerr << "[SkyboxRenderer] Failed to create fragment shader\n";
         return false;
     }
+#endif
 
     std::cout << "[SkyboxRenderer] Shaders created successfully\n";
     return true;
@@ -200,13 +225,10 @@ void SkyboxRenderer::render(rhi::RHIRenderPassEncoder* renderPass, uint32_t fram
     uniformData.sunDirection = m_sunDirection;
     uniformData.time = time;
 
-    // Write to uniform buffer
+    // Write to uniform buffer using write() for WebGPU compatibility
     auto* buffer = m_uniformBuffers[bufferIndex].get();
     if (buffer) {
-        void* mappedData = buffer->getMappedData();
-        if (mappedData) {
-            memcpy(mappedData, &uniformData, sizeof(UniformData));
-        }
+        buffer->write(&uniformData, sizeof(UniformData));
     }
 
     // Set pipeline and bind group

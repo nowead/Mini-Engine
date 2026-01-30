@@ -133,7 +133,11 @@ void WebGPURHISwapchain::present(RHISemaphore* waitSemaphore) {
     // Present is implicit - just release the current texture view
     m_currentTextureView.reset();
 
+#ifndef __EMSCRIPTEN__
+    // Native WebGPU (Dawn): explicit present required
     wgpuSwapChainPresent(m_swapchain);
+#endif
+    // Emscripten: present is automatic via requestAnimationFrame
 }
 
 void WebGPURHISwapchain::resize(uint32_t width, uint32_t height) {

@@ -1,11 +1,17 @@
 #include "Application.hpp"
+#ifndef __EMSCRIPTEN__
 #include "src/ui/ImGuiManager.hpp"
+#endif
 #include "src/rendering/InstancedRenderData.hpp"
 
 #include <iostream>
 #include <stdexcept>
 #include <functional>
 #include <chrono>
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 
 Application::Application() {
     initWindow();
@@ -26,7 +32,24 @@ Application::~Application() {
 }
 
 void Application::run() {
+    // Initialize frame timing
+    lastFrameTime = std::chrono::high_resolution_clock::now();
+
+#ifdef __EMSCRIPTEN__
+    // WebGPU: Use emscripten_set_main_loop for browser's requestAnimationFrame
+    emscripten_set_main_loop_arg(
+        [](void* arg) {
+            auto* app = static_cast<Application*>(arg);
+            app->mainLoopFrame();
+        },
+        this,
+        0,  // Use browser's requestAnimationFrame (typically 60 FPS)
+        1   // Simulate infinite loop
+    );
+#else
+    // Native: Traditional game loop
     mainLoop();
+#endif
 }
 
 void Application::initWindow() {
@@ -101,17 +124,30 @@ void Application::initGameLogic() {
 }
 
 void Application::mainLoop() {
-    auto lastFrameTime = std::chrono::high_resolution_clock::now();
-
+    // Native: Traditional game loop
     while (!glfwWindowShouldClose(window)) {
-        // Calculate delta time
-        auto currentFrameTime = std::chrono::high_resolution_clock::now();
-        float deltaTime = std::chrono::duration<float>(currentFrameTime - lastFrameTime).count();
-        lastFrameTime = currentFrameTime;
+        mainLoopFrame();
+    }
+    renderer->waitIdle();
+}
 
-        glfwPollEvents();
-        processInput();
-        renderer->updateCamera(camera->getViewMatrix(), camera->getProjectionMatrix(), camera->getPosition());
+void Application::mainLoopFrame() {
+#ifdef __EMSCRIPTEN__
+    // Check for window close (ESC key or close button)
+    if (glfwWindowShouldClose(window)) {
+        emscripten_cancel_main_loop();
+        return;
+    }
+#endif
+
+    // Calculate delta time
+    auto currentFrameTime = std::chrono::high_resolution_clock::now();
+    float deltaTime = std::chrono::duration<float>(currentFrameTime - lastFrameTime).count();
+    lastFrameTime = currentFrameTime;
+
+    glfwPollEvents();
+    processInput();
+    renderer->updateCamera(camera->getViewMatrix(), camera->getProjectionMatrix(), camera->getPosition());
 
         // NEW: Update Game World
         if (worldManager) {
@@ -178,6 +214,7 @@ void Application::mainLoop() {
         }
 
         // Render ImGui UI
+#ifndef __EMSCRIPTEN__
         if (auto* imgui = renderer->getImGuiManager()) {
             imgui->newFrame();
 
@@ -206,11 +243,10 @@ void Application::mainLoop() {
             renderer->setShadowBias(lighting.shadowBias);
             renderer->setShadowStrength(lighting.shadowStrength);
         }
+#endif
 
-        // Renderer handles both scene and ImGui rendering
-        renderer->drawFrame();
-    }
-    renderer->waitIdle();
+    // Renderer handles both scene and ImGui rendering
+    renderer->drawFrame();
 }
 
 void Application::processInput() {

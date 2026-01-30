@@ -145,7 +145,32 @@ bool ShadowRenderer::createShadowSampler() {
 }
 
 bool ShadowRenderer::createShaders() {
-    // Load shadow vertex shader (pre-compiled SPIR-V)
+#ifdef __EMSCRIPTEN__
+    // WebGPU/Emscripten: Load WGSL shader
+    auto wgslCodeRaw = FileUtils::readFile("shaders/shadow.wgsl");
+    if (wgslCodeRaw.empty()) {
+        std::cerr << "[ShadowRenderer] Failed to load shadow.wgsl\n";
+        return false;
+    }
+    std::vector<uint8_t> wgslCode(wgslCodeRaw.begin(), wgslCodeRaw.end());
+
+    rhi::ShaderSource vertSource(rhi::ShaderLanguage::WGSL, wgslCode, rhi::ShaderStage::Vertex, "vs_main");
+    rhi::ShaderDesc vertDesc(vertSource, "ShadowVertexShader");
+    m_vertexShader = m_device->createShader(vertDesc);
+    if (!m_vertexShader) {
+        std::cerr << "[ShadowRenderer] Failed to create vertex shader\n";
+        return false;
+    }
+
+    rhi::ShaderSource fragSource(rhi::ShaderLanguage::WGSL, wgslCode, rhi::ShaderStage::Fragment, "fs_main");
+    rhi::ShaderDesc fragDesc(fragSource, "ShadowFragmentShader");
+    m_fragmentShader = m_device->createShader(fragDesc);
+    if (!m_fragmentShader) {
+        std::cerr << "[ShadowRenderer] Failed to create fragment shader\n";
+        return false;
+    }
+#else
+    // Vulkan/Native: Load SPIR-V shaders
     auto vertCodeRaw = FileUtils::readFile("shaders/shadow.vert.spv");
     if (vertCodeRaw.empty()) {
         std::cerr << "[ShadowRenderer] Failed to load shadow.vert.spv\n";
@@ -162,7 +187,6 @@ bool ShadowRenderer::createShaders() {
         return false;
     }
 
-    // Load shadow fragment shader (empty, for depth-only pass)
     auto fragCodeRaw = FileUtils::readFile("shaders/shadow.frag.spv");
     if (fragCodeRaw.empty()) {
         std::cerr << "[ShadowRenderer] Failed to load shadow.frag.spv\n";
@@ -178,6 +202,7 @@ bool ShadowRenderer::createShaders() {
         std::cerr << "[ShadowRenderer] Failed to create fragment shader\n";
         return false;
     }
+#endif
 
     std::cout << "[ShadowRenderer] Shaders created\n";
     return true;
@@ -348,12 +373,10 @@ rhi::RHIRenderPassEncoder* ShadowRenderer::beginShadowPass(rhi::RHICommandEncode
     LightSpaceUBO ubo;
     ubo.lightSpaceMatrix = m_lightSpaceMatrix;
 
+    // Use write() for WebGPU compatibility (getMappedData returns nullptr when mappedAtCreation=false)
     auto* buffer = m_uniformBuffers[bufferIndex].get();
     if (buffer) {
-        void* mappedData = buffer->getMappedData();
-        if (mappedData) {
-            memcpy(mappedData, &ubo, sizeof(LightSpaceUBO));
-        }
+        buffer->write(&ubo, sizeof(LightSpaceUBO));
     }
 
     // Create render pass descriptor for shadow pass

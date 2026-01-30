@@ -10,6 +10,7 @@
 #include <memory>
 #include <vector>
 #include <string>
+#include <chrono>
 
 /**
  * @brief Top-level application class managing window and main loop
@@ -81,6 +82,9 @@ private:
     double lastMouseX = 0.0;
     double lastMouseY = 0.0;
 
+    // Frame timing for main loop
+    std::chrono::high_resolution_clock::time_point lastFrameTime;
+
     // Initialization
     void initWindow();
     void initRenderer();
@@ -88,6 +92,7 @@ private:
 
     // Main loop
     void mainLoop();
+    void mainLoopFrame();  // Single frame update for Emscripten compatibility
 
     // Input handling
     void processInput();

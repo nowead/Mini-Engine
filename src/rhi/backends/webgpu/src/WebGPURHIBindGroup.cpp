@@ -43,8 +43,22 @@ WebGPURHIBindGroupLayout::WebGPURHIBindGroupLayout(WebGPURHIDevice* device,
                 wgpuEntry.sampler.type = WGPUSamplerBindingType_Filtering;
                 break;
 
+            case rhi::BindingType::NonFilteringSampler:
+                wgpuEntry.sampler.type = WGPUSamplerBindingType_NonFiltering;
+                break;
+
+            case rhi::BindingType::ComparisonSampler:
+                wgpuEntry.sampler.type = WGPUSamplerBindingType_Comparison;
+                break;
+
             case rhi::BindingType::SampledTexture:
                 wgpuEntry.texture.sampleType = WGPUTextureSampleType_Float;
+                wgpuEntry.texture.viewDimension = WGPUTextureViewDimension_2D;
+                wgpuEntry.texture.multisampled = false;
+                break;
+
+            case rhi::BindingType::DepthTexture:
+                wgpuEntry.texture.sampleType = WGPUTextureSampleType_Depth;
                 wgpuEntry.texture.viewDimension = WGPUTextureViewDimension_2D;
                 wgpuEntry.texture.multisampled = false;
                 break;

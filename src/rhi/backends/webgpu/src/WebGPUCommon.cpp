@@ -97,6 +97,18 @@ rhi::TextureFormat FromWGPUFormat(WGPUTextureFormat format) {
 WGPUBufferUsageFlags ToWGPUBufferUsage(rhi::BufferUsage usage) {
     WGPUBufferUsageFlags flags = WGPUBufferUsage_None;
 
+    bool hasMapWrite = rhi::hasFlag(usage, rhi::BufferUsage::MapWrite);
+    bool hasOtherUsage = rhi::hasFlag(usage, rhi::BufferUsage::Uniform) ||
+                         rhi::hasFlag(usage, rhi::BufferUsage::Vertex) ||
+                         rhi::hasFlag(usage, rhi::BufferUsage::Index) ||
+                         rhi::hasFlag(usage, rhi::BufferUsage::Storage) ||
+                         rhi::hasFlag(usage, rhi::BufferUsage::Indirect);
+
+    // WebGPU constraint: MapWrite can only be combined with CopySrc
+    // If MapWrite is combined with other usages (Uniform, Vertex, etc.),
+    // we replace MapWrite with CopyDst (for queue.writeBuffer support)
+    bool useMapWrite = hasMapWrite && !hasOtherUsage;
+
     if (rhi::hasFlag(usage, rhi::BufferUsage::Vertex))
         flags |= WGPUBufferUsage_Vertex;
     if (rhi::hasFlag(usage, rhi::BufferUsage::Index))
@@ -113,8 +125,14 @@ WGPUBufferUsageFlags ToWGPUBufferUsage(rhi::BufferUsage usage) {
         flags |= WGPUBufferUsage_Indirect;
     if (rhi::hasFlag(usage, rhi::BufferUsage::MapRead))
         flags |= WGPUBufferUsage_MapRead;
-    if (rhi::hasFlag(usage, rhi::BufferUsage::MapWrite))
+
+    if (useMapWrite) {
         flags |= WGPUBufferUsage_MapWrite;
+    } else if (hasMapWrite) {
+        // MapWrite was requested but can't be used with other usages
+        // Add CopyDst to allow queue.writeBuffer instead
+        flags |= WGPUBufferUsage_CopyDst;
+    }
 
     return flags;
 }

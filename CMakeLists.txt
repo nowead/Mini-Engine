@@ -47,6 +47,26 @@ else()
     set(GLM_BUILD_TESTS OFF CACHE BOOL "" FORCE)
     set(GLM_BUILD_INSTALL OFF CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(glm)
+
+    # stb for image loading (WASM)
+    FetchContent_Declare(
+        stb
+        GIT_REPOSITORY https://github.com/nothings/stb.git
+        GIT_TAG master
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(stb)
+    add_library(stb_image INTERFACE)
+    target_include_directories(stb_image INTERFACE ${stb_SOURCE_DIR})
+
+    # tinyobjloader for OBJ loading (WASM)
+    FetchContent_Declare(
+        tinyobjloader
+        GIT_REPOSITORY https://github.com/tinyobjloader/tinyobjloader.git
+        GIT_TAG v2.0.0rc13
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(tinyobjloader)
 endif()
 
 # =============================================================================
@@ -297,6 +317,118 @@ if(NOT EMSCRIPTEN)
     )
     
     add_dependencies(MiniEngine building_shaders)
+else()
+    # =============================================================================
+    # MiniEngine WASM Build (Emscripten/WebGPU)
+    # =============================================================================
+    add_executable(MiniEngine
+        src/main.cpp
+        src/Application.cpp
+        src/Application.hpp
+        src/resources/ResourceManager.cpp
+        src/resources/ResourceManager.hpp
+        src/rendering/Renderer.cpp
+        src/rendering/Renderer.hpp
+        src/rendering/RendererBridge.hpp
+        src/rendering/RendererBridge.cpp
+        src/rendering/BatchRenderer.cpp
+        src/rendering/BatchRenderer.hpp
+        src/scene/Mesh.cpp
+        src/scene/Mesh.hpp
+        src/scene/SceneManager.cpp
+        src/scene/SceneManager.hpp
+        src/scene/Camera.cpp
+        src/scene/Camera.hpp
+        src/scene/SceneNode.cpp
+        src/scene/SceneNode.hpp
+        src/scene/SceneGraph.cpp
+        src/scene/SceneGraph.hpp
+        src/scene/SectorNode.cpp
+        src/scene/SectorNode.hpp
+        src/scene/AABB.hpp
+        src/scene/Quadtree.cpp
+        src/scene/Quadtree.hpp
+        src/scene/Frustum.hpp
+        src/loaders/OBJLoader.cpp
+        src/loaders/OBJLoader.hpp
+        # Note: ImGui excluded from WASM build (WebGPU backend not yet implemented)
+        src/utils/Vertex.hpp
+        src/utils/FileUtils.hpp
+        # Game Logic Layer
+        src/game/entities/BuildingEntity.cpp
+        src/game/entities/BuildingEntity.hpp
+        src/game/managers/BuildingManager.cpp
+        src/game/managers/BuildingManager.hpp
+        src/game/managers/WorldManager.cpp
+        src/game/managers/WorldManager.hpp
+        src/game/world/Sector.hpp
+        src/game/sync/PriceUpdate.hpp
+        src/game/sync/MockDataGenerator.hpp
+        src/game/utils/AnimationUtils.hpp
+        src/game/utils/HeightCalculator.hpp
+        # Effects Layer
+        src/effects/Particle.hpp
+        src/effects/ParticleSystem.cpp
+        src/effects/ParticleSystem.hpp
+        src/effects/ParticleRenderer.cpp
+        src/effects/ParticleRenderer.hpp
+        # Phase 3.3: Skybox
+        src/rendering/SkyboxRenderer.cpp
+        src/rendering/SkyboxRenderer.hpp
+        # Phase 3.3: Shadow Mapping
+        src/rendering/ShadowRenderer.cpp
+        src/rendering/ShadowRenderer.hpp
+    )
+
+    target_include_directories(MiniEngine BEFORE PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+
+    target_link_libraries(MiniEngine PRIVATE
+        glm::glm
+        rhi::factory
+        stb_image
+        tinyobjloader
+    )
+
+    target_compile_definitions(MiniEngine PRIVATE
+        $<$<BOOL:${RHI_BACKEND_WEBGPU}>:RHI_BACKEND_WEBGPU=1>
+    )
+
+    set_target_properties(MiniEngine PROPERTIES SUFFIX ".html")
+
+    # Copy WGSL shaders for WebGPU
+    set(MINIENGINE_SHADER_DIR ${CMAKE_CURRENT_BINARY_DIR}/shaders)
+    file(MAKE_DIRECTORY ${MINIENGINE_SHADER_DIR})
+
+    add_custom_command(
+        TARGET MiniEngine PRE_LINK
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${MINIENGINE_SHADER_DIR}
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/building.wgsl
+            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shadow.wgsl
+            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/skybox.wgsl
+            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/particle.wgsl
+            ${MINIENGINE_SHADER_DIR}/
+        COMMENT "Copying WGSL shaders for MiniEngine WASM"
+    )
+
+    target_link_options(MiniEngine PRIVATE
+        "SHELL:-s USE_WEBGPU=1"
+        "SHELL:-s USE_GLFW=3"
+        "SHELL:-s ALLOW_MEMORY_GROWTH=1"
+        "SHELL:-s WASM=1"
+        "SHELL:-s INITIAL_MEMORY=134217728"
+        "SHELL:-s MAXIMUM_MEMORY=4294967296"
+        "SHELL:-s STACK_SIZE=16777216"
+        "SHELL:-s ASYNCIFY=1"
+        "SHELL:-s ASSERTIONS=2"
+        "SHELL:-s ERROR_ON_UNDEFINED_SYMBOLS=0"
+        "SHELL:-g2"
+        "SHELL:--preload-file ${CMAKE_CURRENT_BINARY_DIR}/shaders@/shaders"
+        "SHELL:--shell-file ${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm_shell.html"
+    )
+    target_compile_options(MiniEngine PRIVATE -g2)
 endif()
 
 # =============================================================================

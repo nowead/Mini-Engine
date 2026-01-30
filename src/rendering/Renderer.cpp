@@ -1,14 +1,19 @@
 #include "Renderer.hpp"
+#ifndef __EMSCRIPTEN__
 #include "src/ui/ImGuiManager.hpp"
+#endif
 #include "InstancedRenderData.hpp"
 #include "src/utils/Logger.hpp"
+#include "src/utils/FileUtils.hpp"
 
 // Phase 9: Vulkan-specific includes for platform-specific functionality
 // TODO Phase 10: Consider adding getRenderPass() to RHI interface to remove this last dependency
+#ifndef __EMSCRIPTEN__
 #include <rhi/vulkan/VulkanRHISwapchain.hpp>
 #include <rhi/vulkan/VulkanRHICommandEncoder.hpp>
 #include <rhi/vulkan/VulkanRHITexture.hpp>
 #include <rhi/vulkan/VulkanRHIBuffer.hpp>
+#endif
 
 #include <stdexcept>
 
@@ -132,12 +137,15 @@ void Renderer::recreateSwapchain() {
     createRHIPipeline();  // Pipeline needs recreation with new render pass
 
     // Notify ImGui of resize
+#ifndef __EMSCRIPTEN__
     if (imguiManager) {
         imguiManager->handleResize();
     }
+#endif
 }
 
 void Renderer::initImGui(GLFWwindow* window) {
+#ifndef __EMSCRIPTEN__
     // Phase 6: Create ImGui manager using RHI types
     auto* rhiDevice = rhiBridge->getDevice();
     auto* rhiSwapchain = rhiBridge->getSwapchain();
@@ -145,6 +153,9 @@ void Renderer::initImGui(GLFWwindow* window) {
     if (rhiDevice && rhiSwapchain) {
         imguiManager = std::make_unique<ImGuiManager>(window, rhiDevice, rhiSwapchain);
     }
+#else
+    (void)window;  // Suppress unused parameter warning
+#endif
 }
 
 // ============================================================================
@@ -192,7 +203,7 @@ void Renderer::createRHIUniformBuffers() {
         rhi::BufferDesc bufferDesc;
         bufferDesc.size = sizeof(UniformBufferObject);  // model + view + proj
         bufferDesc.usage = rhi::BufferUsage::Uniform | rhi::BufferUsage::MapWrite;
-        bufferDesc.mappedAtCreation = true;
+        bufferDesc.mappedAtCreation = false;  // Use write() for updates, not mapping
         bufferDesc.label = "RHI Uniform Buffer";
 
         rhiUniformBuffers.push_back(rhiDevice->createBuffer(bufferDesc));
@@ -490,7 +501,24 @@ void Renderer::createBuildingPipeline() {
         rhiBridge->createSwapchain(static_cast<uint32_t>(width), static_cast<uint32_t>(height), true);
     }
 
-    // Create building shaders from SPIR-V files
+    // Create building shaders
+#ifdef __EMSCRIPTEN__
+    // WebGPU/Emscripten: Load WGSL shader
+    auto wgslCodeRaw = FileUtils::readFile("shaders/building.wgsl");
+    if (!wgslCodeRaw.empty()) {
+        std::vector<uint8_t> wgslCode(wgslCodeRaw.begin(), wgslCodeRaw.end());
+
+        rhi::ShaderSource vertSource(rhi::ShaderLanguage::WGSL, wgslCode, rhi::ShaderStage::Vertex, "vs_main");
+        rhi::ShaderDesc vertDesc(vertSource, "BuildingVertexShader");
+        buildingVertexShader = rhiBridge->getDevice()->createShader(vertDesc);
+
+        rhi::ShaderSource fragSource(rhi::ShaderLanguage::WGSL, wgslCode, rhi::ShaderStage::Fragment, "fs_main");
+        rhi::ShaderDesc fragDesc(fragSource, "BuildingFragmentShader");
+        buildingFragmentShader = rhiBridge->getDevice()->createShader(fragDesc);
+    }
+    LOG_DEBUG("Renderer") << "Using building shaders (WGSL)";
+#else
+    // Vulkan/Native: Load SPIR-V shaders
     buildingVertexShader = rhiBridge->createShaderFromFile(
         "shaders/building.vert.spv",
         rhi::ShaderStage::Vertex,
@@ -502,8 +530,8 @@ void Renderer::createBuildingPipeline() {
         rhi::ShaderStage::Fragment,
         "main"
     );
-
-    LOG_DEBUG("Renderer") << "Using building shaders (simplified instancing format)";
+    LOG_DEBUG("Renderer") << "Using building shaders (SPIR-V)";
+#endif
 
     if (!buildingVertexShader || !buildingFragmentShader) {
         LOG_ERROR("Renderer") << "Failed to create building shaders";
@@ -520,18 +548,18 @@ void Renderer::createBuildingPipeline() {
     uboEntry.type = rhi::BindingType::UniformBuffer;
     buildingLayoutDesc.entries.push_back(uboEntry);
 
-    // Binding 1: Shadow map texture (fragment only)
+    // Binding 1: Shadow map texture (fragment only) - depth texture for shadow mapping
     rhi::BindGroupLayoutEntry shadowTexEntry;
     shadowTexEntry.binding = 1;
     shadowTexEntry.visibility = rhi::ShaderStage::Fragment;
-    shadowTexEntry.type = rhi::BindingType::SampledTexture;
+    shadowTexEntry.type = rhi::BindingType::DepthTexture;
     buildingLayoutDesc.entries.push_back(shadowTexEntry);
 
-    // Binding 2: Shadow sampler (fragment only)
+    // Binding 2: Shadow sampler (fragment only) - non-filtering for depth texture
     rhi::BindGroupLayoutEntry shadowSamplerEntry;
     shadowSamplerEntry.binding = 2;
     shadowSamplerEntry.visibility = rhi::ShaderStage::Fragment;
-    shadowSamplerEntry.type = rhi::BindingType::Sampler;
+    shadowSamplerEntry.type = rhi::BindingType::NonFilteringSampler;
     buildingLayoutDesc.entries.push_back(shadowSamplerEntry);
 
     buildingLayoutDesc.label = "Building Bind Group Layout";
@@ -862,6 +890,7 @@ void Renderer::drawFrame() {
         auto* instanceBuffer = pendingInstancedData->instanceBuffer;
 
         if (mesh && mesh->hasData() && instanceBuffer) {
+#ifndef __EMSCRIPTEN__
             // Add memory barrier to ensure host writes to instance buffer are visible to GPU
             // This is critical for shadow pass to see updated building heights
             auto* vulkanEncoder = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
@@ -885,7 +914,6 @@ void Renderer::drawFrame() {
                 );
             }
 
-#ifndef __linux__
             // macOS/Windows: Transition shadow map to depth attachment for writing
             // Use eUndefined as old layout to handle both first frame and subsequent frames
             auto* shadowTexture = dynamic_cast<RHI::Vulkan::VulkanRHITexture*>(shadowRenderer->getShadowMapTexture());
@@ -914,7 +942,7 @@ void Renderer::drawFrame() {
                     }
                 );
             }
-#endif
+#endif  // !__EMSCRIPTEN__
             
             auto* shadowPass = shadowRenderer->beginShadowPass(encoder.get(), frameIndex);
             if (shadowPass) {
@@ -941,7 +969,7 @@ void Renderer::drawFrame() {
 
                 shadowRenderer->endShadowPass();
 
-#ifndef __linux__
+#ifndef __EMSCRIPTEN__
                 // macOS/Windows: Transition shadow map from depth attachment to shader read
                 // Linux render pass handles this automatically via finalLayout
                 auto* vulkanEncoder = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
@@ -982,7 +1010,7 @@ void Renderer::drawFrame() {
         return;
     }
 
-#ifndef __linux__
+#ifndef __EMSCRIPTEN__
     // Phase 9: Transition swapchain image from UNDEFINED to COLOR_ATTACHMENT_OPTIMAL
     // before starting the render pass (only needed for dynamic rendering on macOS/Windows)
     // Linux uses traditional render pass which handles layout transitions automatically
@@ -1075,6 +1103,9 @@ void Renderer::drawFrame() {
             auto currentTime = std::chrono::high_resolution_clock::now();
             float time = std::chrono::duration<float>(currentTime - startTime).count();
 
+            // Update skybox with current sun direction (for sun disk rendering)
+            skyboxRenderer->setSunDirection(sunDirection);
+
             skyboxRenderer->render(renderPass.get(), frameIndex, invViewProj, time);
         }
 
@@ -1148,15 +1179,17 @@ void Renderer::drawFrame() {
         }
 
         // Phase 7: Render ImGui UI (if initialized)
+#ifndef __EMSCRIPTEN__
         if (imguiManager) {
             uint32_t imageIndex = rhiBridge->getCurrentImageIndex();
             imguiManager->render(encoder.get(), imageIndex);
         }
+#endif
 
         renderPass->end();
     }
 
-#ifndef __linux__
+#ifndef __EMSCRIPTEN__
     // Phase 9: Transition swapchain image from COLOR_ATTACHMENT_OPTIMAL to PRESENT_SRC
     // This must be done before finishing the command buffer
     // Only needed for dynamic rendering on macOS/Windows

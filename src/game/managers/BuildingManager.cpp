@@ -443,7 +443,7 @@ void BuildingManager::updateInstanceBuffer() {
     bufferDesc.size = sizeof(InstanceData) * newCapacity;
     // Use MapWrite for direct CPU access (faster updates)
     bufferDesc.usage = rhi::BufferUsage::Vertex | rhi::BufferUsage::MapWrite;
-    bufferDesc.mappedAtCreation = true;  // Keep mapped for fast updates
+    bufferDesc.mappedAtCreation = false;  // Use write() for updates (WebGPU compatible)
     bufferDesc.label = "Building Instance Buffer";
 
     instanceBuffers[currentBufferIndex] = rhiDevice->createBuffer(bufferDesc);
