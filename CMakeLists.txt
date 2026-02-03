@@ -22,6 +22,12 @@ option(BUILD_TESTS "Build test executables" ON)
 if(EMSCRIPTEN)
     set(RHI_BACKEND_WEBGPU ON CACHE BOOL "" FORCE)
     set(RHI_BACKEND_VULKAN OFF CACHE BOOL "" FORCE)
+
+    # Global WASM optimization flags (prevents wasm-ld "section too large" error)
+    # Applied before FetchContent to affect all dependencies
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ffunction-sections -fdata-sections")
+    set(CMAKE_CXX_FLAGS_RELEASE "-Oz -g0 -DNDEBUG -ffunction-sections -fdata-sections")
+    set(CMAKE_CXX_FLAGS_DEBUG "-O1 -g1 -ffunction-sections -fdata-sections")
 endif()
 
 # =============================================================================
@@ -422,13 +428,14 @@ else()
         "SHELL:-s MAXIMUM_MEMORY=4294967296"
         "SHELL:-s STACK_SIZE=16777216"
         "SHELL:-s ASYNCIFY=1"
-        "SHELL:-s ASSERTIONS=2"
+        "SHELL:-s ASYNCIFY_STACK_SIZE=16384"
+        "SHELL:-s ASSERTIONS=1"
         "SHELL:-s ERROR_ON_UNDEFINED_SYMBOLS=0"
-        "SHELL:-g2"
+        "SHELL:-O2"
         "SHELL:--preload-file ${CMAKE_CURRENT_BINARY_DIR}/shaders@/shaders"
         "SHELL:--shell-file ${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm_shell.html"
     )
-    target_compile_options(MiniEngine PRIVATE -g2)
+    target_compile_options(MiniEngine PRIVATE -O2 -g0 -ffunction-sections -fdata-sections)
 endif()
 
 # =============================================================================
@@ -465,10 +472,9 @@ if(BUILD_TESTS)
                 "SHELL:-s STACK_SIZE=16777216"
                 "SHELL:-Oz"
                 "SHELL:-s ERROR_ON_UNDEFINED_SYMBOLS=0"
-                "SHELL:-flto"
                 "SHELL:--shell-file ${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm_shell.html"
             )
-            target_compile_options(${TARGET} PRIVATE -Oz -g0 -flto)
+            target_compile_options(${TARGET} PRIVATE -Oz -g0 -ffunction-sections -fdata-sections)
         endif()
     endfunction()
 
@@ -547,15 +553,15 @@ if(BUILD_TESTS)
             COMMENT "Copying WGSL shaders"
         )
 
-        # Debug build settings for instancing test
+        # Build settings for instancing test
         target_link_options(instancing_test PRIVATE
             "SHELL:-s ASYNCIFY=1"
-            "SHELL:-s ASSERTIONS=2"
-            "SHELL:-s SAFE_HEAP=1"
-            "SHELL:-g2"
+            "SHELL:-s ASYNCIFY_STACK_SIZE=16384"
+            "SHELL:-s ASSERTIONS=1"
+            "SHELL:-O2"
             "SHELL:--preload-file ${CMAKE_CURRENT_BINARY_DIR}/shaders@/shaders"
         )
-        target_compile_options(instancing_test PRIVATE -g2)
+        target_compile_options(instancing_test PRIVATE -O2 -g0 -ffunction-sections -fdata-sections)
     endif()
 
     message(STATUS "Demo executables enabled: rhi_smoke_test, instancing_test")

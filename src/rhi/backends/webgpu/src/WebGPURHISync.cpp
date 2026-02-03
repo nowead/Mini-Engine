@@ -49,7 +49,12 @@ bool WebGPURHIFence::wait(uint64_t timeout) {
 
     // Use wgpuQueueOnSubmittedWorkDone for synchronization
     QueueWorkDoneData callbackData;
+    // Note: WebGPU API changed between Emscripten versions
+#if defined(__EMSCRIPTEN__) && (__EMSCRIPTEN_major__ < 3 || (__EMSCRIPTEN_major__ == 3 && __EMSCRIPTEN_minor__ < 1) || (__EMSCRIPTEN_major__ == 3 && __EMSCRIPTEN_minor__ == 1 && __EMSCRIPTEN_tiny__ < 60))
+    wgpuQueueOnSubmittedWorkDone(m_lastQueue, 0, onQueueWorkDone, &callbackData);
+#else
     wgpuQueueOnSubmittedWorkDone(m_lastQueue, onQueueWorkDone, &callbackData);
+#endif
 
     // Wait for completion
 #ifdef __EMSCRIPTEN__

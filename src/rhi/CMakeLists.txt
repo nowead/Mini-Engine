@@ -60,3 +60,8 @@ if(RHI_BACKEND_WEBGPU)
 endif()
 
 target_compile_features(rhi_factory PUBLIC cxx_std_20)
+
+# Optimize for size in WASM builds (prevents "section too large" error)
+if(EMSCRIPTEN)
+    target_compile_options(rhi_factory PRIVATE -Oz -g0 -ffunction-sections -fdata-sections)
+endif()

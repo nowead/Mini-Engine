@@ -45,7 +45,8 @@ else()
     target_compile_options(rhi_webgpu PRIVATE
         -Oz
         -g0
-        -flto
+        -ffunction-sections
+        -fdata-sections
     )
 endif()
 

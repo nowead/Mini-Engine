@@ -228,7 +228,12 @@ void WebGPURHIDevice::requestDevice() {
     deviceDesc.defaultQueue.label = "Default Queue";
 
     // Request features (none for now)
+    // Note: WebGPU API changed field name between Emscripten versions
+#if defined(__EMSCRIPTEN__) && (__EMSCRIPTEN_major__ < 3 || (__EMSCRIPTEN_major__ == 3 && __EMSCRIPTEN_minor__ < 1) || (__EMSCRIPTEN_major__ == 3 && __EMSCRIPTEN_minor__ == 1 && __EMSCRIPTEN_tiny__ < 60))
+    deviceDesc.requiredFeaturesCount = 0;
+#else
     deviceDesc.requiredFeatureCount = 0;
+#endif
     deviceDesc.requiredFeatures = nullptr;
 
     DeviceRequestData callbackData;

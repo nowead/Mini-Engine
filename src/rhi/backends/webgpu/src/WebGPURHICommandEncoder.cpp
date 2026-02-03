@@ -237,7 +237,10 @@ std::unique_ptr<RHIRenderPassEncoder> WebGPURHICommandEncoder::beginRenderPass(c
         wgpuAttachment.clearValue.a = attachment.clearValue.float32[3];
 
         // Depth slice - must be WGPU_DEPTH_SLICE_UNDEFINED for non-3D textures
+        // Note: depthSlice field added in newer WebGPU API versions
+#if !defined(__EMSCRIPTEN__) || (__EMSCRIPTEN_major__ > 3 || (__EMSCRIPTEN_major__ == 3 && __EMSCRIPTEN_minor__ > 1) || (__EMSCRIPTEN_major__ == 3 && __EMSCRIPTEN_minor__ == 1 && __EMSCRIPTEN_tiny__ >= 60))
         wgpuAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+#endif
 
         colorAttachments.push_back(wgpuAttachment);
     }
