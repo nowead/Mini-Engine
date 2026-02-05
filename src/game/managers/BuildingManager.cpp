@@ -404,9 +404,11 @@ void BuildingManager::updateInstanceBuffer() {
     // Add ground plane first (large flat plane at y=0)
     InstanceData groundData;
     groundData.position = glm::vec3(0.0f, -0.05f, 0.0f);  // Slightly below origin
-    groundData.color = glm::vec3(0.3f, 0.35f, 0.3f);      // Dark gray-green
+    groundData.color = glm::vec3(0.55f, 0.58f, 0.52f);     // Neutral gray-green (sRGB)
     groundData.scale = glm::vec3(300.0f, 0.1f, 300.0f);   // Extra large for shadow debugging
-    groundData._padding = 0.0f;
+    groundData.metallic = 0.0f;
+    groundData.roughness = 0.9f;
+    groundData.ao = 1.0f;
     instanceData.push_back(groundData);
 
     // Add all buildings
@@ -417,7 +419,9 @@ void BuildingManager::updateInstanceBuffer() {
         data.color = glm::vec3(colorVec4.r, colorVec4.g, colorVec4.b);  // Convert vec4 to vec3
         // Use vec3 scale: X/Z from baseScale, Y from height
         data.scale = glm::vec3(building.baseScale.x, building.currentHeight, building.baseScale.z);
-        data._padding = 0.0f;
+        data.metallic = 0.3f;
+        data.roughness = 0.4f;
+        data.ao = 1.0f;
 
         // DEBUG: Log center building height
         if (building.ticker == "BUILDING_1_1") {

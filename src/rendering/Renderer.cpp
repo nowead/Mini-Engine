@@ -307,7 +307,7 @@ void Renderer::createRHIPipeline() {
     vertexLayout.inputRate = rhi::VertexInputRate::Vertex;
     vertexLayout.attributes = {
         rhi::VertexAttribute(0, 0, rhi::TextureFormat::RGB32Float, offsetof(Vertex, pos)),    // position
-        rhi::VertexAttribute(1, 0, rhi::TextureFormat::RGB32Float, offsetof(Vertex, color)),  // color
+        rhi::VertexAttribute(1, 0, rhi::TextureFormat::RGB32Float, offsetof(Vertex, normal)),  // normal
         rhi::VertexAttribute(2, 0, rhi::TextureFormat::RG32Float, offsetof(Vertex, texCoord)) // texCoord
     };
 
@@ -595,19 +595,21 @@ void Renderer::createBuildingPipeline() {
     vertexLayout.inputRate = rhi::VertexInputRate::Vertex;
     vertexLayout.attributes = {
         rhi::VertexAttribute(0, 0, rhi::TextureFormat::RGB32Float, offsetof(Vertex, pos)),    // inPosition
-        rhi::VertexAttribute(1, 0, rhi::TextureFormat::RGB32Float, offsetof(Vertex, color)),  // inNormal (reuse color slot)
+        rhi::VertexAttribute(1, 0, rhi::TextureFormat::RGB32Float, offsetof(Vertex, normal)),  // inNormal
         rhi::VertexAttribute(2, 0, rhi::TextureFormat::RG32Float, offsetof(Vertex, texCoord)) // inTexCoord
     };
 
     // Setup instance state - per-instance attributes (binding 1)
-    // Use vec3 scale for independent X/Z base size and Y height
     rhi::VertexBufferLayout instanceLayout;
-    instanceLayout.stride = 40;  // vec3(12) + vec3(12) + vec3(12) + padding(4) = 40 bytes
+    instanceLayout.stride = 48;  // vec3(12) + vec3(12) + vec3(12) + float(4) + float(4) + float(4) = 48 bytes
     instanceLayout.inputRate = rhi::VertexInputRate::Instance;
     instanceLayout.attributes = {
         rhi::VertexAttribute(3, 1, rhi::TextureFormat::RGB32Float, 0),   // instancePosition (vec3, offset 0)
-        rhi::VertexAttribute(4, 1, rhi::TextureFormat::RGB32Float, 12),  // instanceColor (vec3, offset 12)
-        rhi::VertexAttribute(5, 1, rhi::TextureFormat::RGB32Float, 24)   // instanceScale (vec3, offset 24)
+        rhi::VertexAttribute(4, 1, rhi::TextureFormat::RGB32Float, 12),  // instanceColor/albedo (vec3, offset 12)
+        rhi::VertexAttribute(5, 1, rhi::TextureFormat::RGB32Float, 24),  // instanceScale (vec3, offset 24)
+        rhi::VertexAttribute(6, 1, rhi::TextureFormat::R32Float, 36),    // instanceMetallic (float, offset 36)
+        rhi::VertexAttribute(7, 1, rhi::TextureFormat::R32Float, 40),    // instanceRoughness (float, offset 40)
+        rhi::VertexAttribute(8, 1, rhi::TextureFormat::R32Float, 44)     // instanceAO (float, offset 44)
     };
 
     // Create render pipeline descriptor
@@ -815,6 +817,7 @@ void Renderer::updateRHIUniformBuffer(uint32_t currentImage) {
     ubo.sunColor = sunColor;
     ubo.ambientIntensity = ambientIntensity;
     ubo.cameraPos = cameraPosition;
+    ubo.exposure = exposure;
 
     // Phase 3.3: Shadow mapping parameters
     if (shadowRenderer && shadowRenderer->isInitialized()) {

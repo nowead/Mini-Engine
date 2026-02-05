@@ -65,6 +65,8 @@ public:
         // Shadow settings
         float shadowBias = 0.008f;      // Depth bias to prevent shadow acne
         float shadowStrength = 0.7f;    // Shadow darkness (0-1)
+        // PBR tone mapping
+        float exposure = 1.0f;          // Tone mapping exposure (0.1-5.0)
     };
 
     LightingSettings& getLightingSettings() { return m_lightingSettings; }

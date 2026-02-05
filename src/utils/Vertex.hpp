@@ -6,18 +6,18 @@
 
 struct Vertex {
 	glm::vec3 pos;
-	glm::vec3 color;
+	glm::vec3 normal;
 	glm::vec2 texCoord;
 
 	bool operator==(const Vertex& other) const {
-		return pos == other.pos && color == other.color && texCoord == other.texCoord;
+		return pos == other.pos && normal == other.normal && texCoord == other.texCoord;
 	}
 };
 
 // Hash specialization for Vertex (must be in std namespace)
 template<> struct std::hash<Vertex> {
 	size_t operator()(Vertex const& vertex) const noexcept {
-		return ((hash<glm::vec3>()(vertex.pos) ^ (hash<glm::vec3>()(vertex.color) << 1)) >> 1) ^ (hash<glm::vec2>()(vertex.texCoord) << 1);
+		return ((hash<glm::vec3>()(vertex.pos) ^ (hash<glm::vec3>()(vertex.normal) << 1)) >> 1) ^ (hash<glm::vec2>()(vertex.texCoord) << 1);
 	}
 };
 
@@ -31,7 +31,7 @@ struct UniformBufferObject {
 	alignas(16) glm::vec3 sunColor;        // Sun light color (default: warm white)
 	float ambientIntensity;                 // Ambient light intensity (default: 0.2)
 	alignas(16) glm::vec3 cameraPos;       // Camera position for specular
-	float _padding;
+	float exposure;                         // Tone mapping exposure (default: 1.0)
 	// Shadow mapping parameters
 	alignas(16) glm::mat4 lightSpaceMatrix; // Light view-projection matrix
 	alignas(16) glm::vec2 shadowMapSize;    // Shadow map dimensions (2048x2048)

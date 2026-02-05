@@ -2,28 +2,33 @@
 
 **Goal**: Elevate the engine from toy-project level to a tech demo with **PBR visuals** and **GPU-Driven optimization**, proving production-ready engine development capability.
 
+**Progress**: Phase 1.1 Complete (2026-02-05)
+
 ---
 
 ## Week 1: Rendering Pipeline Modernization (PBR & IBL)
 
 **Core Objective**: Remove legacy Phong shading and build a Physically Based Rendering (PBR) pipeline.
 
-### 1.1 Fragment Shader: Cook-Torrance BRDF
+### 1.1 Fragment Shader: Cook-Torrance BRDF -- COMPLETE
 
-**Target File**: `shaders/building.frag.glsl` (full replacement of existing logic)
+**Target File**: `shaders/building.frag.glsl`, `shaders/building.wgsl` (full replacement of existing logic)
 
 **Tasks**:
 
-- [ ] **Input Restructuring**: Remove `vec3 color` and replace with Albedo, Normal, Metallic, Roughness, AO texture sampling structure.
-- [ ] **Direct Lighting Implementation**:
+- [x] **Input Restructuring**: Renamed `Vertex.color` to `Vertex.normal`. Extended per-instance data (48 bytes) with metallic, roughness, AO parameters. Updated vertex shaders (GLSL + WGSL) with new pass-through attributes.
+- [x] **Direct Lighting Implementation**:
   - Distribution (D): Trowbridge-Reitz GGX
   - Geometry (G): Smith's Schlick-GGX
   - Fresnel (F): Fresnel-Schlick approximation
-- [ ] **Color Space**: Apply sRGB to Linear conversion on texture input, Linear to sRGB conversion + Tone Mapping (ACES recommended) on final output.
+- [x] **Color Space**: sRGB-to-linear conversion on albedo input (`pow(2.2)`). ACES Filmic tone mapping with configurable exposure. Vulkan: hardware sRGB via `BGRA8UnormSrgb`. WebGPU: manual gamma correction in WGSL shader.
+- [x] **Pipeline Updates**: Instance buffer stride 40 -> 48 bytes in both Renderer and ShadowRenderer. Added exposure to UBO and ImGui control with lighting presets.
 
-### 1.2 IBL (Image Based Lighting) Integration
+### 1.2 IBL (Image Based Lighting) Integration -- PENDING
 
 **Target Files**: `src/rendering/SkyboxRenderer.cpp`, `src/rendering/Renderer.cpp`
+
+**Prerequisite**: RHI cubemap support (`TextureDesc.arrayLayerCount` + `isCubemap` flag)
 
 **Tasks**:
 
@@ -121,3 +126,4 @@
 ---
 
 *Created: 2026-02-05*
+*Last Updated: 2026-02-05*

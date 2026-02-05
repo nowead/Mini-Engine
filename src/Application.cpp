@@ -242,6 +242,7 @@ void Application::mainLoopFrame() {
             renderer->setAmbientIntensity(lighting.ambientIntensity);
             renderer->setShadowBias(lighting.shadowBias);
             renderer->setShadowStrength(lighting.shadowStrength);
+            renderer->setExposure(lighting.exposure);
         }
 #endif
 

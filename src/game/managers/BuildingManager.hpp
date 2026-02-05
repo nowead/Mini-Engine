@@ -182,9 +182,12 @@ public:
      */
     struct InstanceData {
         glm::vec3 position;       // 12 bytes (offset 0)
-        glm::vec3 color;          // 12 bytes (offset 12)
+        glm::vec3 color;          // 12 bytes (offset 12) - albedo color
         glm::vec3 scale;          // 12 bytes (offset 24) - X/Z for base, Y for height
-        float _padding;           // 4 bytes (total: 40 bytes, aligned to 16)
+        float metallic;           // 4 bytes  (offset 36) - PBR metallic (0=dielectric, 1=metal)
+        float roughness;          // 4 bytes  (offset 40) - PBR roughness (0=smooth, 1=rough)
+        float ao;                 // 4 bytes  (offset 44) - ambient occlusion
+        // Total: 48 bytes, aligned to 16
     };
 
     /**

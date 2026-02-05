@@ -158,6 +158,10 @@ public:
     void setShadowStrength(float strength) { shadowStrength = strength; }
     float getShadowStrength() const { return shadowStrength; }
 
+    // PBR tone mapping
+    void setExposure(float exp) { exposure = exp; }
+    float getExposure() const { return exposure; }
+
 private:
     // Window reference
     GLFWwindow* window;
@@ -232,6 +236,7 @@ private:
     std::unique_ptr<rendering::ShadowRenderer> shadowRenderer;
     float shadowBias = 0.008f;  // Constant bias to prevent shadow acne (uniform across all surfaces)
     float shadowStrength = 0.7f;  // Shadow darkness
+    float exposure = 1.0f;  // PBR tone mapping exposure
 
     // RHI initialization methods (Phase 4)
     void createRHIDepthResources();

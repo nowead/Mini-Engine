@@ -1,59 +1,108 @@
 #version 450
 
+const float PI = 3.14159265359;
+
 // Inputs from vertex shader
 layout(location = 0) in vec3 fragColor;
 layout(location = 1) in vec3 fragNormal;
 layout(location = 2) in vec3 fragWorldPos;
 layout(location = 3) in vec4 fragPosLightSpace;
+layout(location = 4) in float fragMetallic;
+layout(location = 5) in float fragRoughness;
+layout(location = 6) in float fragAO;
 
-// Uniform buffer (lighting + shadow parameters)
+// Uniform buffer
 layout(binding = 0) uniform UniformBufferObject {
     mat4 model;
     mat4 view;
     mat4 proj;
-    vec3 sunDirection;      // Normalized direction TO the sun
-    float sunIntensity;     // Sun light intensity
-    vec3 sunColor;          // Sun light color
-    float ambientIntensity; // Ambient light intensity
-    vec3 cameraPos;         // Camera position for specular
-    float _padding;
+    vec3 sunDirection;
+    float sunIntensity;
+    vec3 sunColor;
+    float ambientIntensity;
+    vec3 cameraPos;
+    float exposure;
     // Shadow mapping
-    mat4 lightSpaceMatrix;  // Light view-projection matrix
-    vec2 shadowMapSize;     // Shadow map dimensions
-    float shadowBias;       // Depth bias
-    float shadowStrength;   // Shadow darkness (0-1)
+    mat4 lightSpaceMatrix;
+    vec2 shadowMapSize;
+    float shadowBias;
+    float shadowStrength;
 } ubo;
 
-// Shadow map (separate texture and sampler for Vulkan compatibility)
+// Shadow map
 layout(binding = 1) uniform texture2D shadowMapTex;
 layout(binding = 2) uniform sampler shadowMapSampler;
 
 // Output
 layout(location = 0) out vec4 outColor;
 
-// Calculate shadow using PCF (Percentage Closer Filtering)
-float calculateShadow(vec4 posLightSpace, vec3 normal, vec3 lightDir) {
-    // Perspective divide
-    vec3 projCoords = posLightSpace.xyz / posLightSpace.w;
+// =============================================================================
+// PBR Functions
+// =============================================================================
 
-    // Transform X/Y to [0,1] range for texture sampling
-    // Z is already in [0,1] from Vulkan-compatible projection matrix
+// Normal Distribution Function: Trowbridge-Reitz GGX
+float distributionGGX(vec3 N, vec3 H, float roughness) {
+    float a = roughness * roughness;
+    float a2 = a * a;
+    float NdotH = max(dot(N, H), 0.0);
+    float NdotH2 = NdotH * NdotH;
+
+    float denom = (NdotH2 * (a2 - 1.0) + 1.0);
+    denom = PI * denom * denom;
+
+    return a2 / denom;
+}
+
+// Geometry Function: Schlick-GGX
+float geometrySchlickGGX(float NdotV, float roughness) {
+    float r = (roughness + 1.0);
+    float k = (r * r) / 8.0;
+
+    return NdotV / (NdotV * (1.0 - k) + k);
+}
+
+// Geometry Function: Smith's method (combination of view and light)
+float geometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
+    float NdotV = max(dot(N, V), 0.0);
+    float NdotL = max(dot(N, L), 0.0);
+    float ggx2 = geometrySchlickGGX(NdotV, roughness);
+    float ggx1 = geometrySchlickGGX(NdotL, roughness);
+
+    return ggx1 * ggx2;
+}
+
+// Fresnel: Schlick approximation
+vec3 fresnelSchlick(float cosTheta, vec3 F0) {
+    return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+// ACES Filmic Tone Mapping
+vec3 ACESFilm(vec3 x) {
+    float a = 2.51;
+    float b = 0.03;
+    float c = 2.43;
+    float d = 0.59;
+    float e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
+// =============================================================================
+// Shadow Calculation (unchanged)
+// =============================================================================
+
+float calculateShadow(vec4 posLightSpace, vec3 normal, vec3 lightDir) {
+    vec3 projCoords = posLightSpace.xyz / posLightSpace.w;
     projCoords.xy = projCoords.xy * 0.5 + 0.5;
 
-    // Check if outside light frustum
     if (projCoords.z > 1.0 || projCoords.z < 0.0 ||
         projCoords.x < 0.0 || projCoords.x > 1.0 ||
         projCoords.y < 0.0 || projCoords.y > 1.0) {
-        return 0.0;  // No shadow outside light frustum
+        return 0.0;
     }
 
-    // Use minimal bias - PCF averaging helps reduce shadow acne
-    float bias = ubo.shadowBias * 0.01;  // Very minimal bias
-
-    // Current fragment depth from light's perspective
+    float bias = ubo.shadowBias * 0.01;
     float currentDepth = projCoords.z;
 
-    // PCF: Sample neighboring texels for soft shadows
     float shadow = 0.0;
     vec2 texelSize = 1.0 / ubo.shadowMapSize;
 
@@ -63,38 +112,63 @@ float calculateShadow(vec4 posLightSpace, vec3 normal, vec3 lightDir) {
             shadow += currentDepth - bias > pcfDepth ? 1.0 : 0.0;
         }
     }
-    shadow /= 9.0;  // Average 3x3 samples
+    shadow /= 9.0;
 
     return shadow * ubo.shadowStrength;
 }
 
-void main() {
-    vec3 N = normalize(fragNormal);
-    vec3 L = normalize(ubo.sunDirection);
-    vec3 V = normalize(ubo.cameraPos - fragWorldPos);
-    vec3 H = normalize(L + V);
+// =============================================================================
+// Main
+// =============================================================================
 
-    // Calculate shadow factor
+void main() {
+    // sRGB to linear conversion for albedo
+    vec3 albedo = pow(fragColor, vec3(2.2));
+    float metallic = fragMetallic;
+    float roughness = fragRoughness;
+    float ao = fragAO;
+
+    vec3 N = normalize(fragNormal);
+    vec3 V = normalize(ubo.cameraPos - fragWorldPos);
+    vec3 L = normalize(ubo.sunDirection);
+    vec3 H = normalize(V + L);
+
+    float NdotL = max(dot(N, L), 0.0);
+    float NdotV = max(dot(N, V), 0.0);
+
+    // Calculate base reflectivity (F0)
+    // Dielectrics: 0.04, Metals: albedo color
+    vec3 F0 = mix(vec3(0.04), albedo, metallic);
+
+    // Cook-Torrance BRDF
+    float D = distributionGGX(N, H, roughness);
+    float G = geometrySmith(N, V, L, roughness);
+    vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
+
+    vec3 numerator = D * G * F;
+    float denominator = 4.0 * NdotV * NdotL + 0.0001;
+    vec3 specular = numerator / denominator;
+
+    // Energy conservation
+    vec3 kS = F;
+    vec3 kD = (vec3(1.0) - kS) * (1.0 - metallic);
+
+    // Direct lighting (sun)
+    vec3 radiance = ubo.sunColor * ubo.sunIntensity;
+    vec3 Lo = (kD * albedo / PI + specular) * radiance * NdotL;
+
+    // Ambient (placeholder - will be replaced by IBL)
+    vec3 ambient = ubo.ambientIntensity * albedo * ao;
+
+    // Shadow
     float shadow = calculateShadow(fragPosLightSpace, N, L);
 
-    // Ambient lighting (not affected by shadow)
-    vec3 ambient = ubo.ambientIntensity * fragColor;
+    // Final color: ambient (not shadowed) + direct light (shadowed)
+    vec3 color = ambient + (1.0 - shadow) * Lo;
 
-    // Diffuse lighting (Lambertian) - affected by shadow
-    float NdotL = max(dot(N, L), 0.0);
-    vec3 diffuse = ubo.sunIntensity * NdotL * ubo.sunColor * fragColor;
+    // Tone mapping (ACES)
+    float exp = ubo.exposure > 0.0 ? ubo.exposure : 1.0;
+    color = ACESFilm(color * exp);
 
-    // Specular lighting (Blinn-Phong) - affected by shadow
-    float NdotH = max(dot(N, H), 0.0);
-    float shininess = 32.0;
-    float spec = pow(NdotH, shininess);
-    vec3 specular = ubo.sunIntensity * spec * ubo.sunColor * 0.3;
-
-    // Apply shadow: ambient is always visible, diffuse/specular reduced in shadow
-    vec3 finalColor = ambient + (1.0 - shadow) * (diffuse + specular);
-
-    // Simple tone mapping
-    finalColor = finalColor / (finalColor + vec3(1.0));
-
-    outColor = vec4(finalColor, 1.0);
+    outColor = vec4(color, 1.0);
 }

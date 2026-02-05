@@ -287,9 +287,9 @@ bool ShadowRenderer::createPipeline(void* nativeRenderPass) {
     };
     pipelineDesc.vertex.buffers.push_back(vertexLayout);
 
-    // Per-instance attributes (binding 1)
+    // Per-instance attributes (binding 1) - stride must match building pipeline (48 bytes)
     rhi::VertexBufferLayout instanceLayout;
-    instanceLayout.stride = 40;  // 3*4 + 3*4 + 3*4 + 4 padding = 40 bytes
+    instanceLayout.stride = 48;  // vec3(12)*3 + float(4)*3 = 48 bytes
     instanceLayout.inputRate = rhi::VertexInputRate::Instance;
     instanceLayout.attributes = {
         rhi::VertexAttribute(3, 1, rhi::TextureFormat::RGB32Float, 0),   // instancePosition

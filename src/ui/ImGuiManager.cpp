@@ -133,6 +133,7 @@ void ImGuiManager::renderUI(Camera& camera, uint32_t buildingCount,
             m_lightingSettings.sunIntensity = 1.2f;
             m_lightingSettings.sunColor = glm::vec3(1.0f, 0.98f, 0.95f);
             m_lightingSettings.ambientIntensity = 0.2f;
+            m_lightingSettings.exposure = 1.0f;
         }
         ImGui::SameLine();
         if (ImGui::Button("Sunset")) {
@@ -141,6 +142,7 @@ void ImGuiManager::renderUI(Camera& camera, uint32_t buildingCount,
             m_lightingSettings.sunIntensity = 0.8f;
             m_lightingSettings.sunColor = glm::vec3(1.0f, 0.5f, 0.2f);
             m_lightingSettings.ambientIntensity = 0.1f;
+            m_lightingSettings.exposure = 1.5f;
         }
         ImGui::SameLine();
         if (ImGui::Button("Night")) {
@@ -149,6 +151,7 @@ void ImGuiManager::renderUI(Camera& camera, uint32_t buildingCount,
             m_lightingSettings.sunIntensity = 0.1f;
             m_lightingSettings.sunColor = glm::vec3(0.4f, 0.5f, 0.7f);
             m_lightingSettings.ambientIntensity = 0.05f;
+            m_lightingSettings.exposure = 2.5f;
         }
 
         // Shadow settings
@@ -156,6 +159,11 @@ void ImGuiManager::renderUI(Camera& camera, uint32_t buildingCount,
         ImGui::Text("Shadows:");
         ImGui::SliderFloat("Shadow Bias", &m_lightingSettings.shadowBias, 0.001f, 0.02f, "%.4f");
         ImGui::SliderFloat("Shadow Strength", &m_lightingSettings.shadowStrength, 0.0f, 1.0f, "%.2f");
+
+        // PBR Tone Mapping
+        ImGui::Separator();
+        ImGui::Text("Tone Mapping:");
+        ImGui::SliderFloat("Exposure", &m_lightingSettings.exposure, 0.1f, 5.0f, "%.2f");
     }
 
     ImGui::Separator();
