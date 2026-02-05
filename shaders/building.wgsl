@@ -23,6 +23,11 @@ struct UniformBufferObject {
 @group(0) @binding(0) var<uniform> ubo: UniformBufferObject;
 @group(0) @binding(1) var shadowMapTex: texture_depth_2d;
 @group(0) @binding(2) var shadowMapSampler: sampler;
+// IBL textures
+@group(0) @binding(3) var irradianceMap: texture_cube<f32>;
+@group(0) @binding(4) var prefilteredMap: texture_cube<f32>;
+@group(0) @binding(5) var brdfLUT: texture_2d<f32>;
+@group(0) @binding(6) var iblSampler: sampler;
 
 // Vertex input
 struct VertexInput {
@@ -96,6 +101,10 @@ fn geometrySmith(N: vec3<f32>, V: vec3<f32>, L: vec3<f32>, roughness: f32) -> f3
 
 fn fresnelSchlick(cosTheta: f32, F0: vec3<f32>) -> vec3<f32> {
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+fn fresnelSchlickRoughness(cosTheta: f32, F0: vec3<f32>, roughness: f32) -> vec3<f32> {
+    return F0 + (max(vec3<f32>(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
 fn ACESFilm(x: vec3<f32>) -> vec3<f32> {
@@ -194,8 +203,27 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let radiance = ubo.sunColor * ubo.sunIntensity;
     let Lo = (kD * albedo / PI + specular) * radiance * NdotL;
 
-    // Ambient (placeholder - will be replaced by IBL)
-    let ambient = ubo.ambientIntensity * albedo * ao;
+    // IBL Ambient Lighting
+    let F_ibl = fresnelSchlickRoughness(NdotV, F0, roughness);
+    let kS_ibl = F_ibl;
+    let kD_ibl = (1.0 - kS_ibl) * (1.0 - metallic);
+
+    // Diffuse IBL: irradiance map lookup
+    let irradiance = textureSample(irradianceMap, iblSampler, N).rgb;
+    let diffuseIBL = irradiance * albedo;
+
+    // Specular IBL: prefiltered env map + BRDF LUT
+    let MAX_REFLECTION_LOD: f32 = 4.0;
+    let R = reflect(-V, N);
+    let prefilteredColor = textureSampleLevel(prefilteredMap, iblSampler, R, roughness * MAX_REFLECTION_LOD).rgb;
+    let brdf = textureSample(brdfLUT, iblSampler, vec2<f32>(NdotV, roughness)).rg;
+    let specularIBL = prefilteredColor * (F_ibl * brdf.x + brdf.y);
+
+    // Fallback: when no HDR environment is loaded, irradiance cubemap is black
+    let iblStrength = max(irradiance.r, max(irradiance.g, irradiance.b));
+    let iblAmbient = (kD_ibl * diffuseIBL + specularIBL) * ao;
+    let fallbackAmbient = albedo * ao;
+    let ambient = mix(fallbackAmbient, iblAmbient, step(0.001, iblStrength)) * ubo.ambientIntensity;
 
     // Shadow
     let shadow = calculateShadow(input.posLightSpace, N, L);

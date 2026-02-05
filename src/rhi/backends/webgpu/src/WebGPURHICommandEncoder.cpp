@@ -326,7 +326,7 @@ void WebGPURHICommandEncoder::copyBufferToTexture(const BufferTextureCopyInfo& s
     imageDst.mipLevel = dst.mipLevel;
     imageDst.origin.x = dst.origin.x;
     imageDst.origin.y = dst.origin.y;
-    imageDst.origin.z = dst.origin.z;
+    imageDst.origin.z = (dst.arrayLayer > 0) ? dst.arrayLayer : dst.origin.z;
     imageDst.aspect = WGPUTextureAspect_All;
 
     WGPUExtent3D extent{};

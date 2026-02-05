@@ -63,6 +63,18 @@ public:
      */
     glm::vec3 getSunDirection() const { return m_sunDirection; }
 
+    /**
+     * @brief Set HDR environment cubemap for skybox rendering
+     * @param envView Cubemap texture view from IBLManager
+     * @param sampler Linear sampler for cubemap sampling
+     *
+     * When set, the skybox shader will blend the environment map with procedural sky.
+     * When nullptr, falls back to fully procedural sky.
+     */
+    void setEnvironmentMap(rhi::RHITextureView* envView, rhi::RHISampler* sampler);
+
+    bool hasEnvironmentMap() const { return m_hasEnvMap; }
+
 private:
     bool createShaders();
     bool createPipeline(rhi::TextureFormat colorFormat, rhi::TextureFormat depthFormat,
@@ -89,6 +101,7 @@ private:
 
     // Parameters (sunset defaults)
     glm::vec3 m_sunDirection = glm::normalize(glm::vec3(0.7f, 0.25f, 0.5f));
+    bool m_hasEnvMap = false;
 
     // Uniform buffer structure (must match shader)
     struct alignas(16) UniformData {

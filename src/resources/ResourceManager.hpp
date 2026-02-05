@@ -41,6 +41,13 @@ public:
     rhi::RHITexture* loadTexture(const std::string& path);
 
     /**
+     * @brief Load HDR texture from file (with caching)
+     * @param path Path to .hdr image file
+     * @return Pointer to loaded RGBA16Float texture (owned by ResourceManager)
+     */
+    rhi::RHITexture* loadHDRTexture(const std::string& path);
+
+    /**
      * @brief Get texture by path (if already loaded)
      * @return Pointer to texture or nullptr if not loaded
      */
@@ -64,4 +71,10 @@ private:
         int width,
         int height,
         int channels);
+
+    // Helper for uploading HDR float texture data
+    std::unique_ptr<rhi::RHITexture> uploadHDRTexture(
+        float* pixels,
+        int width,
+        int height);
 };

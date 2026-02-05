@@ -34,6 +34,7 @@ struct TextureCopyInfo {
     uint32_t mipLevel = 0;
     Offset3D origin;
     uint32_t aspect = 0;  // Texture aspect (color, depth, stencil)
+    uint32_t arrayLayer = 0;  // Target array layer (for cubemaps/array textures)
 };
 
 /**

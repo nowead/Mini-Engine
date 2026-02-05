@@ -95,6 +95,8 @@ WebGPURHITexture::WebGPURHITexture(WebGPURHIDevice* device, const TextureDesc& d
     , m_size(desc.size)
     , m_mipLevels(desc.mipLevelCount)
     , m_sampleCount(desc.sampleCount)
+    , m_arrayLayerCount(desc.arrayLayerCount)
+    , m_isCubemap(desc.isCubemap)
     , m_usage(desc.usage)
 {
     WGPUTextureDescriptor textureDesc{};
@@ -104,7 +106,9 @@ WebGPURHITexture::WebGPURHITexture(WebGPURHIDevice* device, const TextureDesc& d
 
     textureDesc.size.width = desc.size.width;
     textureDesc.size.height = desc.size.height;
-    textureDesc.size.depthOrArrayLayers = desc.size.depth;
+    textureDesc.size.depthOrArrayLayers = (desc.dimension == rhi::TextureDimension::Texture3D)
+        ? desc.size.depth
+        : desc.arrayLayerCount;
 
     textureDesc.format = ToWGPUFormat(desc.format);
     textureDesc.mipLevelCount = desc.mipLevelCount;
@@ -135,6 +139,8 @@ WebGPURHITexture::WebGPURHITexture(WebGPURHITexture&& other) noexcept
     , m_size(other.m_size)
     , m_mipLevels(other.m_mipLevels)
     , m_sampleCount(other.m_sampleCount)
+    , m_arrayLayerCount(other.m_arrayLayerCount)
+    , m_isCubemap(other.m_isCubemap)
     , m_usage(other.m_usage)
 {
     other.m_texture = nullptr;
@@ -153,6 +159,8 @@ WebGPURHITexture& WebGPURHITexture::operator=(WebGPURHITexture&& other) noexcept
         m_size = other.m_size;
         m_mipLevels = other.m_mipLevels;
         m_sampleCount = other.m_sampleCount;
+        m_arrayLayerCount = other.m_arrayLayerCount;
+        m_isCubemap = other.m_isCubemap;
         m_usage = other.m_usage;
 
         other.m_texture = nullptr;
@@ -171,18 +179,26 @@ std::unique_ptr<RHITextureView> WebGPURHITexture::createView(const TextureViewDe
 }
 
 std::unique_ptr<RHITextureView> WebGPURHITexture::createDefaultView() {
-    // Determine default view dimension from texture dimension
-    TextureViewDimension viewDim = TextureViewDimension::View2D;
-    switch (m_dimension) {
-        case TextureDimension::Texture1D:
-            viewDim = TextureViewDimension::View1D;
-            break;
-        case TextureDimension::Texture2D:
-            viewDim = TextureViewDimension::View2D;
-            break;
-        case TextureDimension::Texture3D:
-            viewDim = TextureViewDimension::View3D;
-            break;
+    TextureViewDimension viewDim;
+    if (m_isCubemap && m_arrayLayerCount == 6) {
+        viewDim = TextureViewDimension::ViewCube;
+    } else {
+        switch (m_dimension) {
+            case TextureDimension::Texture1D:
+                viewDim = TextureViewDimension::View1D;
+                break;
+            case TextureDimension::Texture2D:
+                viewDim = (m_arrayLayerCount > 1)
+                    ? TextureViewDimension::View2DArray
+                    : TextureViewDimension::View2D;
+                break;
+            case TextureDimension::Texture3D:
+                viewDim = TextureViewDimension::View3D;
+                break;
+            default:
+                viewDim = TextureViewDimension::View2D;
+                break;
+        }
     }
 
     TextureViewDesc desc{};
@@ -191,7 +207,7 @@ std::unique_ptr<RHITextureView> WebGPURHITexture::createDefaultView() {
     desc.baseMipLevel = 0;
     desc.mipLevelCount = m_mipLevels;
     desc.baseArrayLayer = 0;
-    desc.arrayLayerCount = m_size.depth; // For 1D/2D, this is array layers; for 3D, this is depth
+    desc.arrayLayerCount = m_arrayLayerCount;
 
     return createView(desc);
 }

@@ -46,6 +46,9 @@ Renderer::Renderer(GLFWwindow* window,
     createRHIUniformBuffers();
     createRHIBindGroups();
 
+    // Phase 1.2: Initialize IBL (must be before building pipeline for bind group layout)
+    createIBL();
+
     // Always create building pipeline for game world rendering
     createBuildingPipeline();
 
@@ -562,6 +565,36 @@ void Renderer::createBuildingPipeline() {
     shadowSamplerEntry.type = rhi::BindingType::NonFilteringSampler;
     buildingLayoutDesc.entries.push_back(shadowSamplerEntry);
 
+    // Binding 3: IBL Irradiance cubemap (fragment only)
+    rhi::BindGroupLayoutEntry irrEntry;
+    irrEntry.binding = 3;
+    irrEntry.visibility = rhi::ShaderStage::Fragment;
+    irrEntry.type = rhi::BindingType::SampledTexture;
+    irrEntry.textureViewDimension = rhi::TextureViewDimension::ViewCube;
+    buildingLayoutDesc.entries.push_back(irrEntry);
+
+    // Binding 4: IBL Prefiltered env cubemap (fragment only)
+    rhi::BindGroupLayoutEntry prefiltEntry;
+    prefiltEntry.binding = 4;
+    prefiltEntry.visibility = rhi::ShaderStage::Fragment;
+    prefiltEntry.type = rhi::BindingType::SampledTexture;
+    prefiltEntry.textureViewDimension = rhi::TextureViewDimension::ViewCube;
+    buildingLayoutDesc.entries.push_back(prefiltEntry);
+
+    // Binding 5: IBL BRDF LUT (fragment only)
+    rhi::BindGroupLayoutEntry brdfEntry;
+    brdfEntry.binding = 5;
+    brdfEntry.visibility = rhi::ShaderStage::Fragment;
+    brdfEntry.type = rhi::BindingType::SampledTexture;
+    buildingLayoutDesc.entries.push_back(brdfEntry);
+
+    // Binding 6: IBL sampler (fragment only)
+    rhi::BindGroupLayoutEntry iblSamplerEntry;
+    iblSamplerEntry.binding = 6;
+    iblSamplerEntry.visibility = rhi::ShaderStage::Fragment;
+    iblSamplerEntry.type = rhi::BindingType::Sampler;
+    buildingLayoutDesc.entries.push_back(iblSamplerEntry);
+
     buildingLayoutDesc.label = "Building Bind Group Layout";
 
     buildingBindGroupLayout = rhiBridge->getDevice()->createBindGroupLayout(buildingLayoutDesc);
@@ -786,7 +819,22 @@ void Renderer::createShadowRenderer() {
                 bindGroupDesc.entries.push_back(
                     rhi::BindGroupEntry::Sampler(2, shadowRenderer->getShadowSampler())
                 );
-                bindGroupDesc.label = "Building Bind Group with Shadow";
+                // IBL bindings (3-6)
+                if (iblManager && iblManager->isInitialized()) {
+                    bindGroupDesc.entries.push_back(
+                        rhi::BindGroupEntry::TextureView(3, iblManager->getIrradianceView())
+                    );
+                    bindGroupDesc.entries.push_back(
+                        rhi::BindGroupEntry::TextureView(4, iblManager->getPrefilteredView())
+                    );
+                    bindGroupDesc.entries.push_back(
+                        rhi::BindGroupEntry::TextureView(5, iblManager->getBRDFLutView())
+                    );
+                    bindGroupDesc.entries.push_back(
+                        rhi::BindGroupEntry::Sampler(6, iblManager->getSampler())
+                    );
+                }
+                bindGroupDesc.label = "Building Bind Group with Shadow + IBL";
                 buildingBindGroups.push_back(rhiBridge->getDevice()->createBindGroup(bindGroupDesc));
             }
             LOG_INFO("Renderer") << "Building bind groups updated with shadow map";
@@ -795,6 +843,99 @@ void Renderer::createShadowRenderer() {
         LOG_ERROR("Renderer") << "Failed to initialize shadow renderer";
         shadowRenderer.reset();
     }
+}
+
+void Renderer::createIBL() {
+    if (!rhiBridge || !rhiBridge->isReady()) {
+        return;
+    }
+
+    auto* rhiDevice = rhiBridge->getDevice();
+    auto* rhiQueue = rhiBridge->getGraphicsQueue();
+
+    if (!rhiDevice || !rhiQueue) {
+        return;
+    }
+
+    iblManager = std::make_unique<rendering::IBLManager>(rhiDevice, rhiQueue);
+
+    // For now, initialize with default (BRDF LUT only, no HDR env map yet)
+    if (iblManager->initializeDefault()) {
+        LOG_INFO("Renderer") << "IBL manager initialized (default mode)";
+    } else {
+        LOG_ERROR("Renderer") << "Failed to initialize IBL manager";
+        iblManager.reset();
+    }
+}
+
+bool Renderer::loadEnvironmentMap(const std::string& hdrPath) {
+    if (!resourceManager || !iblManager) {
+        LOG_ERROR("Renderer") << "Cannot load environment map: missing managers";
+        return false;
+    }
+
+    // Load HDR texture
+    rhi::RHITexture* hdrTexture = nullptr;
+    try {
+        hdrTexture = resourceManager->loadHDRTexture(hdrPath);
+    } catch (const std::exception& e) {
+        LOG_ERROR("Renderer") << "Failed to load HDR texture: " << e.what();
+        return false;
+    }
+
+    if (!hdrTexture) {
+        LOG_ERROR("Renderer") << "HDR texture is null";
+        return false;
+    }
+
+    // Re-initialize IBL with the HDR environment
+    iblManager = std::make_unique<rendering::IBLManager>(
+        rhiBridge->getDevice(), rhiBridge->getGraphicsQueue());
+
+    if (!iblManager->initialize(hdrTexture)) {
+        LOG_ERROR("Renderer") << "Failed to initialize IBL with environment map";
+        return false;
+    }
+
+    // Rebuild building bind groups with new IBL textures
+    if (shadowRenderer && shadowRenderer->getShadowMapView() && shadowRenderer->getShadowSampler()) {
+        buildingBindGroups.clear();
+        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+            rhi::BindGroupDesc bindGroupDesc;
+            bindGroupDesc.layout = buildingBindGroupLayout.get();
+            bindGroupDesc.entries.push_back(
+                rhi::BindGroupEntry::Buffer(0, rhiUniformBuffers[i].get())
+            );
+            bindGroupDesc.entries.push_back(
+                rhi::BindGroupEntry::TextureView(1, shadowRenderer->getShadowMapView())
+            );
+            bindGroupDesc.entries.push_back(
+                rhi::BindGroupEntry::Sampler(2, shadowRenderer->getShadowSampler())
+            );
+            bindGroupDesc.entries.push_back(
+                rhi::BindGroupEntry::TextureView(3, iblManager->getIrradianceView())
+            );
+            bindGroupDesc.entries.push_back(
+                rhi::BindGroupEntry::TextureView(4, iblManager->getPrefilteredView())
+            );
+            bindGroupDesc.entries.push_back(
+                rhi::BindGroupEntry::TextureView(5, iblManager->getBRDFLutView())
+            );
+            bindGroupDesc.entries.push_back(
+                rhi::BindGroupEntry::Sampler(6, iblManager->getSampler())
+            );
+            bindGroupDesc.label = "Building Bind Group with IBL";
+            buildingBindGroups.push_back(rhiBridge->getDevice()->createBindGroup(bindGroupDesc));
+        }
+    }
+
+    // Set skybox environment map
+    if (skyboxRenderer) {
+        skyboxRenderer->setEnvironmentMap(iblManager->getEnvironmentView(), iblManager->getSampler());
+    }
+
+    LOG_INFO("Renderer") << "Environment map loaded: " << hdrPath;
+    return true;
 }
 
 // ============================================================================

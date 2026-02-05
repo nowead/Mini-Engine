@@ -89,6 +89,8 @@ public:
     Extent3D getSize() const override { return m_size; }
     uint32_t getMipLevelCount() const override { return m_mipLevels; }
     uint32_t getSampleCount() const override { return m_sampleCount; }
+    uint32_t getArrayLayerCount() const override { return m_arrayLayerCount; }
+    bool isCubemap() const override { return m_isCubemap; }
 
     // WebGPU-specific accessors
     WGPUTexture getWGPUTexture() const { return m_texture; }
@@ -102,6 +104,8 @@ private:
     Extent3D m_size;
     uint32_t m_mipLevels;
     uint32_t m_sampleCount;
+    uint32_t m_arrayLayerCount;
+    bool m_isCubemap;
     TextureUsage m_usage;
 };
 

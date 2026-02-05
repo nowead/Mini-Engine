@@ -16,6 +16,8 @@ struct TextureDesc {
     Extent3D size;                              // Texture dimensions
     uint32_t mipLevelCount = 1;                 // Number of mip levels
     uint32_t sampleCount = 1;                   // Sample count for MSAA (1, 2, 4, 8, etc.)
+    uint32_t arrayLayerCount = 1;               // Number of array layers (6 for cubemaps)
+    bool isCubemap = false;                     // Whether this is a cubemap texture
     TextureDimension dimension = TextureDimension::Texture2D;  // Texture dimension
     TextureFormat format = TextureFormat::RGBA8Unorm;          // Pixel format
     TextureUsage usage = TextureUsage::Sampled;                // Usage flags
@@ -119,6 +121,18 @@ public:
      * @return Texture dimension
      */
     virtual TextureDimension getDimension() const = 0;
+
+    /**
+     * @brief Get the number of array layers
+     * @return Array layer count (6 for cubemaps)
+     */
+    virtual uint32_t getArrayLayerCount() const = 0;
+
+    /**
+     * @brief Check if this is a cubemap texture
+     * @return True if cubemap
+     */
+    virtual bool isCubemap() const = 0;
 };
 
 } // namespace rhi

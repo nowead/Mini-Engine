@@ -191,6 +191,9 @@ if(NOT EMSCRIPTEN)
         # Phase 3.3: Shadow Mapping
         src/rendering/ShadowRenderer.cpp
         src/rendering/ShadowRenderer.hpp
+        # Phase 1.2: IBL (Image Based Lighting)
+        src/rendering/IBLManager.cpp
+        src/rendering/IBLManager.hpp
     )
 
     target_include_directories(MiniEngine BEFORE PRIVATE
@@ -316,11 +319,52 @@ if(NOT EMSCRIPTEN)
         COMMENT "Compiling shadow.frag.glsl -> SPIR-V"
     )
 
+    # IBL compute shader compilation (Phase 1.2)
+    add_custom_command(
+        OUTPUT ${BUILDING_SHADER_DIR}/brdf_lut.comp.spv
+        COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=compute
+                -o ${BUILDING_SHADER_DIR}/brdf_lut.comp.spv
+                ${BUILDING_SHADER_DIR}/brdf_lut.comp.glsl
+        DEPENDS ${BUILDING_SHADER_DIR}/brdf_lut.comp.glsl
+        COMMENT "Compiling brdf_lut.comp.glsl -> SPIR-V"
+    )
+
+    add_custom_command(
+        OUTPUT ${BUILDING_SHADER_DIR}/equirect_to_cubemap.comp.spv
+        COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=compute
+                -o ${BUILDING_SHADER_DIR}/equirect_to_cubemap.comp.spv
+                ${BUILDING_SHADER_DIR}/equirect_to_cubemap.comp.glsl
+        DEPENDS ${BUILDING_SHADER_DIR}/equirect_to_cubemap.comp.glsl
+        COMMENT "Compiling equirect_to_cubemap.comp.glsl -> SPIR-V"
+    )
+
+    add_custom_command(
+        OUTPUT ${BUILDING_SHADER_DIR}/irradiance_map.comp.spv
+        COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=compute
+                -o ${BUILDING_SHADER_DIR}/irradiance_map.comp.spv
+                ${BUILDING_SHADER_DIR}/irradiance_map.comp.glsl
+        DEPENDS ${BUILDING_SHADER_DIR}/irradiance_map.comp.glsl
+        COMMENT "Compiling irradiance_map.comp.glsl -> SPIR-V"
+    )
+
+    add_custom_command(
+        OUTPUT ${BUILDING_SHADER_DIR}/prefilter_env.comp.spv
+        COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=compute
+                -o ${BUILDING_SHADER_DIR}/prefilter_env.comp.spv
+                ${BUILDING_SHADER_DIR}/prefilter_env.comp.glsl
+        DEPENDS ${BUILDING_SHADER_DIR}/prefilter_env.comp.glsl
+        COMMENT "Compiling prefilter_env.comp.glsl -> SPIR-V"
+    )
+
     add_custom_target(building_shaders DEPENDS
         ${BUILDING_SHADER_DIR}/building.vert.spv
         ${BUILDING_SHADER_DIR}/building.frag.spv
         ${BUILDING_SHADER_DIR}/shadow.vert.spv
         ${BUILDING_SHADER_DIR}/shadow.frag.spv
+        ${BUILDING_SHADER_DIR}/brdf_lut.comp.spv
+        ${BUILDING_SHADER_DIR}/equirect_to_cubemap.comp.spv
+        ${BUILDING_SHADER_DIR}/irradiance_map.comp.spv
+        ${BUILDING_SHADER_DIR}/prefilter_env.comp.spv
     )
     
     add_dependencies(MiniEngine building_shaders)
@@ -385,6 +429,9 @@ else()
         # Phase 3.3: Shadow Mapping
         src/rendering/ShadowRenderer.cpp
         src/rendering/ShadowRenderer.hpp
+        # Phase 1.2: IBL (Image Based Lighting)
+        src/rendering/IBLManager.cpp
+        src/rendering/IBLManager.hpp
     )
 
     target_include_directories(MiniEngine BEFORE PRIVATE

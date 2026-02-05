@@ -353,7 +353,7 @@ void VulkanRHICommandEncoder::copyBufferToTexture(const rhi::BufferTextureCopyIn
     region.bufferImageHeight = src.rowsPerImage;
     region.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
     region.imageSubresource.mipLevel = dst.mipLevel;
-    region.imageSubresource.baseArrayLayer = 0;
+    region.imageSubresource.baseArrayLayer = dst.arrayLayer;
     region.imageSubresource.layerCount = 1;
     region.imageOffset = vk::Offset3D(dst.origin.x, dst.origin.y, dst.origin.z);
     region.imageExtent = vk::Extent3D(copySize.width, copySize.height, copySize.depth);
@@ -459,9 +459,9 @@ void VulkanRHICommandEncoder::transitionTextureLayout(rhi::RHITexture* texture,
     barrier.image = vulkanTexture->getVkImage();
     barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;  // TODO: Handle depth/stencil
     barrier.subresourceRange.baseMipLevel = 0;
-    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.levelCount = vulkanTexture->getMipLevelCount();
     barrier.subresourceRange.baseArrayLayer = 0;
-    barrier.subresourceRange.layerCount = 1;
+    barrier.subresourceRange.layerCount = vulkanTexture->getArrayLayerCount();
 
     // Determine pipeline stages and access masks based on layouts
     vk::PipelineStageFlags srcStage, dstStage;

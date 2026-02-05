@@ -33,6 +33,12 @@ layout(binding = 0) uniform UniformBufferObject {
 layout(binding = 1) uniform texture2D shadowMapTex;
 layout(binding = 2) uniform sampler shadowMapSampler;
 
+// IBL textures
+layout(binding = 3) uniform textureCube irradianceMap;
+layout(binding = 4) uniform textureCube prefilteredMap;
+layout(binding = 5) uniform texture2D brdfLUT;
+layout(binding = 6) uniform sampler iblSampler;
+
 // Output
 layout(location = 0) out vec4 outColor;
 
@@ -74,6 +80,11 @@ float geometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
 // Fresnel: Schlick approximation
 vec3 fresnelSchlick(float cosTheta, vec3 F0) {
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+// Fresnel: Schlick with roughness (for IBL)
+vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
+    return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
 // ACES Filmic Tone Mapping
@@ -157,8 +168,27 @@ void main() {
     vec3 radiance = ubo.sunColor * ubo.sunIntensity;
     vec3 Lo = (kD * albedo / PI + specular) * radiance * NdotL;
 
-    // Ambient (placeholder - will be replaced by IBL)
-    vec3 ambient = ubo.ambientIntensity * albedo * ao;
+    // IBL Ambient Lighting
+    vec3 F_ibl = fresnelSchlickRoughness(NdotV, F0, roughness);
+    vec3 kS_ibl = F_ibl;
+    vec3 kD_ibl = (1.0 - kS_ibl) * (1.0 - metallic);
+
+    // Diffuse IBL: irradiance map lookup
+    vec3 irradiance = texture(samplerCube(irradianceMap, iblSampler), N).rgb;
+    vec3 diffuseIBL = irradiance * albedo;
+
+    // Specular IBL: prefiltered env map + BRDF LUT
+    const float MAX_REFLECTION_LOD = 4.0;
+    vec3 R = reflect(-V, N);
+    vec3 prefilteredColor = textureLod(samplerCube(prefilteredMap, iblSampler), R, roughness * MAX_REFLECTION_LOD).rgb;
+    vec2 brdf = texture(sampler2D(brdfLUT, iblSampler), vec2(NdotV, roughness)).rg;
+    vec3 specularIBL = prefilteredColor * (F_ibl * brdf.x + brdf.y);
+
+    // Fallback: when no HDR environment is loaded, irradiance cubemap is black
+    float iblStrength = max(irradiance.r, max(irradiance.g, irradiance.b));
+    vec3 iblAmbient = (kD_ibl * diffuseIBL + specularIBL) * ao;
+    vec3 fallbackAmbient = albedo * ao;
+    vec3 ambient = mix(fallbackAmbient, iblAmbient, step(0.001, iblStrength)) * ubo.ambientIntensity;
 
     // Shadow
     float shadow = calculateShadow(fragPosLightSpace, N, L);

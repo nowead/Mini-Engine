@@ -39,6 +39,7 @@ public:
     // Vulkan-specific accessors
     vk::DescriptorSetLayout getVkDescriptorSetLayout() const { return *m_layout; }
     const std::vector<vk::DescriptorPoolSize>& getPoolSizes() const { return m_poolSizes; }
+    const std::vector<rhi::BindGroupLayoutEntry>& getEntries() const { return m_entries; }
 
 private:
     VulkanRHIDevice* m_device;
@@ -46,6 +47,8 @@ private:
 
     // Pool sizes needed for allocating descriptor sets from this layout
     std::vector<vk::DescriptorPoolSize> m_poolSizes;
+    // Original layout entries for bind group creation
+    std::vector<rhi::BindGroupLayoutEntry> m_entries;
 };
 
 /**

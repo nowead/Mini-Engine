@@ -138,6 +138,8 @@ VulkanRHITexture::VulkanRHITexture(VulkanRHIDevice* device, const TextureDesc& d
     , m_size(desc.size)
     , m_mipLevels(desc.mipLevelCount)
     , m_sampleCount(desc.sampleCount)
+    , m_arrayLayerCount(desc.arrayLayerCount)
+    , m_isCubemap(desc.isCubemap)
     , m_usage(desc.usage)
 {
     // Create image create info
@@ -162,7 +164,10 @@ VulkanRHITexture::VulkanRHITexture(VulkanRHIDevice* device, const TextureDesc& d
     imageInfo.extent.height = desc.size.height;
     imageInfo.extent.depth = desc.size.depth;
     imageInfo.mipLevels = desc.mipLevelCount;
-    imageInfo.arrayLayers = 1; // TODO: Support array textures
+    imageInfo.arrayLayers = desc.arrayLayerCount;
+    if (desc.isCubemap) {
+        imageInfo.flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+    }
     imageInfo.samples = static_cast<VkSampleCountFlagBits>(desc.sampleCount);
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.usage = static_cast<VkImageUsageFlags>(ToVkImageUsage(desc.usage));
@@ -242,22 +247,28 @@ std::unique_ptr<RHITextureView> VulkanRHITexture::createDefaultView() {
     desc.format = m_format;
 
     // Map texture dimension to view dimension
-    switch (m_dimension) {
-        case TextureDimension::Texture1D:
-            desc.dimension = TextureViewDimension::View1D;
-            break;
-        case TextureDimension::Texture2D:
-            desc.dimension = TextureViewDimension::View2D;
-            break;
-        case TextureDimension::Texture3D:
-            desc.dimension = TextureViewDimension::View3D;
-            break;
+    if (m_isCubemap && m_arrayLayerCount == 6) {
+        desc.dimension = TextureViewDimension::ViewCube;
+    } else {
+        switch (m_dimension) {
+            case TextureDimension::Texture1D:
+                desc.dimension = TextureViewDimension::View1D;
+                break;
+            case TextureDimension::Texture2D:
+                desc.dimension = (m_arrayLayerCount > 1)
+                    ? TextureViewDimension::View2DArray
+                    : TextureViewDimension::View2D;
+                break;
+            case TextureDimension::Texture3D:
+                desc.dimension = TextureViewDimension::View3D;
+                break;
+        }
     }
 
     desc.baseMipLevel = 0;
     desc.mipLevelCount = m_mipLevels;
     desc.baseArrayLayer = 0;
-    desc.arrayLayerCount = 1;
+    desc.arrayLayerCount = m_arrayLayerCount;
 
     return createView(desc);
 }

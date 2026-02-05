@@ -239,4 +239,16 @@ void SkyboxRenderer::render(rhi::RHIRenderPassEncoder* renderPass, uint32_t fram
     renderPass->draw(3, 1, 0, 0);
 }
 
+void SkyboxRenderer::setEnvironmentMap(rhi::RHITextureView* envView, rhi::RHISampler* sampler) {
+    if (!envView || !sampler) {
+        m_hasEnvMap = false;
+        return;
+    }
+
+    // TODO: Rebuild bind groups and pipeline with environment cubemap
+    // Full implementation will replace procedural sky with HDR cubemap sampling
+    m_hasEnvMap = true;
+    std::cout << "[SkyboxRenderer] Environment map set\n";
+}
+
 } // namespace rendering

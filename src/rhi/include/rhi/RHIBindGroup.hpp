@@ -38,6 +38,9 @@ struct BindGroupLayoutEntry {
     bool hasDynamicOffset = false;  // Whether this binding uses dynamic offsets
     uint64_t minBufferBindingSize = 0;  // Minimum buffer size (0 = no minimum)
 
+    // For textures (sampled, depth, storage)
+    TextureViewDimension textureViewDimension = TextureViewDimension::View2D;
+
     // For storage textures
     TextureFormat storageTextureFormat = TextureFormat::Undefined;
     bool storageTextureReadOnly = false;

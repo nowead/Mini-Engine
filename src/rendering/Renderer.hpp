@@ -8,6 +8,7 @@
 #include "src/effects/ParticleRenderer.hpp"
 #include "src/rendering/SkyboxRenderer.hpp"
 #include "src/rendering/ShadowRenderer.hpp"
+#include "src/rendering/IBLManager.hpp"
 
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
@@ -162,6 +163,13 @@ public:
     void setExposure(float exp) { exposure = exp; }
     float getExposure() const { return exposure; }
 
+    /**
+     * @brief Load HDR environment map and initialize full IBL pipeline
+     * @param hdrPath Path to .hdr equirectangular environment map
+     * @return true if IBL was successfully initialized
+     */
+    bool loadEnvironmentMap(const std::string& hdrPath);
+
 private:
     // Window reference
     GLFWwindow* window;
@@ -234,6 +242,8 @@ private:
 
     // Phase 3.3: Shadow mapping
     std::unique_ptr<rendering::ShadowRenderer> shadowRenderer;
+    // Phase 1.2: IBL
+    std::unique_ptr<rendering::IBLManager> iblManager;
     float shadowBias = 0.008f;  // Constant bias to prevent shadow acne (uniform across all surfaces)
     float shadowStrength = 0.7f;  // Shadow darkness
     float exposure = 1.0f;  // PBR tone mapping exposure
@@ -248,6 +258,7 @@ private:
     void createParticleRenderer();  // Particle rendering pipeline
     void createSkyboxRenderer();    // Phase 3.3: Skybox rendering
     void createShadowRenderer();    // Phase 3.3: Shadow mapping
+    void createIBL();               // Phase 1.2: IBL initialization
 
     // RHI command recording (Phase 4.2)
     void updateRHIUniformBuffer(uint32_t currentImage);

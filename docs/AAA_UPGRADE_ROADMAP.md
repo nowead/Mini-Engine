@@ -2,7 +2,7 @@
 
 **Goal**: Elevate the engine from toy-project level to a tech demo with **PBR visuals** and **GPU-Driven optimization**, proving production-ready engine development capability.
 
-**Progress**: Phase 1.1 Complete (2026-02-05)
+**Progress**: Phase 1.2 Complete (2026-02-06)
 
 ---
 
@@ -24,20 +24,28 @@
 - [x] **Color Space**: sRGB-to-linear conversion on albedo input (`pow(2.2)`). ACES Filmic tone mapping with configurable exposure. Vulkan: hardware sRGB via `BGRA8UnormSrgb`. WebGPU: manual gamma correction in WGSL shader.
 - [x] **Pipeline Updates**: Instance buffer stride 40 -> 48 bytes in both Renderer and ShadowRenderer. Added exposure to UBO and ImGui control with lighting presets.
 
-### 1.2 IBL (Image Based Lighting) Integration -- PENDING
+### 1.2 IBL (Image Based Lighting) Integration -- COMPLETE
 
-**Target Files**: `src/rendering/SkyboxRenderer.cpp`, `src/rendering/Renderer.cpp`
-
-**Prerequisite**: RHI cubemap support (`TextureDesc.arrayLayerCount` + `isCubemap` flag)
+**Target Files**: `src/rendering/IBLManager.hpp/.cpp`, `src/rendering/Renderer.cpp`, `shaders/building.frag.glsl`, `shaders/building.wgsl`
 
 **Tasks**:
 
-- [ ] **HDR Loader**: Add `.hdr` (Radiance format) loading support using stb_image.
-- [ ] **Pre-computation** (initialization stage):
-  - Irradiance Map: For diffuse computation (low-frequency convolution).
-  - Prefiltered Environment Map: For specular computation (roughness-level mipmap generation).
-  - BRDF LUT: 2D look-up texture generation (precomputed texture load or Compute Shader generation).
-- [ ] **Shader Integration**: Add IBL terms to Kd (Diffuse) and Ks (Specular) in `building.frag.glsl`.
+- [x] **RHI Cubemap Support**: Added `TextureDesc.arrayLayerCount` and `isCubemap` flag. Updated Vulkan (`VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT`, cubemap view creation, multi-layer transitions) and WebGPU backends (`depthOrArrayLayers` distinction, cubemap views). Added `textureViewDimension` to `BindGroupLayoutEntry` for configurable texture view dimensions in bind group layout.
+- [x] **Vulkan Bind Group Fix**: Fixed descriptor type selection (StorageTexture → `eStorageImage` + `GENERAL` layout). Layout entries now stored in `VulkanRHIBindGroupLayout` for correct descriptor creation.
+- [x] **HDR Loader**: Added `ResourceManager::loadHDRTexture()` using `stbi_loadf()` with `RGBA32Float` format for equirectangular HDR maps.
+- [x] **IBLManager**: New `IBLManager` class managing 4 GPU textures:
+  - Environment Cubemap (512x512x6, RGBA16Float)
+  - Irradiance Map (32x32x6, RGBA16Float) — hemisphere convolution
+  - Prefiltered Environment Map (128x128x6, RGBA16Float, 5 mips) — roughness-based specular
+  - BRDF LUT (512x512, RG16Float) — split-sum BRDF integration
+- [x] **Compute Shaders** (4 new shaders, GLSL + WGSL):
+  - `brdf_lut.comp`: Hammersley sequence + GGX importance sampling for BRDF integration
+  - `equirect_to_cubemap.comp`: Equirectangular → cubemap face mapping
+  - `irradiance_map.comp`: Cosine-weighted hemisphere convolution
+  - `prefilter_env.comp`: Per-mip roughness-based GGX prefiltering (5 dispatches)
+- [x] **Pipeline Integration**: Expanded building bind group (bindings 3-6: irradiance cubemap, prefiltered cubemap, BRDF LUT, IBL sampler). First use of RHI compute pipeline in production.
+- [x] **Shader Integration**: IBL ambient replaces flat ambient in both GLSL and WGSL: `fresnelSchlickRoughness` for IBL Fresnel, irradiance diffuse, prefiltered specular + BRDF LUT split-sum. Smart fallback: detects empty cubemap and uses flat ambient when no HDR env is loaded.
+- [x] **API**: Added `Renderer::loadEnvironmentMap(path)` for runtime HDR loading with full IBL pipeline re-initialization.
 
 ---
 
@@ -126,4 +134,4 @@
 ---
 
 *Created: 2026-02-05*
-*Last Updated: 2026-02-05*
+*Last Updated: 2026-02-06*

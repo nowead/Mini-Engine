@@ -15,6 +15,7 @@ namespace Vulkan {
 VulkanRHIBindGroupLayout::VulkanRHIBindGroupLayout(VulkanRHIDevice* device, const BindGroupLayoutDesc& desc)
     : m_device(device)
     , m_layout(nullptr)
+    , m_entries(desc.entries)
 {
     std::vector<vk::DescriptorSetLayoutBinding> bindings;
     bindings.reserve(desc.entries.size());
@@ -89,6 +90,7 @@ VulkanRHIBindGroupLayout::VulkanRHIBindGroupLayout(VulkanRHIBindGroupLayout&& ot
     : m_device(other.m_device)
     , m_layout(std::move(other.m_layout))
     , m_poolSizes(std::move(other.m_poolSizes))
+    , m_entries(std::move(other.m_entries))
 {
 }
 
@@ -97,6 +99,7 @@ VulkanRHIBindGroupLayout& VulkanRHIBindGroupLayout::operator=(VulkanRHIBindGroup
         m_device = other.m_device;
         m_layout = std::move(other.m_layout);
         m_poolSizes = std::move(other.m_poolSizes);
+        m_entries = std::move(other.m_entries);
     }
     return *this;
 }
@@ -136,12 +139,26 @@ VulkanRHIBindGroup::VulkanRHIBindGroup(VulkanRHIDevice* device, const BindGroupD
     imageInfos.reserve(desc.entries.size());
     writes.reserve(desc.entries.size());
 
+    // Build a map of binding index -> layout entry type for correct descriptor types
+    const auto& layoutEntries = vulkanLayout->getEntries();
+    std::map<uint32_t, rhi::BindingType> bindingTypes;
+    for (const auto& le : layoutEntries) {
+        bindingTypes[le.binding] = le.type;
+    }
+
     for (const auto& entry : desc.entries) {
         vk::WriteDescriptorSet write;
         write.dstSet = *m_descriptorSet;
         write.dstBinding = entry.binding;
         write.dstArrayElement = 0;
         write.descriptorCount = 1;
+
+        // Look up the binding type from layout
+        auto bindingType = rhi::BindingType::UniformBuffer;
+        auto it = bindingTypes.find(entry.binding);
+        if (it != bindingTypes.end()) {
+            bindingType = it->second;
+        }
 
         if (entry.buffer) {
             // Buffer binding
@@ -153,7 +170,15 @@ VulkanRHIBindGroup::VulkanRHIBindGroup(VulkanRHIDevice* device, const BindGroupD
             bufferInfo.range = entry.bufferSize > 0 ? entry.bufferSize : VK_WHOLE_SIZE;
             bufferInfos.push_back(bufferInfo);
 
-            write.descriptorType = vk::DescriptorType::eUniformBuffer;  // Will be set correctly below
+            // Set correct buffer descriptor type
+            switch (bindingType) {
+                case rhi::BindingType::StorageBuffer:
+                    write.descriptorType = vk::DescriptorType::eStorageBuffer;
+                    break;
+                default:
+                    write.descriptorType = vk::DescriptorType::eUniformBuffer;
+                    break;
+            }
             write.pBufferInfo = &bufferInfos.back();
         }
         else if (entry.sampler) {
@@ -173,10 +198,17 @@ VulkanRHIBindGroup::VulkanRHIBindGroup(VulkanRHIDevice* device, const BindGroupD
 
             vk::DescriptorImageInfo imageInfo;
             imageInfo.imageView = vulkanTextureView->getVkImageView();
-            imageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;  // TODO: Handle storage images
-            imageInfos.push_back(imageInfo);
 
-            write.descriptorType = vk::DescriptorType::eSampledImage;
+            // Set correct image layout and descriptor type based on binding type
+            if (bindingType == rhi::BindingType::StorageTexture) {
+                imageInfo.imageLayout = vk::ImageLayout::eGeneral;
+                write.descriptorType = vk::DescriptorType::eStorageImage;
+            } else {
+                imageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+                write.descriptorType = vk::DescriptorType::eSampledImage;
+            }
+
+            imageInfos.push_back(imageInfo);
             write.pImageInfo = &imageInfos.back();
         }
         else {

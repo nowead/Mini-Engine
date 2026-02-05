@@ -53,13 +53,13 @@ WebGPURHIBindGroupLayout::WebGPURHIBindGroupLayout(WebGPURHIDevice* device,
 
             case rhi::BindingType::SampledTexture:
                 wgpuEntry.texture.sampleType = WGPUTextureSampleType_Float;
-                wgpuEntry.texture.viewDimension = WGPUTextureViewDimension_2D;
+                wgpuEntry.texture.viewDimension = ToWGPUTextureViewDimension(entry.textureViewDimension);
                 wgpuEntry.texture.multisampled = false;
                 break;
 
             case rhi::BindingType::DepthTexture:
                 wgpuEntry.texture.sampleType = WGPUTextureSampleType_Depth;
-                wgpuEntry.texture.viewDimension = WGPUTextureViewDimension_2D;
+                wgpuEntry.texture.viewDimension = ToWGPUTextureViewDimension(entry.textureViewDimension);
                 wgpuEntry.texture.multisampled = false;
                 break;
 
@@ -72,7 +72,7 @@ WebGPURHIBindGroupLayout::WebGPURHIBindGroupLayout(WebGPURHIDevice* device,
                     : WGPUStorageTextureAccess_WriteOnly;
 #endif
                 wgpuEntry.storageTexture.format = ToWGPUFormat(entry.storageTextureFormat);
-                wgpuEntry.storageTexture.viewDimension = WGPUTextureViewDimension_2D;
+                wgpuEntry.storageTexture.viewDimension = ToWGPUTextureViewDimension(entry.textureViewDimension);
                 break;
         }
 
