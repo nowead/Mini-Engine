@@ -9,6 +9,21 @@
     #include <webgpu/webgpu_cpp.h>
 #endif
 
+// =============================================================================
+// Emscripten Version Comparison Macros
+// =============================================================================
+// WebGPU API changed between Emscripten 3.1.50 and 3.1.60.
+// These macros simplify conditional compilation for API compatibility.
+#ifdef __EMSCRIPTEN__
+    #define EMSCRIPTEN_VERSION_LESS_THAN(major, minor, tiny) \
+        ((__EMSCRIPTEN_major__ < (major)) || \
+         ((__EMSCRIPTEN_major__ == (major)) && (__EMSCRIPTEN_minor__ < (minor))) || \
+         ((__EMSCRIPTEN_major__ == (major)) && (__EMSCRIPTEN_minor__ == (minor)) && (__EMSCRIPTEN_tiny__ < (tiny))))
+
+    #define EMSCRIPTEN_VERSION_AT_LEAST(major, minor, tiny) \
+        (!EMSCRIPTEN_VERSION_LESS_THAN(major, minor, tiny))
+#endif
+
 #include <stdexcept>
 #include <iostream>
 

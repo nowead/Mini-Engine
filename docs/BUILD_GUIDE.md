@@ -344,12 +344,65 @@ Quick reference for Makefile targets:
 
 ---
 
+## WebAssembly (WASM) Build
+
+Mini-Engine supports WebGPU/WASM builds via Emscripten. The WASM build uses the WebGPU backend instead of Vulkan.
+
+### Prerequisites
+
+1. **Emscripten SDK** (version **3.1.50** required)
+   - Newer versions (3.1.60+) have a `wasm-ld` bug on macOS arm64 causing `section too large` linker errors
+   - Emscripten 5.0.0+ deprecated `USE_WEBGPU=1` and is not compatible
+
+```bash
+# Install Emscripten SDK
+git clone https://github.com/emscripten-core/emsdk.git ~/emsdk
+cd ~/emsdk
+./emsdk install 3.1.50
+./emsdk activate 3.1.50
+source ./emsdk_env.sh
+```
+
+### Building for WASM
+
+```bash
+# Using Makefile
+make build-wasm
+
+# Or using CMake directly
+mkdir -p build_wasm && cd build_wasm
+emcmake cmake .. -DCMAKE_TOOLCHAIN_FILE=../cmake/EmscriptenToolchain.cmake
+emmake make -j$(nproc)
+```
+
+### Running the WASM Build
+
+```bash
+# Start a local HTTP server (WebGPU requires HTTPS or localhost)
+make serve-instancing
+# Open http://localhost:8000/instancing_test.html in Chrome 113+
+```
+
+### Platform Notes
+
+| Platform | Emscripten Version | Status |
+|----------|-------------------|--------|
+| Linux x86_64 | 3.1.50 - 3.1.74 | Working |
+| macOS arm64 (Apple Silicon) | **3.1.50 only** | Working |
+| macOS arm64 | 3.1.60+ | `section too large` linker bug |
+| Any | 5.0.0+ | `USE_WEBGPU=1` deprecated |
+
+For WASM build issues, see [WASM Troubleshooting Guide](WASM_TROUBLESHOOTING.md).
+
+---
+
 ## Next Steps
 
 - **Build succeeded?** See [README.md](../README.md) for usage
 - **Build failed?** Check [Troubleshooting Guide](TROUBLESHOOTING.md)
+- **WASM build issues?** Check [WASM Troubleshooting Guide](WASM_TROUBLESHOOTING.md)
 - **Want to modify code?** See [Refactoring Documentation](refactoring/monolith-to-layered/)
 
 ---
 
-*Last Updated: 2025-11-17*
+*Last Updated: 2026-02-03*

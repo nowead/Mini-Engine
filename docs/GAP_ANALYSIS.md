@@ -1,8 +1,8 @@
 # Gap Analysis: SRS Requirements vs Mini-Engine Implementation
 
-**Document Version**: 3.3
-**Last Updated**: 2026-01-26
-**Status**: Phase 3 Complete - Visual Effects, Lighting & Shadows Done
+**Document Version**: 3.4
+**Last Updated**: 2026-02-03
+**Status**: Phase 3 Complete - Visual Effects, Lighting & Shadows Done + WASM Cross-Platform Fix
 
 **Recent Progress**:
 
@@ -16,7 +16,8 @@
 - ✅ Camera simplified (Perspective only, Isometric removed - 2026-01-21)
 - ✅ Skybox rendering (Procedural sky gradient, sun disk - 2026-01-21)
 - ✅ Directional Lighting (Blinn-Phong, ImGui controls, presets - 2026-01-21)
-- ✅ **Shadow Mapping** (Directional light shadows, PCF soft shadows, Vulkan depth range fix - 2026-01-26)
+- ✅ Shadow Mapping (Directional light shadows, PCF soft shadows, Vulkan depth range fix - 2026-01-26)
+- ✅ **WASM macOS arm64 Cross-Platform Fix** (Emscripten 3.1.50, WebGPU API compat, emar/emranlib - 2026-02-03)
 
 ---
 
@@ -78,7 +79,7 @@ This document analyzes the gap between the [Software Requirements Specification 
 | RHI Extensibility | Easy backend extension | Complete | Vulkan/WebGPU demonstrated |
 | Browser Support | WebGPU-compatible browsers | Complete | Chrome 113+, Edge 113+ |
 | Mobile Support | Explicitly not supported | Aligned | Consistent with SRS |
-| WASM Core | Emscripten C++20 to WASM | Complete | 185KB WASM build |
+| WASM Core | Emscripten C++20 to WASM | Complete | Emscripten 3.1.50, macOS arm64 compatible |
 
 **Summary**: Infrastructure requirements fully met.
 
@@ -527,6 +528,8 @@ class BatchRenderer {
 | No compute pipeline | ✅ Resolved | N/A | Compute shader support complete |
 | Platform-specific code in Renderer | ✅ Resolved | N/A | Complete RHI abstraction achieved |
 | No particle system | ✅ Resolved | N/A | Particle system complete |
+| WASM macOS arm64 linker error | ✅ Resolved | N/A | Pinned to Emscripten 3.1.50 + emar/emranlib |
+| Emscripten version pinned (3.1.50) | ⚠️ Active | Low | WebGPU API compat macros in WebGPUCommon.hpp; adjust conditions on future upgrades |
 
 ---
 
@@ -702,6 +705,6 @@ class BatchRenderer {
 ---
 
 **Document Prepared By**: Claude Sonnet 4.5 / Claude Opus 4.5
-**Review Status**: Updated with Shadow Mapping Complete
-**Last Reviewed**: 2026-01-26
+**Review Status**: Updated with WASM cross-platform fix and technical debt cleanup
+**Last Reviewed**: 2026-02-03
 **Next Update**: After Phase 4 (Network Integration)

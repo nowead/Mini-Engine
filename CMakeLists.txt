@@ -23,8 +23,9 @@ if(EMSCRIPTEN)
     set(RHI_BACKEND_WEBGPU ON CACHE BOOL "" FORCE)
     set(RHI_BACKEND_VULKAN OFF CACHE BOOL "" FORCE)
 
-    # Global WASM optimization flags (prevents wasm-ld "section too large" error)
-    # Applied before FetchContent to affect all dependencies
+    # Global WASM optimization flags (prevents wasm-ld "section too large" error on macOS arm64)
+    # -ffunction-sections/-fdata-sections: Applied globally to affect all targets including FetchContent deps.
+    # Per-target compile_options intentionally repeat these flags for explicit control across build types.
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ffunction-sections -fdata-sections")
     set(CMAKE_CXX_FLAGS_RELEASE "-Oz -g0 -DNDEBUG -ffunction-sections -fdata-sections")
     set(CMAKE_CXX_FLAGS_DEBUG "-O1 -g1 -ffunction-sections -fdata-sections")

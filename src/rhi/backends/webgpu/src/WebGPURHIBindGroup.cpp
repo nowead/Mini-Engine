@@ -64,8 +64,7 @@ WebGPURHIBindGroupLayout::WebGPURHIBindGroupLayout(WebGPURHIDevice* device,
                 break;
 
             case rhi::BindingType::StorageTexture:
-                // Note: ReadOnly storage texture access added in newer WebGPU API
-#if defined(__EMSCRIPTEN__) && (__EMSCRIPTEN_major__ < 3 || (__EMSCRIPTEN_major__ == 3 && __EMSCRIPTEN_minor__ < 1) || (__EMSCRIPTEN_major__ == 3 && __EMSCRIPTEN_minor__ == 1 && __EMSCRIPTEN_tiny__ < 60))
+#if defined(__EMSCRIPTEN__) && EMSCRIPTEN_VERSION_LESS_THAN(3, 1, 60)
                 wgpuEntry.storageTexture.access = WGPUStorageTextureAccess_WriteOnly;
 #else
                 wgpuEntry.storageTexture.access = entry.storageTextureReadOnly

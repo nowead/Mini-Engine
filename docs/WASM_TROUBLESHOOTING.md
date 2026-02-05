@@ -9,6 +9,10 @@
 - [4. 텍스처 포맷 불일치](#4-텍스처-포맷-불일치)
 - [5. 낮은 해상도 렌더링](#5-낮은-해상도-렌더링)
 - [6. WebGPU 디바이스 초기화 문제](#6-webgpu-디바이스-초기화-문제)
+- [7. wasm-ld "section too large" 링커 오류](#7-wasm-ld-section-too-large-링커-오류)
+- [8. asyncifyStubs is not defined 런타임 오류](#8-asyncifystubs-is-not-defined-런타임-오류)
+- [9. undefined symbol: RHIFactory 링커 경고 (macOS)](#9-undefined-symbol-rhifactory-링커-경고-macos)
+- [10. Emscripten 버전별 WebGPU API 호환성](#10-emscripten-버전별-webgpu-api-호환성)
 
 ---
 
@@ -360,5 +364,182 @@ http://localhost:8000/instancing_test.html
 
 ---
 
-**최종 업데이트**: 2026-01-02
-**테스트 환경**: macOS (Apple Silicon), Chrome 131+
+---
+
+## 7. wasm-ld "section too large" 링커 오류
+
+### 증상
+```
+wasm-ld: error: tiny_obj_loader.cc.obj: section too large
+wasm-ld: error: RHIFactory.cpp.obj: section too large
+```
+
+### 원인
+Emscripten 3.1.60 이상의 `wasm-ld` 링커에 macOS arm64(Apple Silicon) 환경에서 발생하는 버그.
+Linux x86_64에서는 같은 버전에서도 문제가 없으며, **동일한 코드와 커밋이 Linux에서는 빌드되고 macOS에서는 실패하는** 플랫폼 고유 문제.
+
+### 해결 방법
+
+**Emscripten 3.1.50으로 다운그레이드:**
+```bash
+cd ~/emsdk
+./emsdk install 3.1.50
+./emsdk activate 3.1.50
+source ./emsdk_env.sh
+```
+
+**추가 최적화 (CMakeLists.txt에 이미 적용됨):**
+```cmake
+# 전역 WASM 최적화 플래그 (section too large 방지)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ffunction-sections -fdata-sections")
+set(CMAKE_CXX_FLAGS_RELEASE "-Oz -g0 -DNDEBUG -ffunction-sections -fdata-sections")
+
+# rhi_factory 타겟별 최적화
+if(EMSCRIPTEN)
+    target_compile_options(rhi_factory PRIVATE -Oz -g0 -ffunction-sections -fdata-sections)
+endif()
+```
+
+### 버전 호환성 표
+
+| Emscripten 버전 | macOS arm64 | Linux x86_64 | 비고 |
+|----------------|-------------|--------------|------|
+| 3.1.50 | ✅ 정상 | ✅ 정상 | **권장 버전** |
+| 3.1.60 | ❌ section too large | ✅ 정상 | wasm-ld 버그 |
+| 3.1.74 | ❌ section too large | ✅ 정상 | wasm-ld 버그 |
+| 5.0.0+ | ❌ USE_WEBGPU deprecated | ❌ USE_WEBGPU deprecated | API 변경 |
+
+**관련 파일**:
+- [CMakeLists.txt:26-31](../CMakeLists.txt)
+- [src/rhi/CMakeLists.txt:65-67](../src/rhi/CMakeLists.txt)
+
+---
+
+## 8. asyncifyStubs is not defined 런타임 오류
+
+### 증상
+브라우저 콘솔에서:
+```
+ReferenceError: asyncifyStubs is not defined
+```
+
+### 원인
+ASYNCIFY가 올바르게 설정되지 않았거나 `ASYNCIFY_STACK_SIZE`가 누락됨.
+Emscripten의 WebGPU 비동기 작업(어댑터 요청, 디바이스 요청 등)에 ASYNCIFY가 필요.
+
+### 해결 방법
+
+**CMakeLists.txt 링크 옵션에 추가:**
+```cmake
+target_link_options(${TARGET} PRIVATE
+    "SHELL:-s ASYNCIFY=1"
+    "SHELL:-s ASYNCIFY_STACK_SIZE=16384"
+)
+```
+
+> **주의**: `-sASYNCIFY`는 **링커 전용** 플래그. `target_compile_options`에 추가하면 안 됨.
+
+**관련 파일**:
+- [CMakeLists.txt:430-431](../CMakeLists.txt) (MiniEngine)
+- [CMakeLists.txt:558-559](../CMakeLists.txt) (instancing_test)
+
+---
+
+## 9. undefined symbol: RHIFactory 링커 경고 (macOS)
+
+### 증상
+```
+wasm-ld: warning: undefined symbol: rhi::RHIFactory::createDevice(...)
+wasm-ld: warning: undefined symbol: rhi::RHIFactory::getDefaultBackend()
+```
+
+### 원인
+macOS에서 기본 시스템 `ar`/`ranlib`이 WASM 아카이브(.a) 파일의 인덱스를 올바르게 생성하지 못함.
+이로 인해 `wasm-ld`가 아카이브 내 심볼을 찾지 못함.
+
+### 해결 방법
+
+**cmake/EmscriptenToolchain.cmake에 emar/emranlib 설정:**
+```cmake
+set(CMAKE_AR emar CACHE FILEPATH "Emscripten ar")
+set(CMAKE_RANLIB emranlib CACHE FILEPATH "Emscripten ranlib")
+```
+
+이 설정으로 Emscripten 전용 아카이브 도구가 사용되어 WASM 호환 아카이브 인덱스가 생성됨.
+
+**관련 파일**:
+- [cmake/EmscriptenToolchain.cmake:6-7](../cmake/EmscriptenToolchain.cmake)
+
+---
+
+## 10. Emscripten 버전별 WebGPU API 호환성
+
+### 증상
+Emscripten 3.1.50으로 다운그레이드 후 다양한 컴파일 오류 발생:
+```
+error: no member named 'requiredFeatureCount' in 'WGPUDeviceDescriptor'
+error: no matching function for call to 'wgpuQueueOnSubmittedWorkDone'
+error: no member named 'depthSlice' in 'WGPURenderPassColorAttachment'
+error: use of undeclared identifier 'WGPUStorageTextureAccess_ReadOnly'
+```
+
+### 원인
+WebGPU API가 Emscripten 3.1.50과 3.1.60 사이에서 변경됨:
+
+| API 변경 사항 | 3.1.50 (이전) | 3.1.60+ (이후) |
+|-------------|-------------|--------------|
+| Device features count | `requiredFeaturesCount` | `requiredFeatureCount` |
+| Queue work done 콜백 | 4인자 (signalValue 포함) | 3인자 |
+| Render pass depthSlice | 필드 없음 | `depthSlice` 필드 추가 |
+| Storage texture access | `WriteOnly`만 지원 | `ReadOnly` 추가 |
+
+### 해결 방법
+
+`WebGPUCommon.hpp`에 버전 비교 매크로를 정의하고 조건부 컴파일 사용:
+
+```cpp
+// WebGPUCommon.hpp에 정의
+#ifdef __EMSCRIPTEN__
+#define EMSCRIPTEN_VERSION_LESS_THAN(major, minor, tiny) \
+    ((__EMSCRIPTEN_major__ < (major)) || \
+     ((__EMSCRIPTEN_major__ == (major)) && (__EMSCRIPTEN_minor__ < (minor))) || \
+     ((__EMSCRIPTEN_major__ == (major)) && (__EMSCRIPTEN_minor__ == (minor)) && (__EMSCRIPTEN_tiny__ < (tiny))))
+#define EMSCRIPTEN_VERSION_AT_LEAST(major, minor, tiny) \
+    (!EMSCRIPTEN_VERSION_LESS_THAN(major, minor, tiny))
+#endif
+```
+
+사용 예:
+```cpp
+#if defined(__EMSCRIPTEN__) && EMSCRIPTEN_VERSION_LESS_THAN(3, 1, 60)
+    deviceDesc.requiredFeaturesCount = 0;  // 이전 API
+#else
+    deviceDesc.requiredFeatureCount = 0;   // 새 API
+#endif
+```
+
+**관련 파일**:
+- [src/rhi/backends/webgpu/include/rhi/webgpu/WebGPUCommon.hpp](../src/rhi/backends/webgpu/include/rhi/webgpu/WebGPUCommon.hpp)
+- [src/rhi/backends/webgpu/src/WebGPURHIDevice.cpp:232](../src/rhi/backends/webgpu/src/WebGPURHIDevice.cpp)
+- [src/rhi/backends/webgpu/src/WebGPURHISync.cpp:53](../src/rhi/backends/webgpu/src/WebGPURHISync.cpp)
+- [src/rhi/backends/webgpu/src/WebGPURHICommandEncoder.cpp:241](../src/rhi/backends/webgpu/src/WebGPURHICommandEncoder.cpp)
+- [src/rhi/backends/webgpu/src/WebGPURHIBindGroup.cpp:68](../src/rhi/backends/webgpu/src/WebGPURHIBindGroup.cpp)
+
+---
+
+## 주요 차이점: Native vs WebGPU (업데이트)
+
+| 항목 | Native (Vulkan) | WebGPU (Emscripten 3.1.50) |
+|------|----------------|---------------------------|
+| **메인 루프** | `while` 동기식 루프 | `emscripten_set_main_loop` (requestAnimationFrame) |
+| **Present** | `swapchain->present()` 명시 호출 | 자동 (호출 불필요) |
+| **스왑체인 포맷** | `BGRA8UnormSrgb` 지원 | `BGRA8Unorm`만 지원 |
+| **Instance 생성** | Descriptor 사용 | `nullptr` 전달 |
+| **Device Limits** | `wgpuDeviceGetLimits` 쿼리 | 하드코딩된 최소 보장값 사용 |
+| **DepthSlice** | 자동 처리 | 필드 없음 (3.1.50), `WGPU_DEPTH_SLICE_UNDEFINED` (3.1.60+) |
+| **셰이더 파일** | 파일시스템 직접 접근 | `--preload-file`로 임베드 필요 |
+| **비동기 처리** | 동기식 또는 Dawn 폴링 | ASYNCIFY 필수 (`-s ASYNCIFY=1`) |
+| **아카이브 도구** | 시스템 `ar` | `emar`/`emranlib` 필수 (macOS) |
+
+**최종 업데이트**: 2026-02-03
+**테스트 환경**: macOS (Apple Silicon), Chrome 131+, Emscripten 3.1.50
