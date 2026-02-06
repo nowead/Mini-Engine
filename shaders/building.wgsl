@@ -44,6 +44,12 @@ struct ObjectBuffer {
 
 @group(1) @binding(0) var<storage, read> objectBuffer: ObjectBuffer;
 
+// Phase 2.2: Visible indices from GPU frustum culling
+struct VisibleIndicesBuffer {
+    indices: array<u32>,
+}
+@group(1) @binding(1) var<storage, read> visibleIndices: VisibleIndicesBuffer;
+
 // Vertex input (per-vertex only)
 struct VertexInput {
     @builtin(instance_index) instanceIndex: u32,
@@ -67,7 +73,9 @@ struct VertexOutput {
 fn vs_main(input: VertexInput) -> VertexOutput {
     var output: VertexOutput;
 
-    let obj = objectBuffer.objects[input.instanceIndex];
+    // Phase 2.2: Indirection through visible indices from frustum culling
+    let actualIndex = visibleIndices.indices[input.instanceIndex];
+    let obj = objectBuffer.objects[actualIndex];
     let worldPos4 = obj.worldMatrix * vec4<f32>(input.position, 1.0);
     let worldPos = worldPos4.xyz;
 

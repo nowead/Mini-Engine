@@ -215,6 +215,24 @@ private:
     std::array<std::unique_ptr<rhi::RHIBindGroup>, MAX_FRAMES_IN_FLIGHT> ssboBindGroups;
     std::array<rhi::RHIBuffer*, MAX_FRAMES_IN_FLIGHT> cachedObjectBuffers = {};
 
+    // Phase 2.2: GPU Frustum Culling resources
+    std::unique_ptr<rhi::RHIShader> cullComputeShader;
+    std::unique_ptr<rhi::RHIBindGroupLayout> cullBindGroupLayout;
+    std::unique_ptr<rhi::RHIPipelineLayout> cullPipelineLayout;
+    std::unique_ptr<rhi::RHIComputePipeline> cullPipeline;
+    std::array<std::unique_ptr<rhi::RHIBuffer>, MAX_FRAMES_IN_FLIGHT> cullUniformBuffers;
+    std::array<std::unique_ptr<rhi::RHIBuffer>, MAX_FRAMES_IN_FLIGHT> indirectDrawBuffers;
+    std::array<std::unique_ptr<rhi::RHIBuffer>, MAX_FRAMES_IN_FLIGHT> visibleIndicesBuffers;
+    std::array<std::unique_ptr<rhi::RHIBindGroup>, MAX_FRAMES_IN_FLIGHT> cullBindGroups;
+    static constexpr uint32_t MAX_CULL_OBJECTS = 4096;
+
+    struct alignas(16) CullUBO {
+        glm::vec4 frustumPlanes[6];
+        uint32_t objectCount;
+        uint32_t indexCount;
+        uint32_t pad[2];
+    };
+
     // RHI Vertex/Index Buffers (Phase 4.5)
     std::unique_ptr<rhi::RHIBuffer> rhiVertexBuffer;
     std::unique_ptr<rhi::RHIBuffer> rhiIndexBuffer;
@@ -265,6 +283,10 @@ private:
     void createSkyboxRenderer();    // Phase 3.3: Skybox rendering
     void createShadowRenderer();    // Phase 3.3: Shadow mapping
     void createIBL();               // Phase 1.2: IBL initialization
+    void createCullingPipeline();   // Phase 2.2: GPU frustum culling
+    void performFrustumCulling(rhi::RHICommandEncoder* encoder, uint32_t frameIndex,
+                               uint32_t objectCount, uint32_t indexCount);
+    void extractFrustumPlanes(const glm::mat4& vp, glm::vec4 planes[6]);
 
     // RHI command recording (Phase 4.2)
     void updateRHIUniformBuffer(uint32_t currentImage);

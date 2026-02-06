@@ -36,6 +36,11 @@ layout(std430, set = 1, binding = 0) readonly buffer ObjectBuffer {
     ObjectData objects[];
 } objectBuffer;
 
+// Phase 2.2: Visible indices from GPU frustum culling
+layout(std430, set = 1, binding = 1) readonly buffer VisibleIndicesBuffer {
+    uint indices[];
+} visibleIndices;
+
 // Outputs to fragment shader
 layout(location = 0) out vec3 fragColor;
 layout(location = 1) out vec3 fragNormal;
@@ -46,7 +51,9 @@ layout(location = 5) out float fragRoughness;
 layout(location = 6) out float fragAO;
 
 void main() {
-    ObjectData obj = objectBuffer.objects[gl_InstanceIndex];
+    // Phase 2.2: Indirection through visible indices from frustum culling
+    uint actualIndex = visibleIndices.indices[gl_InstanceIndex];
+    ObjectData obj = objectBuffer.objects[actualIndex];
 
     vec4 worldPos4 = obj.worldMatrix * vec4(inPosition, 1.0);
     vec3 worldPos = worldPos4.xyz;

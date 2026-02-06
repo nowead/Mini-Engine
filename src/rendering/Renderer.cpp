@@ -52,6 +52,9 @@ Renderer::Renderer(GLFWwindow* window,
     // Always create building pipeline for game world rendering
     createBuildingPipeline();
 
+    // Phase 2.2: Create GPU frustum culling pipeline
+    createCullingPipeline();
+
     // Create particle renderer
     createParticleRenderer();
 
@@ -610,14 +613,23 @@ void Renderer::createBuildingPipeline() {
         buildingBindGroups.push_back(nullptr);
     }
 
-    // Phase 2.1: Create SSBO bind group layout (set 1) for per-object data
+    // Phase 2.1+2.2: Create SSBO bind group layout (set 1) for per-object data + visible indices
     {
         rhi::BindGroupLayoutDesc ssboLayoutDesc;
+
         rhi::BindGroupLayoutEntry ssboEntry;
         ssboEntry.binding = 0;
         ssboEntry.visibility = rhi::ShaderStage::Vertex;
         ssboEntry.type = rhi::BindingType::StorageBuffer;
         ssboLayoutDesc.entries.push_back(ssboEntry);
+
+        // Phase 2.2: Visible indices buffer for frustum culling indirection
+        rhi::BindGroupLayoutEntry visibleIndicesEntry;
+        visibleIndicesEntry.binding = 1;
+        visibleIndicesEntry.visibility = rhi::ShaderStage::Vertex;
+        visibleIndicesEntry.type = rhi::BindingType::StorageBuffer;
+        ssboLayoutDesc.entries.push_back(visibleIndicesEntry);
+
         ssboLayoutDesc.label = "SSBO Bind Group Layout";
         ssboBindGroupLayout = rhiBridge->getDevice()->createBindGroupLayout(ssboLayoutDesc);
 
@@ -942,6 +954,328 @@ bool Renderer::loadEnvironmentMap(const std::string& hdrPath) {
 }
 
 // ============================================================================
+// Phase 2.2: GPU Frustum Culling Pipeline
+// ============================================================================
+
+void Renderer::createCullingPipeline() {
+    auto* device = rhiBridge->getDevice();
+
+    // Load compute shader
+#ifdef __EMSCRIPTEN__
+    std::string path = "shaders/frustum_cull.comp.wgsl";
+    auto codeRaw = FileUtils::readFile(path);
+    if (codeRaw.empty()) {
+        LOG_ERROR("Renderer") << "Failed to load " << path;
+        return;
+    }
+    std::vector<uint8_t> code(codeRaw.begin(), codeRaw.end());
+    rhi::ShaderSource source(rhi::ShaderLanguage::WGSL, code, rhi::ShaderStage::Compute, "main");
+#else
+    std::string path = "shaders/frustum_cull.comp.spv";
+    auto codeRaw = FileUtils::readFile(path);
+    if (codeRaw.empty()) {
+        LOG_ERROR("Renderer") << "Failed to load " << path;
+        return;
+    }
+    std::vector<uint8_t> code(codeRaw.begin(), codeRaw.end());
+    rhi::ShaderSource source(rhi::ShaderLanguage::SPIRV, code, rhi::ShaderStage::Compute, "main");
+#endif
+
+    rhi::ShaderDesc shaderDesc(source, "frustum_cull_compute");
+    cullComputeShader = device->createShader(shaderDesc);
+    if (!cullComputeShader) {
+        LOG_ERROR("Renderer") << "Failed to create frustum cull compute shader";
+        return;
+    }
+
+    // Create cull bind group layout (4 entries, all Compute visibility)
+    rhi::BindGroupLayoutDesc cullLayoutDesc;
+
+    // Binding 0: CullUBO (uniform)
+    rhi::BindGroupLayoutEntry cullUboEntry;
+    cullUboEntry.binding = 0;
+    cullUboEntry.visibility = rhi::ShaderStage::Compute;
+    cullUboEntry.type = rhi::BindingType::UniformBuffer;
+    cullLayoutDesc.entries.push_back(cullUboEntry);
+
+    // Binding 1: ObjectData[] (storage, read)
+    rhi::BindGroupLayoutEntry objEntry;
+    objEntry.binding = 1;
+    objEntry.visibility = rhi::ShaderStage::Compute;
+    objEntry.type = rhi::BindingType::StorageBuffer;
+    cullLayoutDesc.entries.push_back(objEntry);
+
+    // Binding 2: IndirectDrawCommand (storage, read_write)
+    rhi::BindGroupLayoutEntry indirectEntry;
+    indirectEntry.binding = 2;
+    indirectEntry.visibility = rhi::ShaderStage::Compute;
+    indirectEntry.type = rhi::BindingType::StorageBuffer;
+    cullLayoutDesc.entries.push_back(indirectEntry);
+
+    // Binding 3: VisibleIndices[] (storage, write)
+    rhi::BindGroupLayoutEntry visIndicesEntry;
+    visIndicesEntry.binding = 3;
+    visIndicesEntry.visibility = rhi::ShaderStage::Compute;
+    visIndicesEntry.type = rhi::BindingType::StorageBuffer;
+    cullLayoutDesc.entries.push_back(visIndicesEntry);
+
+    cullLayoutDesc.label = "Cull Bind Group Layout";
+    cullBindGroupLayout = device->createBindGroupLayout(cullLayoutDesc);
+    if (!cullBindGroupLayout) {
+        LOG_ERROR("Renderer") << "Failed to create cull bind group layout";
+        return;
+    }
+
+    // Create pipeline layout
+    rhi::PipelineLayoutDesc plDesc;
+    plDesc.bindGroupLayouts = {cullBindGroupLayout.get()};
+    cullPipelineLayout = device->createPipelineLayout(plDesc);
+    if (!cullPipelineLayout) {
+        LOG_ERROR("Renderer") << "Failed to create cull pipeline layout";
+        return;
+    }
+
+    // Create compute pipeline
+    rhi::ComputePipelineDesc cpDesc(cullComputeShader.get(), cullPipelineLayout.get());
+    cpDesc.label = "Frustum_Cull_Pipeline";
+    cullPipeline = device->createComputePipeline(cpDesc);
+    if (!cullPipeline) {
+        LOG_ERROR("Renderer") << "Failed to create frustum cull compute pipeline";
+        return;
+    }
+
+    // Create per-frame buffers
+    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        // CullUBO: 112 bytes (6 * vec4 + objectCount + indexCount + pad)
+        rhi::BufferDesc uboDesc;
+        uboDesc.size = sizeof(CullUBO);
+        uboDesc.usage = rhi::BufferUsage::Uniform | rhi::BufferUsage::MapWrite;
+        uboDesc.label = "Cull UBO";
+        cullUniformBuffers[i] = device->createBuffer(uboDesc);
+
+        // Indirect draw buffer: 20 bytes (DrawIndexedIndirectCommand)
+        rhi::BufferDesc indirectDesc;
+        indirectDesc.size = 20;  // 5 * uint32_t
+        indirectDesc.usage = rhi::BufferUsage::Storage | rhi::BufferUsage::Indirect | rhi::BufferUsage::MapWrite;
+        indirectDesc.label = "Indirect Draw Buffer";
+        indirectDrawBuffers[i] = device->createBuffer(indirectDesc);
+
+        // Visible indices buffer: 4 bytes per object
+        rhi::BufferDesc visDesc;
+        visDesc.size = sizeof(uint32_t) * MAX_CULL_OBJECTS;
+        visDesc.usage = rhi::BufferUsage::Storage;
+        visDesc.label = "Visible Indices Buffer";
+        visibleIndicesBuffers[i] = device->createBuffer(visDesc);
+    }
+
+    LOG_INFO("Renderer") << "GPU frustum culling pipeline created";
+}
+
+void Renderer::extractFrustumPlanes(const glm::mat4& vp, glm::vec4 planes[6]) {
+    // Griggs-Hartmann frustum plane extraction from VP matrix
+    // GLM is column-major: vp[col][row]
+    // Left
+    planes[0] = glm::vec4(
+        vp[0][3] + vp[0][0],
+        vp[1][3] + vp[1][0],
+        vp[2][3] + vp[2][0],
+        vp[3][3] + vp[3][0]
+    );
+    // Right
+    planes[1] = glm::vec4(
+        vp[0][3] - vp[0][0],
+        vp[1][3] - vp[1][0],
+        vp[2][3] - vp[2][0],
+        vp[3][3] - vp[3][0]
+    );
+    // Bottom
+    planes[2] = glm::vec4(
+        vp[0][3] + vp[0][1],
+        vp[1][3] + vp[1][1],
+        vp[2][3] + vp[2][1],
+        vp[3][3] + vp[3][1]
+    );
+    // Top
+    planes[3] = glm::vec4(
+        vp[0][3] - vp[0][1],
+        vp[1][3] - vp[1][1],
+        vp[2][3] - vp[2][1],
+        vp[3][3] - vp[3][1]
+    );
+    // Near
+    planes[4] = glm::vec4(
+        vp[0][3] + vp[0][2],
+        vp[1][3] + vp[1][2],
+        vp[2][3] + vp[2][2],
+        vp[3][3] + vp[3][2]
+    );
+    // Far
+    planes[5] = glm::vec4(
+        vp[0][3] - vp[0][2],
+        vp[1][3] - vp[1][2],
+        vp[2][3] - vp[2][2],
+        vp[3][3] - vp[3][2]
+    );
+
+    // Normalize each plane
+    for (int i = 0; i < 6; i++) {
+        float len = glm::length(glm::vec3(planes[i]));
+        if (len > 0.0f) {
+            planes[i] /= len;
+        }
+    }
+}
+
+void Renderer::performFrustumCulling(rhi::RHICommandEncoder* encoder, uint32_t frameIndex,
+                                     uint32_t objectCount, uint32_t indexCount) {
+    if (!cullPipeline || objectCount == 0) return;
+
+    auto* objectBuffer = pendingInstancedData->objectBuffer;
+
+    // Step 1: Write CullUBO (frustum planes, objectCount, indexCount)
+    CullUBO cullUbo;
+    glm::mat4 vp = projectionMatrix * viewMatrix;
+    extractFrustumPlanes(vp, cullUbo.frustumPlanes);
+    cullUbo.objectCount = objectCount;
+    cullUbo.indexCount = indexCount;
+    cullUbo.pad[0] = 0;
+    cullUbo.pad[1] = 0;
+    cullUniformBuffers[frameIndex]->write(&cullUbo, sizeof(CullUBO));
+
+    // Step 2: Reset indirect draw buffer (instanceCount = 0, indexCount = mesh indexCount)
+    struct DrawIndexedIndirectCommand {
+        uint32_t indexCount;
+        uint32_t instanceCount;
+        uint32_t firstIndex;
+        int32_t  vertexOffset;
+        uint32_t firstInstance;
+    };
+    DrawIndexedIndirectCommand cmd;
+    cmd.indexCount = indexCount;
+    cmd.instanceCount = 0;  // Will be filled by compute shader
+    cmd.firstIndex = 0;
+    cmd.vertexOffset = 0;
+    cmd.firstInstance = 0;
+    indirectDrawBuffers[frameIndex]->write(&cmd, sizeof(cmd));
+
+#ifndef __EMSCRIPTEN__
+    // Step 3: Vulkan barriers — host writes visible to compute shader
+    auto* vulkanEncoder = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder);
+    if (vulkanEncoder) {
+        auto& cmdBuf = vulkanEncoder->getCommandBuffer();
+
+        // Barrier for CullUBO
+        auto* vulkanCullUbo = dynamic_cast<RHI::Vulkan::VulkanRHIBuffer*>(cullUniformBuffers[frameIndex].get());
+        auto* vulkanIndirect = dynamic_cast<RHI::Vulkan::VulkanRHIBuffer*>(indirectDrawBuffers[frameIndex].get());
+        auto* vulkanObjectBuf = dynamic_cast<RHI::Vulkan::VulkanRHIBuffer*>(objectBuffer);
+
+        std::vector<vk::BufferMemoryBarrier> barriers;
+        if (vulkanCullUbo) {
+            barriers.push_back(vk::BufferMemoryBarrier{
+                .srcAccessMask = vk::AccessFlagBits::eHostWrite,
+                .dstAccessMask = vk::AccessFlagBits::eUniformRead,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .buffer = vulkanCullUbo->getVkBuffer(),
+                .offset = 0,
+                .size = VK_WHOLE_SIZE
+            });
+        }
+        if (vulkanIndirect) {
+            barriers.push_back(vk::BufferMemoryBarrier{
+                .srcAccessMask = vk::AccessFlagBits::eHostWrite,
+                .dstAccessMask = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .buffer = vulkanIndirect->getVkBuffer(),
+                .offset = 0,
+                .size = VK_WHOLE_SIZE
+            });
+        }
+        if (vulkanObjectBuf) {
+            barriers.push_back(vk::BufferMemoryBarrier{
+                .srcAccessMask = vk::AccessFlagBits::eHostWrite,
+                .dstAccessMask = vk::AccessFlagBits::eShaderRead,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .buffer = vulkanObjectBuf->getVkBuffer(),
+                .offset = 0,
+                .size = VK_WHOLE_SIZE
+            });
+        }
+
+        if (!barriers.empty()) {
+            cmdBuf.pipelineBarrier(
+                vk::PipelineStageFlagBits::eHost,
+                vk::PipelineStageFlagBits::eComputeShader,
+                {}, {}, barriers, {}
+            );
+        }
+    }
+#endif
+
+    // Step 4: Create/update cull bind group if objectBuffer changed
+    if (objectBuffer != cachedObjectBuffers[frameIndex] || !cullBindGroups[frameIndex]) {
+        rhi::BindGroupDesc cullBgDesc;
+        cullBgDesc.layout = cullBindGroupLayout.get();
+        cullBgDesc.entries.push_back(rhi::BindGroupEntry::Buffer(0, cullUniformBuffers[frameIndex].get()));
+        cullBgDesc.entries.push_back(rhi::BindGroupEntry::Buffer(1, objectBuffer));
+        cullBgDesc.entries.push_back(rhi::BindGroupEntry::Buffer(2, indirectDrawBuffers[frameIndex].get()));
+        cullBgDesc.entries.push_back(rhi::BindGroupEntry::Buffer(3, visibleIndicesBuffers[frameIndex].get()));
+        cullBgDesc.label = "Cull Bind Group";
+        cullBindGroups[frameIndex] = rhiBridge->getDevice()->createBindGroup(cullBgDesc);
+    }
+
+    // Step 5: Dispatch compute shader
+    auto computePass = encoder->beginComputePass("Frustum_Cull");
+    computePass->setPipeline(cullPipeline.get());
+    computePass->setBindGroup(0, cullBindGroups[frameIndex].get());
+    computePass->dispatch((objectCount + 63) / 64, 1, 1);
+    computePass->end();
+
+#ifndef __EMSCRIPTEN__
+    // Step 6: Post-compute barriers — compute writes visible to vertex shader + indirect draw
+    if (vulkanEncoder) {
+        auto& cmdBuf = vulkanEncoder->getCommandBuffer();
+        auto* vulkanIndirect = dynamic_cast<RHI::Vulkan::VulkanRHIBuffer*>(indirectDrawBuffers[frameIndex].get());
+        auto* vulkanVisibleIndices = dynamic_cast<RHI::Vulkan::VulkanRHIBuffer*>(visibleIndicesBuffers[frameIndex].get());
+
+        std::vector<vk::BufferMemoryBarrier> postBarriers;
+        if (vulkanIndirect) {
+            postBarriers.push_back(vk::BufferMemoryBarrier{
+                .srcAccessMask = vk::AccessFlagBits::eShaderWrite,
+                .dstAccessMask = vk::AccessFlagBits::eIndirectCommandRead,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .buffer = vulkanIndirect->getVkBuffer(),
+                .offset = 0,
+                .size = VK_WHOLE_SIZE
+            });
+        }
+        if (vulkanVisibleIndices) {
+            postBarriers.push_back(vk::BufferMemoryBarrier{
+                .srcAccessMask = vk::AccessFlagBits::eShaderWrite,
+                .dstAccessMask = vk::AccessFlagBits::eShaderRead,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .buffer = vulkanVisibleIndices->getVkBuffer(),
+                .offset = 0,
+                .size = VK_WHOLE_SIZE
+            });
+        }
+
+        if (!postBarriers.empty()) {
+            cmdBuf.pipelineBarrier(
+                vk::PipelineStageFlagBits::eComputeShader,
+                vk::PipelineStageFlagBits::eDrawIndirect | vk::PipelineStageFlagBits::eVertexShader,
+                {}, {}, postBarriers, {}
+            );
+        }
+    }
+#endif
+}
+
+// ============================================================================
 // Phase 8: RHI Uniform Buffer Update
 // ============================================================================
 
@@ -1031,113 +1365,49 @@ void Renderer::drawFrame() {
         return;
     }
 
-    // Step 5: Shadow pass (render scene from light's perspective)
-    if (shadowRenderer && shadowRenderer->isInitialized() && pendingInstancedData && pendingInstancedData->instanceCount > 1) {
+    // Step 5: SSBO setup + frustum culling + shadow pass
+    if (pendingInstancedData && pendingInstancedData->instanceCount > 0) {
         auto* mesh = pendingInstancedData->mesh;
         auto* objectBuffer = pendingInstancedData->objectBuffer;
 
         if (mesh && mesh->hasData() && objectBuffer) {
-            // Phase 2.1: Create/update SSBO bind group if buffer changed
+            // Phase 2.1+2.2: Create/update SSBO bind group if buffer changed
             if (objectBuffer != cachedObjectBuffers[frameIndex]) {
                 rhi::BindGroupDesc ssboDesc;
                 ssboDesc.layout = ssboBindGroupLayout.get();
                 ssboDesc.entries.push_back(rhi::BindGroupEntry::Buffer(0, objectBuffer));
+                ssboDesc.entries.push_back(rhi::BindGroupEntry::Buffer(1, visibleIndicesBuffers[frameIndex].get()));
                 ssboDesc.label = "SSBO Bind Group";
                 ssboBindGroups[frameIndex] = rhiBridge->getDevice()->createBindGroup(ssboDesc);
                 cachedObjectBuffers[frameIndex] = objectBuffer;
+
+                // Also invalidate cull bind group since objectBuffer changed
+                cullBindGroups[frameIndex].reset();
             }
 
+            // Phase 2.2: Perform GPU frustum culling (compute dispatch)
+            uint32_t instanceCount = pendingInstancedData->instanceCount;
+            uint32_t meshIndexCount = static_cast<uint32_t>(mesh->getIndexCount());
+            performFrustumCulling(encoder.get(), frameIndex, instanceCount, meshIndexCount);
+
+            // Shadow pass (render scene from light's perspective — uses direct drawIndexed, no culling)
+            if (shadowRenderer && shadowRenderer->isInitialized() && instanceCount > 1) {
 #ifndef __EMSCRIPTEN__
-            // Add memory barrier to ensure host writes to SSBO are visible to GPU
-            auto* vulkanEncoder = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
-            auto* vulkanBuffer = dynamic_cast<RHI::Vulkan::VulkanRHIBuffer*>(objectBuffer);
-            if (vulkanEncoder && vulkanBuffer) {
-                vulkanEncoder->getCommandBuffer().pipelineBarrier(
-                    vk::PipelineStageFlagBits::eHost,
-                    vk::PipelineStageFlagBits::eVertexShader,
-                    {},
-                    {},
-                    vk::BufferMemoryBarrier{
-                        .srcAccessMask = vk::AccessFlagBits::eHostWrite,
-                        .dstAccessMask = vk::AccessFlagBits::eShaderRead,
-                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                        .buffer = vulkanBuffer->getVkBuffer(),
-                        .offset = 0,
-                        .size = VK_WHOLE_SIZE
-                    },
-                    {}
-                );
-            }
-
-            // macOS/Windows: Transition shadow map to depth attachment for writing
-            // Use eUndefined as old layout to handle both first frame and subsequent frames
-            auto* shadowTexture = dynamic_cast<RHI::Vulkan::VulkanRHITexture*>(shadowRenderer->getShadowMapTexture());
-            if (vulkanEncoder && shadowTexture) {
-                vulkanEncoder->getCommandBuffer().pipelineBarrier(
-                    vk::PipelineStageFlagBits::eFragmentShader | vk::PipelineStageFlagBits::eEarlyFragmentTests,
-                    vk::PipelineStageFlagBits::eEarlyFragmentTests,
-                    {},
-                    {},
-                    {},
-                    vk::ImageMemoryBarrier{
-                        .srcAccessMask = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eDepthStencilAttachmentRead,
-                        .dstAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite,
-                        .oldLayout = vk::ImageLayout::eUndefined,  // Discard previous contents
-                        .newLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
-                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                        .image = shadowTexture->getVkImage(),
-                        .subresourceRange = vk::ImageSubresourceRange{
-                            .aspectMask = vk::ImageAspectFlagBits::eDepth,
-                            .baseMipLevel = 0,
-                            .levelCount = 1,
-                            .baseArrayLayer = 0,
-                            .layerCount = 1
-                        }
-                    }
-                );
-            }
-#endif  // !__EMSCRIPTEN__
-            
-            auto* shadowPass = shadowRenderer->beginShadowPass(encoder.get(), frameIndex);
-            if (shadowPass) {
-                // Phase 2.1: Bind SSBO (set 1) for per-object data
-                if (ssboBindGroups[frameIndex]) {
-                    shadowPass->setBindGroup(1, ssboBindGroups[frameIndex].get());
-                }
-
-                // Bind vertex buffer only (no instance buffer — data comes from SSBO)
-                shadowPass->setVertexBuffer(0, mesh->getVertexBuffer(), 0);
-                shadowPass->setIndexBuffer(mesh->getIndexBuffer(), rhi::IndexFormat::Uint32, 0);
-
-                // Draw buildings only (skip first instance which is the ground plane)
-                uint32_t buildingCount = pendingInstancedData->instanceCount - 1;
-                shadowPass->drawIndexed(
-                    static_cast<uint32_t>(mesh->getIndexCount()),
-                    buildingCount,
-                    0, 0, 1  // Start from instance 1 (skip instance 0 = ground)
-                );
-
-                shadowRenderer->endShadowPass();
-
-#ifndef __EMSCRIPTEN__
-                // macOS/Windows: Transition shadow map from depth attachment to shader read
-                // Linux render pass handles this automatically via finalLayout
+                // macOS/Windows: Transition shadow map to depth attachment for writing
                 auto* vulkanEncoder = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
                 auto* shadowTexture = dynamic_cast<RHI::Vulkan::VulkanRHITexture*>(shadowRenderer->getShadowMapTexture());
                 if (vulkanEncoder && shadowTexture) {
                     vulkanEncoder->getCommandBuffer().pipelineBarrier(
-                        vk::PipelineStageFlagBits::eLateFragmentTests,
-                        vk::PipelineStageFlagBits::eFragmentShader,
+                        vk::PipelineStageFlagBits::eFragmentShader | vk::PipelineStageFlagBits::eEarlyFragmentTests,
+                        vk::PipelineStageFlagBits::eEarlyFragmentTests,
                         {},
                         {},
                         {},
                         vk::ImageMemoryBarrier{
-                            .srcAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite,
-                            .dstAccessMask = vk::AccessFlagBits::eShaderRead,
-                            .oldLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
-                            .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+                            .srcAccessMask = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eDepthStencilAttachmentRead,
+                            .dstAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite,
+                            .oldLayout = vk::ImageLayout::eUndefined,
+                            .newLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
                             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                             .image = shadowTexture->getVkImage(),
@@ -1151,7 +1421,55 @@ void Renderer::drawFrame() {
                         }
                     );
                 }
+#endif  // !__EMSCRIPTEN__
+
+                auto* shadowPass = shadowRenderer->beginShadowPass(encoder.get(), frameIndex);
+                if (shadowPass) {
+                    // Bind SSBO (set 1) for per-object data
+                    if (ssboBindGroups[frameIndex]) {
+                        shadowPass->setBindGroup(1, ssboBindGroups[frameIndex].get());
+                    }
+
+                    shadowPass->setVertexBuffer(0, mesh->getVertexBuffer(), 0);
+                    shadowPass->setIndexBuffer(mesh->getIndexBuffer(), rhi::IndexFormat::Uint32, 0);
+
+                    // Draw buildings only (skip first instance which is the ground plane)
+                    uint32_t buildingCount = instanceCount - 1;
+                    shadowPass->drawIndexed(meshIndexCount, buildingCount, 0, 0, 1);
+
+                    shadowRenderer->endShadowPass();
+
+#ifndef __EMSCRIPTEN__
+                    // macOS/Windows: Transition shadow map from depth attachment to shader read
+                    auto* vulkanEncoderPost = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
+                    auto* shadowTexturePost = dynamic_cast<RHI::Vulkan::VulkanRHITexture*>(shadowRenderer->getShadowMapTexture());
+                    if (vulkanEncoderPost && shadowTexturePost) {
+                        vulkanEncoderPost->getCommandBuffer().pipelineBarrier(
+                            vk::PipelineStageFlagBits::eLateFragmentTests,
+                            vk::PipelineStageFlagBits::eFragmentShader,
+                            {},
+                            {},
+                            {},
+                            vk::ImageMemoryBarrier{
+                                .srcAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite,
+                                .dstAccessMask = vk::AccessFlagBits::eShaderRead,
+                                .oldLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
+                                .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+                                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                .image = shadowTexturePost->getVkImage(),
+                                .subresourceRange = vk::ImageSubresourceRange{
+                                    .aspectMask = vk::ImageAspectFlagBits::eDepth,
+                                    .baseMipLevel = 0,
+                                    .levelCount = 1,
+                                    .baseArrayLayer = 0,
+                                    .layerCount = 1
+                                }
+                            }
+                        );
+                    }
 #endif
+                }
             }
         }
     }
@@ -1301,12 +1619,8 @@ void Renderer::drawFrame() {
                 renderPass->setVertexBuffer(0, mesh->getVertexBuffer(), 0);
                 renderPass->setIndexBuffer(mesh->getIndexBuffer(), rhi::IndexFormat::Uint32, 0);
 
-                // Draw all instances in one call
-                renderPass->drawIndexed(
-                    static_cast<uint32_t>(mesh->getIndexCount()),
-                    pendingInstancedData->instanceCount,
-                    0, 0, 0
-                );
+                // Phase 2.2: Draw via indirect buffer (GPU frustum culling sets instanceCount)
+                renderPass->drawIndexedIndirect(indirectDrawBuffers[frameIndex].get(), 0);
             }
 
             // Clear pending data after rendering

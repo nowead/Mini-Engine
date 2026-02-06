@@ -2,7 +2,7 @@
 
 **Goal**: Elevate the engine from toy-project level to a tech demo with **PBR visuals** and **GPU-Driven optimization**, proving production-ready engine development capability.
 
-**Progress**: Phase 1.2 Complete (2026-02-06)
+**Progress**: Phase 2.2+2.3 Complete (2026-02-06)
 
 ---
 
@@ -53,34 +53,39 @@
 
 **Core Objective**: Eliminate CPU bottlenecks (DrawCall overhead, Scene Traversal) and transition to GPU-driven rendering.
 
-### 2.1 Data-Oriented Scene Structure
+### 2.1 Data-Oriented Scene Structure -- COMPLETE
 
-**Target Files**: `src/scene/SceneGraph.cpp`, `src/rendering/Renderer.cpp`
-
-**Tasks**:
-
-- [ ] **SSBO Introduction**: Deprecate per-object UniformBuffer update approach.
-- [ ] **Global Object Buffer**: Create and manage a single SSBO (ObjectDataBuffer) containing WorldMatrix and BoundingBox for all objects.
-
-### 2.2 Compute Shader Culling
-
-**Target Files**: `shaders/cull.comp.glsl` (new), `src/scene/Quadtree.cpp` (to be removed)
+**Target Files**: `src/rendering/InstancedRenderData.hpp`, `src/game/managers/BuildingManager.hpp/.cpp`, `src/rendering/Renderer.hpp/.cpp`, `src/rendering/ShadowRenderer.hpp/.cpp`, `shaders/building.vert.glsl`, `shaders/building.wgsl`, `shaders/shadow.vert.glsl`, `shaders/shadow.wgsl`, `src/Application.cpp`
 
 **Tasks**:
 
-- [ ] **Logic Migration**: Remove CPU `Quadtree::query` and migrate to Compute Shader.
-- [ ] **Parallel Culling**: Perform Frustum Culling in parallel using GlobalInvocationID.
-- [ ] **Output Generation**: Write only visible object indices to VisibleIndexBuffer (using atomicAdd).
-- [ ] **Command Generation**: Fill `VkDrawIndexedIndirectCommand` structs directly in the Compute Shader.
+- [x] **ObjectData Struct**: Replaced 48-byte `InstanceData` (flat position/color/scale) with 128-byte `ObjectData` (mat4 worldMatrix, AABB boundingBoxMin/Max, vec4 colorAndMetallic, vec4 roughnessAOPad). `alignas(16)` for std430 compatibility.
+- [x] **SSBO Introduction**: Replaced per-instance vertex attributes (binding 1, 6 attributes) with Storage Buffer Object. Buffer usage changed from `Vertex | MapWrite` to `Storage | MapWrite`. Buffer reuse optimization: only recreate when capacity insufficient, otherwise `write()` into existing buffer.
+- [x] **Two Bind Group Architecture**: Set 0 (UBO + textures, unchanged) and Set 1 (SSBO with ObjectData[] array). SSBO bind group cached per-frame with dirty tracking via pointer comparison.
+- [x] **Shader Migration (GLSL + WGSL)**: Building and shadow vertex shaders access SSBO via `gl_InstanceIndex` / `@builtin(instance_index)`. World transform computed on CPU as `glm::translate * glm::scale`, stored in mat4. Fragment shaders unchanged (receive interpolated values).
+- [x] **Pipeline Updates**: Renderer and ShadowRenderer pipeline layouts include both bind group layouts. Removed instance vertex buffer layout from both pipelines. Memory barrier updated: `eHost→eVertexShader` with `eHostWrite→eShaderRead`.
+- [x] **API Rename**: `getInstanceBuffer()` → `getObjectBuffer()`, `updateInstanceBuffer()` → `updateObjectBuffer()`, `markInstanceBufferDirty()` → `markObjectBufferDirty()`.
 
-### 2.3 Indirect Draw Transition
+### 2.2 Compute Shader Culling -- COMPLETE
 
-**Target File**: `src/rendering/BatchRenderer.cpp`
+**Target Files**: `shaders/frustum_cull.comp.glsl` (new), `shaders/frustum_cull.comp.wgsl` (new), `shaders/building.vert.glsl`, `shaders/building.wgsl`, `src/rendering/Renderer.hpp/.cpp`, `CMakeLists.txt`
 
 **Tasks**:
 
-- [ ] **API Change**: Remove `vkCmdDrawIndexed` calls in loop and replace with a single `vkCmdDrawIndexedIndirect` call.
-- [ ] **Synchronization**: Add `VkBufferMemoryBarrier` between Compute Shader (Culling) write and Graphics Pipeline (Vertex) read.
+- [x] **Compute Shader (GLSL + WGSL)**: New `frustum_cull.comp` shader with workgroup size 64. Per-thread AABB vs 6 frustum plane test (p-vertex method). `atomicAdd` on indirect draw buffer's `instanceCount` to allocate visible slots.
+- [x] **Frustum Plane Extraction**: Griggs-Hartmann method extracts 6 normalized planes (Left/Right/Bottom/Top/Near/Far) from VP matrix. GLM column-major access pattern.
+- [x] **Cull Pipeline**: New `createCullingPipeline()` with 4-entry bind group layout (CullUBO, ObjectData, IndirectDrawCommand, VisibleIndices). Per-frame buffers: CullUBO (112 bytes, Uniform|MapWrite), IndirectDraw (20 bytes, Storage|Indirect|MapWrite), VisibleIndices (4*MAX_CULL_OBJECTS bytes, Storage).
+- [x] **Vertex Shader Indirection**: Building vertex shaders (GLSL + WGSL) now index via `visibleIndices[gl_InstanceIndex]` → `objectData[actualIndex]`. SSBO bind group layout expanded to 2 bindings (ObjectData + VisibleIndices).
+- [x] **Vulkan Barriers**: Pre-compute barrier (`eHost→eComputeShader`) for CullUBO, IndirectDraw, ObjectData writes. Post-compute barrier (`eComputeShader→eDrawIndirect|eVertexShader`) for IndirectDraw and VisibleIndices reads.
+
+### 2.3 Indirect Draw Transition -- COMPLETE
+
+**Target Files**: `src/rendering/Renderer.cpp`
+
+**Tasks**:
+
+- [x] **API Change**: Replaced `drawIndexed(indexCount, instanceCount)` with single `drawIndexedIndirect(indirectBuffer, 0)` for main building render pass. Shadow pass unchanged (direct `drawIndexed`, no frustum culling from light perspective).
+- [x] **Compute Dispatch**: `performFrustumCulling()` dispatches `(objectCount+63)/64` workgroups per frame. Resets indirect draw buffer (instanceCount=0) before each dispatch. Cull bind group cached and invalidated on objectBuffer change.
 
 ---
 

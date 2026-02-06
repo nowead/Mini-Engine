@@ -356,6 +356,16 @@ if(NOT EMSCRIPTEN)
         COMMENT "Compiling prefilter_env.comp.glsl -> SPIR-V"
     )
 
+    # Phase 2.2: Frustum culling compute shader
+    add_custom_command(
+        OUTPUT ${BUILDING_SHADER_DIR}/frustum_cull.comp.spv
+        COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=compute
+                -o ${BUILDING_SHADER_DIR}/frustum_cull.comp.spv
+                ${BUILDING_SHADER_DIR}/frustum_cull.comp.glsl
+        DEPENDS ${BUILDING_SHADER_DIR}/frustum_cull.comp.glsl
+        COMMENT "Compiling frustum_cull.comp.glsl -> SPIR-V"
+    )
+
     add_custom_target(building_shaders DEPENDS
         ${BUILDING_SHADER_DIR}/building.vert.spv
         ${BUILDING_SHADER_DIR}/building.frag.spv
@@ -365,6 +375,7 @@ if(NOT EMSCRIPTEN)
         ${BUILDING_SHADER_DIR}/equirect_to_cubemap.comp.spv
         ${BUILDING_SHADER_DIR}/irradiance_map.comp.spv
         ${BUILDING_SHADER_DIR}/prefilter_env.comp.spv
+        ${BUILDING_SHADER_DIR}/frustum_cull.comp.spv
     )
     
     add_dependencies(MiniEngine building_shaders)
