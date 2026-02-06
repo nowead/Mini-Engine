@@ -12,6 +12,7 @@
 
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
+#include <array>
 #include <memory>
 #include <vector>
 #include <string>
@@ -205,14 +206,19 @@ private:
     std::unique_ptr<rhi::RHIPipelineLayout> buildingPipelineLayout;
     std::unique_ptr<rhi::RHIRenderPipeline> buildingPipeline;
 
+    // Frame synchronization
+    uint32_t currentFrame = 0;
+    static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
+
+    // Phase 2.1: SSBO bind group (set 1) for per-object data
+    std::unique_ptr<rhi::RHIBindGroupLayout> ssboBindGroupLayout;
+    std::array<std::unique_ptr<rhi::RHIBindGroup>, MAX_FRAMES_IN_FLIGHT> ssboBindGroups;
+    std::array<rhi::RHIBuffer*, MAX_FRAMES_IN_FLIGHT> cachedObjectBuffers = {};
+
     // RHI Vertex/Index Buffers (Phase 4.5)
     std::unique_ptr<rhi::RHIBuffer> rhiVertexBuffer;
     std::unique_ptr<rhi::RHIBuffer> rhiIndexBuffer;
     uint32_t rhiIndexCount = 0;
-
-    // Frame synchronization
-    uint32_t currentFrame = 0;
-    static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
     // For uniform buffer animation
     std::chrono::time_point<std::chrono::high_resolution_clock> startTime;

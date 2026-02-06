@@ -39,7 +39,7 @@ public:
      * @param nativeRenderPass Native render pass handle (for Linux compatibility)
      * @return true if successful
      */
-    bool initialize(void* nativeRenderPass = nullptr);
+    bool initialize(void* nativeRenderPass = nullptr, rhi::RHIBindGroupLayout* ssboLayout = nullptr);
 
     /**
      * @brief Update light space matrix based on sun direction
@@ -107,7 +107,7 @@ private:
     bool createShaders();
     bool createUniformBuffers();
     bool createBindGroups();
-    bool createPipeline(void* nativeRenderPass);
+    bool createPipeline(void* nativeRenderPass, rhi::RHIBindGroupLayout* ssboLayout);
 #ifdef __linux__
     bool createLinuxRenderPass();
     bool createLinuxFramebuffer();

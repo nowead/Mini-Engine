@@ -4,6 +4,7 @@
 #include "src/game/sync/PriceUpdate.hpp"
 #include "src/game/utils/AnimationUtils.hpp"
 #include "src/game/utils/HeightCalculator.hpp"
+#include "src/rendering/InstancedRenderData.hpp"
 #include "src/scene/Mesh.hpp"
 #include <rhi/RHI.hpp>
 
@@ -174,49 +175,35 @@ public:
      */
     void createDefaultMesh();
 
-    // ========== GPU Instancing (Phase 1.1) ==========
+    // ========== GPU Object Buffer (Phase 2.1 SSBO) ==========
 
     /**
-     * @brief Instance data structure for GPU instancing
-     * Uses vec3 scale to allow different X/Z base size and Y height
+     * @brief Get object buffer (SSBO) for GPU-driven rendering
+     * @return Pointer to SSBO (may be null if not created)
      */
-    struct InstanceData {
-        glm::vec3 position;       // 12 bytes (offset 0)
-        glm::vec3 color;          // 12 bytes (offset 12) - albedo color
-        glm::vec3 scale;          // 12 bytes (offset 24) - X/Z for base, Y for height
-        float metallic;           // 4 bytes  (offset 36) - PBR metallic (0=dielectric, 1=metal)
-        float roughness;          // 4 bytes  (offset 40) - PBR roughness (0=smooth, 1=rough)
-        float ao;                 // 4 bytes  (offset 44) - ambient occlusion
-        // Total: 48 bytes, aligned to 16
-    };
-
-    /**
-     * @brief Get instance buffer for GPU instancing
-     * @return Pointer to instance buffer (may be null if not created)
-     */
-    rhi::RHIBuffer* getInstanceBuffer() const {
-        return instanceBuffers[currentBufferIndex].get();
+    rhi::RHIBuffer* getObjectBuffer() const {
+        return objectBuffers[currentBufferIndex].get();
     }
 
     /**
-     * @brief Update instance buffer with current building data
-     * Should be called when buildings are added/removed or when prices change
+     * @brief Update object buffer with current building data
+     * Computes world matrices and AABB for all objects.
      */
-    void updateInstanceBuffer();
+    void updateObjectBuffer();
 
     /**
-     * @brief Check if instance buffer needs update
+     * @brief Check if object buffer needs update
      * @return True if buffer is dirty and needs update
      */
-    bool isInstanceBufferDirty() const {
-        return instanceBufferDirty;
+    bool isObjectBufferDirty() const {
+        return objectBufferDirty;
     }
 
     /**
-     * @brief Mark instance buffer as dirty (needs update)
+     * @brief Mark object buffer as dirty (needs update)
      */
-    void markInstanceBufferDirty() {
-        instanceBufferDirty = true;
+    void markObjectBufferDirty() {
+        objectBufferDirty = true;
     }
 
 private:
@@ -231,13 +218,12 @@ private:
     // ========== Shared Resources ==========
     std::unique_ptr<Mesh> buildingMesh;                             // Shared building mesh
 
-    // ========== GPU Instancing Resources ==========
-    // Double-buffered instance buffers to avoid GPU synchronization issues
-    static constexpr size_t NUM_INSTANCE_BUFFERS = 2;
-    std::array<std::unique_ptr<rhi::RHIBuffer>, NUM_INSTANCE_BUFFERS> instanceBuffers;
+    // ========== GPU Object Buffer Resources (Phase 2.1 SSBO) ==========
+    static constexpr size_t NUM_OBJECT_BUFFERS = 2;
+    std::array<std::unique_ptr<rhi::RHIBuffer>, NUM_OBJECT_BUFFERS> objectBuffers;
     size_t currentBufferIndex = 0;
-    size_t currentBufferCapacity = 0;  // Current buffer capacity in instances
-    bool instanceBufferDirty = true;   // Flag indicating buffer needs update
+    size_t currentBufferCapacity = 0;
+    bool objectBufferDirty = true;
 
     // ========== Animation Queue ==========
     std::vector<uint64_t> animatingEntities;                        // List of entities currently animating

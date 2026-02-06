@@ -33,7 +33,7 @@ ShadowRenderer::~ShadowRenderer() {
 #endif
 }
 
-bool ShadowRenderer::initialize(void* nativeRenderPass) {
+bool ShadowRenderer::initialize(void* nativeRenderPass, rhi::RHIBindGroupLayout* ssboLayout) {
     if (!m_device || !m_queue) {
         std::cerr << "[ShadowRenderer] Invalid device or queue\n";
         return false;
@@ -80,7 +80,7 @@ bool ShadowRenderer::initialize(void* nativeRenderPass) {
     nativeRenderPass = m_nativeRenderPass;
 #endif
 
-    if (!createPipeline(nativeRenderPass)) {
+    if (!createPipeline(nativeRenderPass, ssboLayout)) {
         std::cerr << "[ShadowRenderer] Failed to create pipeline\n";
         return false;
     }
@@ -254,10 +254,13 @@ bool ShadowRenderer::createBindGroups() {
     return true;
 }
 
-bool ShadowRenderer::createPipeline(void* nativeRenderPass) {
+bool ShadowRenderer::createPipeline(void* nativeRenderPass, rhi::RHIBindGroupLayout* ssboLayout) {
     // Create pipeline layout
     rhi::PipelineLayoutDesc layoutDesc;
     layoutDesc.bindGroupLayouts.push_back(m_bindGroupLayout.get());
+    if (ssboLayout) {
+        layoutDesc.bindGroupLayouts.push_back(ssboLayout);  // set 1: SSBO
+    }
     layoutDesc.label = "ShadowPipelineLayout";
 
     m_pipelineLayout = m_device->createPipelineLayout(layoutDesc);
@@ -275,8 +278,8 @@ bool ShadowRenderer::createPipeline(void* nativeRenderPass) {
     pipelineDesc.vertexShader = m_vertexShader.get();
     pipelineDesc.fragmentShader = m_fragmentShader.get();  // Empty shader for depth-only
 
-    // Vertex input layout (must match building shader for instancing)
-    // Per-vertex attributes (binding 0)
+    // Vertex input layout — per-vertex only (binding 0)
+    // Instance data is now accessed via SSBO (set 1, binding 0)
     rhi::VertexBufferLayout vertexLayout;
     vertexLayout.stride = sizeof(float) * 8;  // pos(3) + normal(3) + texCoord(2)
     vertexLayout.inputRate = rhi::VertexInputRate::Vertex;
@@ -286,17 +289,6 @@ bool ShadowRenderer::createPipeline(void* nativeRenderPass) {
         rhi::VertexAttribute(2, 0, rhi::TextureFormat::RG32Float, sizeof(float) * 6)   // texCoord
     };
     pipelineDesc.vertex.buffers.push_back(vertexLayout);
-
-    // Per-instance attributes (binding 1) - stride must match building pipeline (48 bytes)
-    rhi::VertexBufferLayout instanceLayout;
-    instanceLayout.stride = 48;  // vec3(12)*3 + float(4)*3 = 48 bytes
-    instanceLayout.inputRate = rhi::VertexInputRate::Instance;
-    instanceLayout.attributes = {
-        rhi::VertexAttribute(3, 1, rhi::TextureFormat::RGB32Float, 0),   // instancePosition
-        rhi::VertexAttribute(4, 1, rhi::TextureFormat::RGB32Float, 12),  // instanceColor
-        rhi::VertexAttribute(5, 1, rhi::TextureFormat::RGB32Float, 24)   // instanceScale
-    };
-    pipelineDesc.vertex.buffers.push_back(instanceLayout);
 
     // Primitive state
     pipelineDesc.primitive.topology = rhi::PrimitiveTopology::TriangleList;

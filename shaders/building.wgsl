@@ -29,19 +29,27 @@ struct UniformBufferObject {
 @group(0) @binding(5) var brdfLUT: texture_2d<f32>;
 @group(0) @binding(6) var iblSampler: sampler;
 
-// Vertex input
+// Phase 2.1: Per-object data via SSBO
+struct ObjectData {
+    worldMatrix: mat4x4<f32>,
+    boundingBoxMin: vec4<f32>,
+    boundingBoxMax: vec4<f32>,
+    colorAndMetallic: vec4<f32>,   // rgb = albedo, a = metallic
+    roughnessAOPad: vec4<f32>,     // r = roughness, g = ao
+}
+
+struct ObjectBuffer {
+    objects: array<ObjectData>,
+}
+
+@group(1) @binding(0) var<storage, read> objectBuffer: ObjectBuffer;
+
+// Vertex input (per-vertex only)
 struct VertexInput {
-    // Per-vertex attributes (binding 0)
+    @builtin(instance_index) instanceIndex: u32,
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) texCoord: vec2<f32>,
-    // Per-instance attributes (binding 1) - 48 bytes stride
-    @location(3) instancePosition: vec3<f32>,
-    @location(4) instanceColor: vec3<f32>,
-    @location(5) instanceScale: vec3<f32>,
-    @location(6) instanceMetallic: f32,
-    @location(7) instanceRoughness: f32,
-    @location(8) instanceAO: f32,
 }
 
 struct VertexOutput {
@@ -59,16 +67,18 @@ struct VertexOutput {
 fn vs_main(input: VertexInput) -> VertexOutput {
     var output: VertexOutput;
 
-    let worldPos = input.position * input.instanceScale + input.instancePosition;
+    let obj = objectBuffer.objects[input.instanceIndex];
+    let worldPos4 = obj.worldMatrix * vec4<f32>(input.position, 1.0);
+    let worldPos = worldPos4.xyz;
 
-    output.position = ubo.proj * ubo.view * ubo.model * vec4<f32>(worldPos, 1.0);
-    output.color = input.instanceColor;
+    output.position = ubo.proj * ubo.view * ubo.model * worldPos4;
+    output.color = obj.colorAndMetallic.rgb;
     output.normal = input.normal;
     output.worldPos = worldPos;
-    output.posLightSpace = ubo.lightSpaceMatrix * vec4<f32>(worldPos, 1.0);
-    output.metallic = input.instanceMetallic;
-    output.roughness = input.instanceRoughness;
-    output.ao = input.instanceAO;
+    output.posLightSpace = ubo.lightSpaceMatrix * worldPos4;
+    output.metallic = obj.colorAndMetallic.a;
+    output.roughness = obj.roughnessAOPad.r;
+    output.ao = obj.roughnessAOPad.g;
 
     return output;
 }

@@ -5,16 +5,8 @@ layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec2 inTexCoord;
 
-// Per-instance attributes (binding 1) - 48 bytes stride
-layout(location = 3) in vec3 instancePosition;   // offset 0, 12 bytes
-layout(location = 4) in vec3 instanceColor;      // offset 12, 12 bytes (albedo)
-layout(location = 5) in vec3 instanceScale;      // offset 24, 12 bytes
-layout(location = 6) in float instanceMetallic;  // offset 36, 4 bytes
-layout(location = 7) in float instanceRoughness; // offset 40, 4 bytes
-layout(location = 8) in float instanceAO;        // offset 44, 4 bytes
-
 // Uniform buffer (camera matrices + lighting + shadow)
-layout(binding = 0) uniform UniformBufferObject {
+layout(set = 0, binding = 0) uniform UniformBufferObject {
     mat4 model;
     mat4 view;
     mat4 proj;
@@ -31,6 +23,19 @@ layout(binding = 0) uniform UniformBufferObject {
     float shadowStrength;
 } ubo;
 
+// Phase 2.1: Per-object data via SSBO (replaces per-instance vertex attributes)
+struct ObjectData {
+    mat4 worldMatrix;
+    vec4 boundingBoxMin;
+    vec4 boundingBoxMax;
+    vec4 colorAndMetallic;   // rgb = albedo, a = metallic
+    vec4 roughnessAOPad;     // r = roughness, g = ao
+};
+
+layout(std430, set = 1, binding = 0) readonly buffer ObjectBuffer {
+    ObjectData objects[];
+} objectBuffer;
+
 // Outputs to fragment shader
 layout(location = 0) out vec3 fragColor;
 layout(location = 1) out vec3 fragNormal;
@@ -41,15 +46,18 @@ layout(location = 5) out float fragRoughness;
 layout(location = 6) out float fragAO;
 
 void main() {
-    vec3 worldPos = inPosition * instanceScale + instancePosition;
+    ObjectData obj = objectBuffer.objects[gl_InstanceIndex];
 
-    gl_Position = ubo.proj * ubo.view * ubo.model * vec4(worldPos, 1.0);
+    vec4 worldPos4 = obj.worldMatrix * vec4(inPosition, 1.0);
+    vec3 worldPos = worldPos4.xyz;
 
-    fragColor = instanceColor;
+    gl_Position = ubo.proj * ubo.view * ubo.model * worldPos4;
+
+    fragColor = obj.colorAndMetallic.rgb;
     fragNormal = inNormal;
     fragWorldPos = worldPos;
-    fragPosLightSpace = ubo.lightSpaceMatrix * vec4(worldPos, 1.0);
-    fragMetallic = instanceMetallic;
-    fragRoughness = instanceRoughness;
-    fragAO = instanceAO;
+    fragPosLightSpace = ubo.lightSpaceMatrix * worldPos4;
+    fragMetallic = obj.colorAndMetallic.a;
+    fragRoughness = obj.roughnessAOPad.r;
+    fragAO = obj.roughnessAOPad.g;
 }

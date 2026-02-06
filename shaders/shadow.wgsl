@@ -1,5 +1,6 @@
 // Shadow pass shader - renders scene from light's perspective
 // WebGPU WGSL version
+// Phase 2.1: Uses SSBO for per-object data
 
 // Light space matrix uniform
 struct LightSpaceUBO {
@@ -8,16 +9,27 @@ struct LightSpaceUBO {
 
 @group(0) @binding(0) var<uniform> ubo: LightSpaceUBO;
 
-// Vertex input
+// Phase 2.1: Per-object data via SSBO
+struct ObjectData {
+    worldMatrix: mat4x4<f32>,
+    boundingBoxMin: vec4<f32>,
+    boundingBoxMax: vec4<f32>,
+    colorAndMetallic: vec4<f32>,
+    roughnessAOPad: vec4<f32>,
+}
+
+struct ObjectBuffer {
+    objects: array<ObjectData>,
+}
+
+@group(1) @binding(0) var<storage, read> objectBuffer: ObjectBuffer;
+
+// Vertex input (per-vertex only)
 struct VertexInput {
-    // Per-vertex attributes (binding 0)
+    @builtin(instance_index) instanceIndex: u32,
     @location(0) position: vec3<f32>,
-    @location(1) normal: vec3<f32>,      // Unused in shadow pass
-    @location(2) texCoord: vec2<f32>,    // Unused in shadow pass
-    // Per-instance attributes (binding 1)
-    @location(3) instancePosition: vec3<f32>,
-    @location(4) instanceColor: vec3<f32>,  // Unused in shadow pass
-    @location(5) instanceScale: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) texCoord: vec2<f32>,
 }
 
 // Vertex output
@@ -29,18 +41,15 @@ struct VertexOutput {
 fn vs_main(input: VertexInput) -> VertexOutput {
     var output: VertexOutput;
 
-    // Apply instance transform (same as building shader)
-    let worldPos = input.position * input.instanceScale + input.instancePosition;
+    let obj = objectBuffer.objects[input.instanceIndex];
+    let worldPos = obj.worldMatrix * vec4<f32>(input.position, 1.0);
 
-    // Transform to light clip space
-    output.position = ubo.lightSpaceMatrix * vec4<f32>(worldPos, 1.0);
+    output.position = ubo.lightSpaceMatrix * worldPos;
 
     return output;
 }
 
 // Empty fragment shader for depth-only shadow pass
-// Outputs nothing - only depth is written
 @fragment
 fn fs_main() {
-    // No output needed - depth buffer is written automatically
 }

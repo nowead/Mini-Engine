@@ -2,6 +2,7 @@
 #include "src/scene/Mesh.hpp"
 #include "src/utils/Vertex.hpp"
 #include "src/utils/Logger.hpp"
+#include <glm/gtc/matrix_transform.hpp>
 #include <chrono>
 #include <algorithm>
 
@@ -78,7 +79,7 @@ uint64_t BuildingManager::createBuilding(
     tickerToEntityId[ticker] = entityId;
 
     // Mark instance buffer as dirty (needs update)
-    instanceBufferDirty = true;
+    objectBufferDirty = true;
 
     LOG_DEBUG("BuildingManager") << "Created building '" << ticker
               << "' at (" << position.x << ", " << position.y << ", " << position.z << ")"
@@ -255,7 +256,7 @@ void BuildingManager::update(float deltaTime) {
     // Mark instance buffer as dirty if ANY entities were animating this frame
     // This ensures shadow map gets updated with new building heights
     if (hasAnimatingEntities) {
-        instanceBufferDirty = true;
+        objectBufferDirty = true;
     }
 }
 
@@ -393,71 +394,75 @@ uint64_t BuildingManager::generateEntityId() {
 }
 
 // ============================================================================
-// GPU Instancing (Phase 1.1)
+// GPU Object Buffer (Phase 2.1 SSBO)
 // ============================================================================
 
-void BuildingManager::updateInstanceBuffer() {
-    // Collect instance data from all buildings + ground plane
-    std::vector<InstanceData> instanceData;
-    instanceData.reserve(entities.size() + 1);  // +1 for ground
+void BuildingManager::updateObjectBuffer() {
+    using rendering::ObjectData;
+
+    std::vector<ObjectData> objectData;
+    objectData.reserve(entities.size() + 1);  // +1 for ground
 
     // Add ground plane first (large flat plane at y=0)
-    InstanceData groundData;
-    groundData.position = glm::vec3(0.0f, -0.05f, 0.0f);  // Slightly below origin
-    groundData.color = glm::vec3(0.55f, 0.58f, 0.52f);     // Neutral gray-green (sRGB)
-    groundData.scale = glm::vec3(300.0f, 0.1f, 300.0f);   // Extra large for shadow debugging
-    groundData.metallic = 0.0f;
-    groundData.roughness = 0.9f;
-    groundData.ao = 1.0f;
-    instanceData.push_back(groundData);
+    {
+        ObjectData ground{};
+        glm::vec3 pos(0.0f, -0.05f, 0.0f);
+        glm::vec3 scale(300.0f, 0.1f, 300.0f);
+        ground.worldMatrix = glm::translate(glm::mat4(1.0f), pos)
+                           * glm::scale(glm::mat4(1.0f), scale);
+        // AABB
+        ground.boundingBoxMin = glm::vec4(pos - scale * 0.5f, 0.0f);
+        ground.boundingBoxMax = glm::vec4(pos + scale * 0.5f, 0.0f);
+        ground.boundingBoxMin.y = pos.y;
+        ground.boundingBoxMax.y = pos.y + scale.y;
+        // Material
+        ground.colorAndMetallic = glm::vec4(0.55f, 0.58f, 0.52f, 0.0f);  // sRGB gray-green, non-metallic
+        ground.roughnessAOPad = glm::vec4(0.9f, 1.0f, 0.0f, 0.0f);
+        objectData.push_back(ground);
+    }
 
     // Add all buildings
     for (const auto& [entityId, building] : entities) {
-        InstanceData data;
-        data.position = building.position;
+        ObjectData obj{};
+        glm::vec3 pos = building.position;
+        glm::vec3 scale(building.baseScale.x, building.currentHeight, building.baseScale.z);
+
+        obj.worldMatrix = glm::translate(glm::mat4(1.0f), pos)
+                        * glm::scale(glm::mat4(1.0f), scale);
+
+        // AABB: mesh is unit cube [(-0.5,0,-0.5) to (0.5,1,0.5)]
+        // After scale+translate: min = pos + (-0.5*sx, 0, -0.5*sz), max = pos + (0.5*sx, height, 0.5*sz)
+        obj.boundingBoxMin = glm::vec4(pos.x - scale.x * 0.5f, pos.y, pos.z - scale.z * 0.5f, 0.0f);
+        obj.boundingBoxMax = glm::vec4(pos.x + scale.x * 0.5f, pos.y + scale.y, pos.z + scale.z * 0.5f, 0.0f);
+
+        // Material
         glm::vec4 colorVec4 = building.getColor();
-        data.color = glm::vec3(colorVec4.r, colorVec4.g, colorVec4.b);  // Convert vec4 to vec3
-        // Use vec3 scale: X/Z from baseScale, Y from height
-        data.scale = glm::vec3(building.baseScale.x, building.currentHeight, building.baseScale.z);
-        data.metallic = 0.3f;
-        data.roughness = 0.4f;
-        data.ao = 1.0f;
+        obj.colorAndMetallic = glm::vec4(colorVec4.r, colorVec4.g, colorVec4.b, 0.3f);  // metallic=0.3
+        obj.roughnessAOPad = glm::vec4(0.4f, 1.0f, 0.0f, 0.0f);  // roughness=0.4, ao=1.0
 
-        // DEBUG: Log center building height
-        if (building.ticker == "BUILDING_1_1") {
-            static int frameCount = 0;
-            if (++frameCount % 60 == 0) {  // Log every 60 frames
-                LOG_DEBUG("BuildingManager") << "BUILDING_1_1 height: " << building.currentHeight;
-            }
-        }
-
-        instanceData.push_back(data);
+        objectData.push_back(obj);
     }
 
-    size_t instanceCount = instanceData.size();
-    size_t requiredSize = sizeof(InstanceData) * instanceCount;
+    size_t objectCount = objectData.size();
+    size_t requiredSize = sizeof(ObjectData) * objectCount;
 
-    // DEBUG: Force new buffer creation every frame to diagnose synchronization issues
-    // This is inefficient but helps rule out buffer reuse problems
-    currentBufferIndex = 0;
+    // Only recreate buffer when capacity is insufficient
+    if (!objectBuffers[currentBufferIndex] || objectCount > currentBufferCapacity) {
+        size_t newCapacity = std::max(objectCount, size_t(64));
 
-    size_t newCapacity = std::max(instanceCount, size_t(64));
+        rhi::BufferDesc bufferDesc;
+        bufferDesc.size = sizeof(ObjectData) * newCapacity;
+        bufferDesc.usage = rhi::BufferUsage::Storage | rhi::BufferUsage::MapWrite;
+        bufferDesc.mappedAtCreation = false;
+        bufferDesc.label = "Object Data SSBO";
 
-    rhi::BufferDesc bufferDesc;
-    bufferDesc.size = sizeof(InstanceData) * newCapacity;
-    // Use MapWrite for direct CPU access (faster updates)
-    bufferDesc.usage = rhi::BufferUsage::Vertex | rhi::BufferUsage::MapWrite;
-    bufferDesc.mappedAtCreation = false;  // Use write() for updates (WebGPU compatible)
-    bufferDesc.label = "Building Instance Buffer";
+        objectBuffers[currentBufferIndex] = rhiDevice->createBuffer(bufferDesc);
+        currentBufferCapacity = newCapacity;
+    }
 
-    instanceBuffers[currentBufferIndex] = rhiDevice->createBuffer(bufferDesc);
-    currentBufferCapacity = newCapacity;
-
-    // Upload instance data to GPU
-    // Always use write() to ensure proper flush to GPU
-    auto& currentBuffer = instanceBuffers[currentBufferIndex];
+    auto& currentBuffer = objectBuffers[currentBufferIndex];
     if (currentBuffer) {
-        currentBuffer->write(instanceData.data(), requiredSize);
-        instanceBufferDirty = false;
+        currentBuffer->write(objectData.data(), requiredSize);
+        objectBufferDirty = false;
     }
 }

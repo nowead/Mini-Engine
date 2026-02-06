@@ -179,7 +179,7 @@ void Application::mainLoopFrame() {
                     float newHeight = 85.0f + 65.0f * std::sin(debugTime * 1.5f);
                     centerBuilding->currentHeight = newHeight;
                     centerBuilding->targetHeight = newHeight;
-                    buildingManager->markInstanceBufferDirty();
+                    buildingManager->markObjectBufferDirty();
                 }
             }
         }
@@ -189,17 +189,16 @@ void Application::mainLoopFrame() {
             auto* buildingManager = worldManager->getBuildingManager();
             if (buildingManager) {
                 // Always update instance buffer if dirty (even with 0 buildings, we have ground)
-                if (buildingManager->isInstanceBufferDirty()) {
-                    buildingManager->updateInstanceBuffer();
+                if (buildingManager->isObjectBufferDirty()) {
+                    buildingManager->updateObjectBuffer();
                 }
 
                 // Always submit render data (ground plane + buildings)
                 rendering::InstancedRenderData renderData;
                 renderData.mesh = buildingManager->getBuildingMesh();
-                renderData.instanceBuffer = buildingManager->getInstanceBuffer();
+                renderData.objectBuffer = buildingManager->getObjectBuffer();
                 // Instance count = buildings + ground plane (1)
                 renderData.instanceCount = static_cast<uint32_t>(buildingManager->getBuildingCount() + 1);
-                renderData.needsUpdate = false;
 
                 // Submit to renderer (clean interface)
                 renderer->submitInstancedRenderData(renderData);

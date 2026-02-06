@@ -604,17 +604,33 @@ void Renderer::createBuildingPipeline() {
         return;
     }
 
-    // Note: Bind groups will be created/updated in updateBuildingBindGroups() after shadow renderer is ready
-    // For now, create bind groups without shadow map (will be updated later)
+    // Note: Bind groups will be created/updated in createShadowRenderer() after shadow renderer is ready
     buildingBindGroups.clear();
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        // Create placeholder bind group - will be recreated when shadow renderer is ready
         buildingBindGroups.push_back(nullptr);
     }
 
-    // Create pipeline layout
+    // Phase 2.1: Create SSBO bind group layout (set 1) for per-object data
+    {
+        rhi::BindGroupLayoutDesc ssboLayoutDesc;
+        rhi::BindGroupLayoutEntry ssboEntry;
+        ssboEntry.binding = 0;
+        ssboEntry.visibility = rhi::ShaderStage::Vertex;
+        ssboEntry.type = rhi::BindingType::StorageBuffer;
+        ssboLayoutDesc.entries.push_back(ssboEntry);
+        ssboLayoutDesc.label = "SSBO Bind Group Layout";
+        ssboBindGroupLayout = rhiBridge->getDevice()->createBindGroupLayout(ssboLayoutDesc);
+
+        if (!ssboBindGroupLayout) {
+            LOG_ERROR("Renderer") << "Failed to create SSBO bind group layout";
+            return;
+        }
+    }
+
+    // Create pipeline layout with two bind group layouts: set 0 (UBO+textures), set 1 (SSBO)
     rhi::PipelineLayoutDesc layoutDesc;
     layoutDesc.bindGroupLayouts.push_back(buildingBindGroupLayout.get());
+    layoutDesc.bindGroupLayouts.push_back(ssboBindGroupLayout.get());
     buildingPipelineLayout = rhiBridge->createPipelineLayout(layoutDesc);
 
     if (!buildingPipelineLayout) {
@@ -622,7 +638,8 @@ void Renderer::createBuildingPipeline() {
         return;
     }
 
-    // Setup vertex state - per-vertex attributes (binding 0)
+    // Setup vertex state - per-vertex attributes only (binding 0)
+    // Phase 2.1: Instance data now comes from SSBO, not vertex attributes
     rhi::VertexBufferLayout vertexLayout;
     vertexLayout.stride = sizeof(Vertex);
     vertexLayout.inputRate = rhi::VertexInputRate::Vertex;
@@ -632,26 +649,12 @@ void Renderer::createBuildingPipeline() {
         rhi::VertexAttribute(2, 0, rhi::TextureFormat::RG32Float, offsetof(Vertex, texCoord)) // inTexCoord
     };
 
-    // Setup instance state - per-instance attributes (binding 1)
-    rhi::VertexBufferLayout instanceLayout;
-    instanceLayout.stride = 48;  // vec3(12) + vec3(12) + vec3(12) + float(4) + float(4) + float(4) = 48 bytes
-    instanceLayout.inputRate = rhi::VertexInputRate::Instance;
-    instanceLayout.attributes = {
-        rhi::VertexAttribute(3, 1, rhi::TextureFormat::RGB32Float, 0),   // instancePosition (vec3, offset 0)
-        rhi::VertexAttribute(4, 1, rhi::TextureFormat::RGB32Float, 12),  // instanceColor/albedo (vec3, offset 12)
-        rhi::VertexAttribute(5, 1, rhi::TextureFormat::RGB32Float, 24),  // instanceScale (vec3, offset 24)
-        rhi::VertexAttribute(6, 1, rhi::TextureFormat::R32Float, 36),    // instanceMetallic (float, offset 36)
-        rhi::VertexAttribute(7, 1, rhi::TextureFormat::R32Float, 40),    // instanceRoughness (float, offset 40)
-        rhi::VertexAttribute(8, 1, rhi::TextureFormat::R32Float, 44)     // instanceAO (float, offset 44)
-    };
-
     // Create render pipeline descriptor
     rhi::RenderPipelineDesc pipelineDesc;
     pipelineDesc.vertexShader = buildingVertexShader.get();
     pipelineDesc.fragmentShader = buildingFragmentShader.get();
     pipelineDesc.layout = buildingPipelineLayout.get();
     pipelineDesc.vertex.buffers.push_back(vertexLayout);
-    pipelineDesc.vertex.buffers.push_back(instanceLayout);
 
     // Primitive state
     pipelineDesc.primitive.topology = rhi::PrimitiveTopology::TriangleList;
@@ -801,7 +804,7 @@ void Renderer::createShadowRenderer() {
     shadowRenderer = std::make_unique<rendering::ShadowRenderer>(rhiDevice, rhiQueue);
 
     // Initialize shadow renderer (no native render pass needed - creates its own)
-    if (shadowRenderer->initialize(nullptr)) {
+    if (shadowRenderer->initialize(nullptr, ssboBindGroupLayout.get())) {
         LOG_INFO("Renderer") << "Shadow renderer initialized successfully";
 
         // Update building bind groups with shadow map
@@ -1031,23 +1034,32 @@ void Renderer::drawFrame() {
     // Step 5: Shadow pass (render scene from light's perspective)
     if (shadowRenderer && shadowRenderer->isInitialized() && pendingInstancedData && pendingInstancedData->instanceCount > 1) {
         auto* mesh = pendingInstancedData->mesh;
-        auto* instanceBuffer = pendingInstancedData->instanceBuffer;
+        auto* objectBuffer = pendingInstancedData->objectBuffer;
 
-        if (mesh && mesh->hasData() && instanceBuffer) {
+        if (mesh && mesh->hasData() && objectBuffer) {
+            // Phase 2.1: Create/update SSBO bind group if buffer changed
+            if (objectBuffer != cachedObjectBuffers[frameIndex]) {
+                rhi::BindGroupDesc ssboDesc;
+                ssboDesc.layout = ssboBindGroupLayout.get();
+                ssboDesc.entries.push_back(rhi::BindGroupEntry::Buffer(0, objectBuffer));
+                ssboDesc.label = "SSBO Bind Group";
+                ssboBindGroups[frameIndex] = rhiBridge->getDevice()->createBindGroup(ssboDesc);
+                cachedObjectBuffers[frameIndex] = objectBuffer;
+            }
+
 #ifndef __EMSCRIPTEN__
-            // Add memory barrier to ensure host writes to instance buffer are visible to GPU
-            // This is critical for shadow pass to see updated building heights
+            // Add memory barrier to ensure host writes to SSBO are visible to GPU
             auto* vulkanEncoder = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
-            auto* vulkanBuffer = dynamic_cast<RHI::Vulkan::VulkanRHIBuffer*>(instanceBuffer);
+            auto* vulkanBuffer = dynamic_cast<RHI::Vulkan::VulkanRHIBuffer*>(objectBuffer);
             if (vulkanEncoder && vulkanBuffer) {
                 vulkanEncoder->getCommandBuffer().pipelineBarrier(
                     vk::PipelineStageFlagBits::eHost,
-                    vk::PipelineStageFlagBits::eVertexInput,
+                    vk::PipelineStageFlagBits::eVertexShader,
                     {},
                     {},
                     vk::BufferMemoryBarrier{
                         .srcAccessMask = vk::AccessFlagBits::eHostWrite,
-                        .dstAccessMask = vk::AccessFlagBits::eVertexAttributeRead,
+                        .dstAccessMask = vk::AccessFlagBits::eShaderRead,
                         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                         .buffer = vulkanBuffer->getVkBuffer(),
@@ -1090,20 +1102,16 @@ void Renderer::drawFrame() {
             
             auto* shadowPass = shadowRenderer->beginShadowPass(encoder.get(), frameIndex);
             if (shadowPass) {
-                // DEBUG: Log shadow pass execution
-                static int shadowFrameCount = 0;
-                if (++shadowFrameCount % 60 == 0) {
-                    LOG_DEBUG("Renderer") << "Shadow pass: instanceBuffer=" << (void*)instanceBuffer
-                                          << " instances=" << pendingInstancedData->instanceCount;
+                // Phase 2.1: Bind SSBO (set 1) for per-object data
+                if (ssboBindGroups[frameIndex]) {
+                    shadowPass->setBindGroup(1, ssboBindGroups[frameIndex].get());
                 }
 
-                // Bind vertex and instance buffers
+                // Bind vertex buffer only (no instance buffer — data comes from SSBO)
                 shadowPass->setVertexBuffer(0, mesh->getVertexBuffer(), 0);
-                shadowPass->setVertexBuffer(1, instanceBuffer, 0);
                 shadowPass->setIndexBuffer(mesh->getIndexBuffer(), rhi::IndexFormat::Uint32, 0);
 
                 // Draw buildings only (skip first instance which is the ground plane)
-                // Ground should receive shadows but not cast them
                 uint32_t buildingCount = pendingInstancedData->instanceCount - 1;
                 shadowPass->drawIndexed(
                     static_cast<uint32_t>(mesh->getIndexCount()),
@@ -1270,40 +1278,35 @@ void Renderer::drawFrame() {
             }
         }
 
-        // NEW: Render instanced data (buildings, etc.) using GPU Instancing (Phase 1.1)
-        // Clean interface - Renderer doesn't know about game entities
-        // NOTE: This is OUTSIDE the rhiPipeline block so buildings render independently
+        // Phase 2.1: Render instanced data using SSBO-based pipeline
         if (pendingInstancedData && pendingInstancedData->instanceCount > 0 && buildingPipeline) {
             auto* mesh = pendingInstancedData->mesh;
-            auto* instanceBuffer = pendingInstancedData->instanceBuffer;
+            auto* objectBuffer = pendingInstancedData->objectBuffer;
 
-            if (mesh && mesh->hasData() && instanceBuffer) {
-                // Switch to building instancing pipeline
+            if (mesh && mesh->hasData() && objectBuffer) {
+                // Switch to building pipeline
                 renderPass->setPipeline(buildingPipeline.get());
 
-                // Bind building-specific descriptor sets (UBO only)
+                // Bind set 0: UBO + textures
                 if (frameIndex < buildingBindGroups.size() && buildingBindGroups[frameIndex]) {
                     renderPass->setBindGroup(0, buildingBindGroups[frameIndex].get());
                 }
 
-                // Bind vertex buffer (slot 0: per-vertex data)
+                // Bind set 1: SSBO with per-object data
+                if (ssboBindGroups[frameIndex]) {
+                    renderPass->setBindGroup(1, ssboBindGroups[frameIndex].get());
+                }
+
+                // Bind vertex buffer only (no instance buffer — data comes from SSBO)
                 renderPass->setVertexBuffer(0, mesh->getVertexBuffer(), 0);
-
-                // Bind instance buffer (slot 1: per-instance data)
-                renderPass->setVertexBuffer(1, instanceBuffer, 0);
-
-                // Bind index buffer
                 renderPass->setIndexBuffer(mesh->getIndexBuffer(), rhi::IndexFormat::Uint32, 0);
 
-                // Draw all instances in one call!
+                // Draw all instances in one call
                 renderPass->drawIndexed(
-                    static_cast<uint32_t>(mesh->getIndexCount()),      // indexCount
-                    pendingInstancedData->instanceCount,                // instanceCount
-                    0,                                                  // firstIndex
-                    0,                                                  // vertexOffset
-                    0                                                   // firstInstance
+                    static_cast<uint32_t>(mesh->getIndexCount()),
+                    pendingInstancedData->instanceCount,
+                    0, 0, 0
                 );
-
             }
 
             // Clear pending data after rendering
