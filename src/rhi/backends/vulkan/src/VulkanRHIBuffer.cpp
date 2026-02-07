@@ -17,7 +17,19 @@ VulkanRHIBuffer::VulkanRHIBuffer(VulkanRHIDevice* device, const BufferDesc& desc
     bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bufferInfo.size = desc.size;
     bufferInfo.usage = vkUsage;
-    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    // Phase 3.2: Concurrent sharing for cross-queue buffers (compute + graphics)
+    std::vector<uint32_t> queueFamilies;
+    if (desc.concurrentSharing && m_device->hasDedicatedComputeQueue()) {
+        queueFamilies.push_back(m_device->getGraphicsQueueFamilyIndex());
+        // Access compute queue family from device
+        queueFamilies.push_back(m_device->getComputeQueueFamilyIndex());
+        bufferInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
+        bufferInfo.queueFamilyIndexCount = static_cast<uint32_t>(queueFamilies.size());
+        bufferInfo.pQueueFamilyIndices = queueFamilies.data();
+    } else {
+        bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    }
 
     // Determine VMA usage based on buffer usage
     VmaAllocationCreateInfo allocInfo{};
@@ -33,6 +45,11 @@ VulkanRHIBuffer::VulkanRHIBuffer(VulkanRHIDevice* device, const BufferDesc& desc
     } else {
         // Device-local memory for GPU-only buffers (Vertex, Index, Storage)
         allocInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+    }
+
+    // Phase 3.1: Transient resource optimization
+    if (desc.transient) {
+        allocInfo.flags |= VMA_ALLOCATION_CREATE_CAN_ALIAS_BIT;
     }
 
     // Create buffer with VMA

@@ -304,8 +304,6 @@ VulkanRHICommandEncoder::VulkanRHICommandEncoder(VulkanRHIDevice* device)
     , m_commandBuffer(nullptr)
     , m_finished(false)
 {
-    // Allocate command buffer from device's command pool
-    // TODO: Need to add command pool to VulkanRHIDevice
     vk::CommandBufferAllocateInfo allocInfo;
     allocInfo.commandPool = m_device->getCommandPool();
     allocInfo.level = vk::CommandBufferLevel::ePrimary;
@@ -314,7 +312,24 @@ VulkanRHICommandEncoder::VulkanRHICommandEncoder(VulkanRHIDevice* device)
     auto cmdBuffers = vk::raii::CommandBuffers(m_device->getVkDevice(), allocInfo);
     m_commandBuffer = std::move(cmdBuffers[0]);
 
-    // Begin command buffer
+    vk::CommandBufferBeginInfo beginInfo;
+    beginInfo.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+    m_commandBuffer.begin(beginInfo);
+}
+
+VulkanRHICommandEncoder::VulkanRHICommandEncoder(VulkanRHIDevice* device, vk::CommandPool commandPool)
+    : m_device(device)
+    , m_commandBuffer(nullptr)
+    , m_finished(false)
+{
+    vk::CommandBufferAllocateInfo allocInfo;
+    allocInfo.commandPool = commandPool;
+    allocInfo.level = vk::CommandBufferLevel::ePrimary;
+    allocInfo.commandBufferCount = 1;
+
+    auto cmdBuffers = vk::raii::CommandBuffers(m_device->getVkDevice(), allocInfo);
+    m_commandBuffer = std::move(cmdBuffers[0]);
+
     vk::CommandBufferBeginInfo beginInfo;
     beginInfo.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
     m_commandBuffer.begin(beginInfo);

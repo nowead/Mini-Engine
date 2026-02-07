@@ -104,6 +104,7 @@ private:
 class VulkanRHICommandEncoder : public RHICommandEncoder {
 public:
     VulkanRHICommandEncoder(VulkanRHIDevice* device);
+    VulkanRHICommandEncoder(VulkanRHIDevice* device, vk::CommandPool commandPool);
     ~VulkanRHICommandEncoder() override;
 
     std::unique_ptr<RHIRenderPassEncoder> beginRenderPass(const RenderPassDesc& desc) override;

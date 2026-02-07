@@ -55,6 +55,21 @@ Renderer::Renderer(GLFWwindow* window,
     // Phase 2.2: Create GPU frustum culling pipeline
     createCullingPipeline();
 
+    // Phase 3.2: Async compute setup
+    {
+        const auto& features = rhiBridge->getDevice()->getCapabilities().getFeatures();
+        if (features.dedicatedComputeQueue && features.timelineSemaphores) {
+            computeTimelineSemaphore = rhiBridge->getDevice()->createTimelineSemaphore(0);
+            if (computeTimelineSemaphore) {
+                useAsyncCompute = true;
+                LOG_INFO("Renderer") << "Async compute enabled (dedicated compute queue + timeline semaphores)";
+            }
+        }
+        if (!useAsyncCompute) {
+            LOG_INFO("Renderer") << "Async compute disabled, using inline compute on graphics queue";
+        }
+    }
+
     // Create particle renderer
     createParticleRenderer();
 
@@ -63,6 +78,9 @@ Renderer::Renderer(GLFWwindow* window,
 
     // Phase 3.3: Create shadow renderer
     createShadowRenderer();
+
+    // Phase 3.1: Log GPU memory statistics
+    rhiBridge->getDevice()->logMemoryStats();
 }
 
 Renderer::~Renderer() {
@@ -184,6 +202,7 @@ void Renderer::createRHIDepthResources() {
     depthDesc.size = rhi::Extent3D(rhiSwapchain->getWidth(), rhiSwapchain->getHeight(), 1);
     depthDesc.format = rhi::TextureFormat::Depth32Float;
     depthDesc.usage = rhi::TextureUsage::DepthStencil;
+    depthDesc.transient = true;  // Phase 3.1: Depth buffer is frame-temporary, enable lazily allocated memory
     depthDesc.label = "RHI Depth Image";
 
     rhiDepthImage = rhiDevice->createTexture(depthDesc);
@@ -1054,10 +1073,15 @@ void Renderer::createCullingPipeline() {
         cullUniformBuffers[i] = device->createBuffer(uboDesc);
 
         // Indirect draw buffer: 20 bytes (DrawIndexedIndirectCommand)
+        // Phase 3.2: Enable concurrent sharing for async compute
+        const auto& features = device->getCapabilities().getFeatures();
+        bool needsConcurrent = features.dedicatedComputeQueue && features.timelineSemaphores;
+
         rhi::BufferDesc indirectDesc;
         indirectDesc.size = 20;  // 5 * uint32_t
         indirectDesc.usage = rhi::BufferUsage::Storage | rhi::BufferUsage::Indirect | rhi::BufferUsage::MapWrite;
         indirectDesc.label = "Indirect Draw Buffer";
+        indirectDesc.concurrentSharing = needsConcurrent;
         indirectDrawBuffers[i] = device->createBuffer(indirectDesc);
 
         // Visible indices buffer: 4 bytes per object
@@ -1065,6 +1089,7 @@ void Renderer::createCullingPipeline() {
         visDesc.size = sizeof(uint32_t) * MAX_CULL_OBJECTS;
         visDesc.usage = rhi::BufferUsage::Storage;
         visDesc.label = "Visible Indices Buffer";
+        visDesc.concurrentSharing = needsConcurrent;
         visibleIndicesBuffers[i] = device->createBuffer(visDesc);
     }
 
@@ -1275,6 +1300,127 @@ void Renderer::performFrustumCulling(rhi::RHICommandEncoder* encoder, uint32_t f
 #endif
 }
 
+void Renderer::performFrustumCullingAsync(uint32_t frameIndex, uint32_t objectCount, uint32_t indexCount) {
+    if (!cullPipeline || objectCount == 0 || !useAsyncCompute) return;
+
+    auto* device = rhiBridge->getDevice();
+    auto* objectBuffer = pendingInstancedData->objectBuffer;
+
+    // Step 1: Write CullUBO
+    CullUBO cullUbo;
+    glm::mat4 vp = projectionMatrix * viewMatrix;
+    extractFrustumPlanes(vp, cullUbo.frustumPlanes);
+    cullUbo.objectCount = objectCount;
+    cullUbo.indexCount = indexCount;
+    cullUbo.pad[0] = 0;
+    cullUbo.pad[1] = 0;
+    cullUniformBuffers[frameIndex]->write(&cullUbo, sizeof(CullUBO));
+
+    // Step 2: Reset indirect draw buffer
+    struct DrawIndexedIndirectCommand {
+        uint32_t indexCount;
+        uint32_t instanceCount;
+        uint32_t firstIndex;
+        int32_t  vertexOffset;
+        uint32_t firstInstance;
+    };
+    DrawIndexedIndirectCommand cmd;
+    cmd.indexCount = indexCount;
+    cmd.instanceCount = 0;
+    cmd.firstIndex = 0;
+    cmd.vertexOffset = 0;
+    cmd.firstInstance = 0;
+    indirectDrawBuffers[frameIndex]->write(&cmd, sizeof(cmd));
+
+    // Step 3: Create/update cull bind group
+    if (objectBuffer != cachedObjectBuffers[frameIndex] || !cullBindGroups[frameIndex]) {
+        rhi::BindGroupDesc cullBgDesc;
+        cullBgDesc.layout = cullBindGroupLayout.get();
+        cullBgDesc.entries.push_back(rhi::BindGroupEntry::Buffer(0, cullUniformBuffers[frameIndex].get()));
+        cullBgDesc.entries.push_back(rhi::BindGroupEntry::Buffer(1, objectBuffer));
+        cullBgDesc.entries.push_back(rhi::BindGroupEntry::Buffer(2, indirectDrawBuffers[frameIndex].get()));
+        cullBgDesc.entries.push_back(rhi::BindGroupEntry::Buffer(3, visibleIndicesBuffers[frameIndex].get()));
+        cullBgDesc.label = "Cull Bind Group";
+        cullBindGroups[frameIndex] = device->createBindGroup(cullBgDesc);
+    }
+
+    // Step 4: Create compute command encoder from compute pool
+    auto computeEncoder = device->createCommandEncoder(rhi::QueueType::Compute);
+    if (!computeEncoder) return;
+
+#ifndef __EMSCRIPTEN__
+    // Pre-compute barriers: host writes visible to compute shader
+    auto* vulkanEncoder = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(computeEncoder.get());
+    if (vulkanEncoder) {
+        auto& cmdBuf = vulkanEncoder->getCommandBuffer();
+        auto* vulkanCullUbo = dynamic_cast<RHI::Vulkan::VulkanRHIBuffer*>(cullUniformBuffers[frameIndex].get());
+        auto* vulkanIndirect = dynamic_cast<RHI::Vulkan::VulkanRHIBuffer*>(indirectDrawBuffers[frameIndex].get());
+        auto* vulkanObjectBuf = dynamic_cast<RHI::Vulkan::VulkanRHIBuffer*>(objectBuffer);
+
+        std::vector<vk::BufferMemoryBarrier> barriers;
+        if (vulkanCullUbo) {
+            barriers.push_back(vk::BufferMemoryBarrier{
+                .srcAccessMask = vk::AccessFlagBits::eHostWrite,
+                .dstAccessMask = vk::AccessFlagBits::eUniformRead,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .buffer = vulkanCullUbo->getVkBuffer(),
+                .offset = 0, .size = VK_WHOLE_SIZE
+            });
+        }
+        if (vulkanIndirect) {
+            barriers.push_back(vk::BufferMemoryBarrier{
+                .srcAccessMask = vk::AccessFlagBits::eHostWrite,
+                .dstAccessMask = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .buffer = vulkanIndirect->getVkBuffer(),
+                .offset = 0, .size = VK_WHOLE_SIZE
+            });
+        }
+        if (vulkanObjectBuf) {
+            barriers.push_back(vk::BufferMemoryBarrier{
+                .srcAccessMask = vk::AccessFlagBits::eHostWrite,
+                .dstAccessMask = vk::AccessFlagBits::eShaderRead,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .buffer = vulkanObjectBuf->getVkBuffer(),
+                .offset = 0, .size = VK_WHOLE_SIZE
+            });
+        }
+        if (!barriers.empty()) {
+            cmdBuf.pipelineBarrier(
+                vk::PipelineStageFlagBits::eHost,
+                vk::PipelineStageFlagBits::eComputeShader,
+                {}, {}, barriers, {}
+            );
+        }
+    }
+#endif
+
+    // Step 5: Dispatch compute shader
+    auto computePass = computeEncoder->beginComputePass("Async_Frustum_Cull");
+    computePass->setPipeline(cullPipeline.get());
+    computePass->setBindGroup(0, cullBindGroups[frameIndex].get());
+    computePass->dispatch((objectCount + 63) / 64, 1, 1);
+    computePass->end();
+
+    // No post-compute barriers needed — concurrent sharing mode handles visibility
+    // Timeline semaphore provides execution ordering
+
+    // Step 6: Submit to compute queue with timeline signal
+    auto computeCmdBuffer = computeEncoder->finish();
+    if (computeCmdBuffer) {
+        rhi::SubmitInfo computeSubmit;
+        computeSubmit.commandBuffers.push_back(computeCmdBuffer.get());
+        computeSubmit.timelineSignals.push_back(
+            rhi::TimelineSignal{computeTimelineSemaphore.get(), ++computeTimelineValue});
+
+        auto* computeQueue = device->getQueue(rhi::QueueType::Compute);
+        computeQueue->submit(computeSubmit);
+    }
+}
+
 // ============================================================================
 // Phase 8: RHI Uniform Buffer Update
 // ============================================================================
@@ -1385,10 +1531,16 @@ void Renderer::drawFrame() {
                 cullBindGroups[frameIndex].reset();
             }
 
-            // Phase 2.2: Perform GPU frustum culling (compute dispatch)
+            // Phase 2.2+3.2: Perform GPU frustum culling
             uint32_t instanceCount = pendingInstancedData->instanceCount;
             uint32_t meshIndexCount = static_cast<uint32_t>(mesh->getIndexCount());
-            performFrustumCulling(encoder.get(), frameIndex, instanceCount, meshIndexCount);
+            if (useAsyncCompute) {
+                // Async: separate compute encoder submitted to compute queue
+                performFrustumCullingAsync(frameIndex, instanceCount, meshIndexCount);
+            } else {
+                // Inline: compute on graphics queue command buffer
+                performFrustumCulling(encoder.get(), frameIndex, instanceCount, meshIndexCount);
+            }
 
             // Shadow pass (render scene from light's perspective — uses direct drawIndexed, no culling)
             if (shadowRenderer && shadowRenderer->isInitialized() && instanceCount > 1) {
@@ -1694,12 +1846,27 @@ void Renderer::drawFrame() {
 
     // Step 4: Submit command buffer with synchronization
     if (commandBuffer) {
-        rhiBridge->submitCommandBuffer(
-            commandBuffer.get(),
-            rhiBridge->getImageAvailableSemaphore(),
-            rhiBridge->getRenderFinishedSemaphore(),
-            rhiBridge->getInFlightFence()
-        );
+        if (useAsyncCompute && computeTimelineValue > 0) {
+            // Async compute path: use SubmitInfo with timeline wait
+            rhi::SubmitInfo graphicsSubmit;
+            graphicsSubmit.commandBuffers.push_back(commandBuffer.get());
+            graphicsSubmit.waitSemaphores.push_back(rhiBridge->getImageAvailableSemaphore());
+            graphicsSubmit.signalSemaphores.push_back(rhiBridge->getRenderFinishedSemaphore());
+            graphicsSubmit.signalFence = rhiBridge->getInFlightFence();
+            graphicsSubmit.timelineWaits.push_back(
+                rhi::TimelineWait{computeTimelineSemaphore.get(), computeTimelineValue});
+
+            auto* graphicsQueue = rhiBridge->getDevice()->getQueue(rhi::QueueType::Graphics);
+            graphicsQueue->submit(graphicsSubmit);
+        } else {
+            // Inline compute path: simple submit
+            rhiBridge->submitCommandBuffer(
+                commandBuffer.get(),
+                rhiBridge->getImageAvailableSemaphore(),
+                rhiBridge->getRenderFinishedSemaphore(),
+                rhiBridge->getInFlightFence()
+            );
+        }
     }
 
     // Step 5: Present frame

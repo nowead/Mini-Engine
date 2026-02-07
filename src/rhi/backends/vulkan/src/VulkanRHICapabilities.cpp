@@ -80,6 +80,31 @@ void VulkanRHICapabilities::queryFeatures(const vk::raii::PhysicalDevice& physic
     features2 = physicalDevice.getFeatures2();
 
     m_features.shaderFloat16 = features12.shaderFloat16;
+    m_features.timelineSemaphores = features12.timelineSemaphore;
+
+    // Phase 3.1: Memory aliasing is always available via VMA
+    m_features.memoryAliasing = true;
+
+    // Check for lazily allocated memory support
+    auto memProps = physicalDevice.getMemoryProperties();
+    m_features.lazilyAllocatedMemory = false;
+    for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
+        if (memProps.memoryTypes[i].propertyFlags & vk::MemoryPropertyFlagBits::eLazilyAllocated) {
+            m_features.lazilyAllocatedMemory = true;
+            break;
+        }
+    }
+
+    // Phase 3.2: Check for dedicated compute queue
+    auto queueFamilies = physicalDevice.getQueueFamilyProperties();
+    m_features.dedicatedComputeQueue = false;
+    for (uint32_t i = 0; i < queueFamilies.size(); i++) {
+        if ((queueFamilies[i].queueFlags & vk::QueueFlagBits::eCompute) &&
+            !(queueFamilies[i].queueFlags & vk::QueueFlagBits::eGraphics)) {
+            m_features.dedicatedComputeQueue = true;
+            break;
+        }
+    }
 
     // Ray tracing not yet supported in this implementation
     m_features.rayTracing = false;

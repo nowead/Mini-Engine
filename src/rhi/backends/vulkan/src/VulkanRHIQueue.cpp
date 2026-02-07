@@ -29,28 +29,48 @@ void VulkanRHIQueue::submit(const SubmitInfo& submitInfo) {
         }
     }
 
-    // Convert wait semaphores
+    // Collect all wait semaphores (binary + timeline)
     std::vector<vk::Semaphore> vkWaitSemaphores;
     std::vector<vk::PipelineStageFlags> vkWaitStages;
-    vkWaitSemaphores.reserve(submitInfo.waitSemaphores.size());
-    vkWaitStages.reserve(submitInfo.waitSemaphores.size());
+    std::vector<uint64_t> waitValues;
 
     for (auto* semaphore : submitInfo.waitSemaphores) {
         auto* vulkanSemaphore = static_cast<VulkanRHISemaphore*>(semaphore);
         if (vulkanSemaphore) {
             vkWaitSemaphores.push_back(vulkanSemaphore->getVkSemaphore());
             vkWaitStages.push_back(vk::PipelineStageFlagBits::eColorAttachmentOutput);
+            waitValues.push_back(0); // Binary semaphore: value ignored
         }
     }
 
-    // Convert signal semaphores
+    for (const auto& tw : submitInfo.timelineWaits) {
+        auto* vulkanSemaphore = static_cast<VulkanRHITimelineSemaphore*>(tw.semaphore);
+        if (vulkanSemaphore) {
+            vkWaitSemaphores.push_back(vulkanSemaphore->getVkSemaphore());
+            vkWaitStages.push_back(vk::PipelineStageFlagBits::eComputeShader |
+                                   vk::PipelineStageFlagBits::eDrawIndirect |
+                                   vk::PipelineStageFlagBits::eVertexShader);
+            waitValues.push_back(tw.value);
+        }
+    }
+
+    // Collect all signal semaphores (binary + timeline)
     std::vector<vk::Semaphore> vkSignalSemaphores;
-    vkSignalSemaphores.reserve(submitInfo.signalSemaphores.size());
+    std::vector<uint64_t> signalValues;
 
     for (auto* semaphore : submitInfo.signalSemaphores) {
         auto* vulkanSemaphore = static_cast<VulkanRHISemaphore*>(semaphore);
         if (vulkanSemaphore) {
             vkSignalSemaphores.push_back(vulkanSemaphore->getVkSemaphore());
+            signalValues.push_back(0); // Binary semaphore: value ignored
+        }
+    }
+
+    for (const auto& ts : submitInfo.timelineSignals) {
+        auto* vulkanSemaphore = static_cast<VulkanRHITimelineSemaphore*>(ts.semaphore);
+        if (vulkanSemaphore) {
+            vkSignalSemaphores.push_back(vulkanSemaphore->getVkSemaphore());
+            signalValues.push_back(ts.value);
         }
     }
 
@@ -72,6 +92,16 @@ void VulkanRHIQueue::submit(const SubmitInfo& submitInfo) {
         .signalSemaphoreCount = static_cast<uint32_t>(vkSignalSemaphores.size()),
         .pSignalSemaphores = vkSignalSemaphores.data()
     };
+
+    // Chain timeline semaphore info if any timeline semaphores are used
+    vk::TimelineSemaphoreSubmitInfo timelineInfo;
+    if (!submitInfo.timelineWaits.empty() || !submitInfo.timelineSignals.empty()) {
+        timelineInfo.waitSemaphoreValueCount = static_cast<uint32_t>(waitValues.size());
+        timelineInfo.pWaitSemaphoreValues = waitValues.data();
+        timelineInfo.signalSemaphoreValueCount = static_cast<uint32_t>(signalValues.size());
+        timelineInfo.pSignalSemaphoreValues = signalValues.data();
+        vkSubmitInfo.pNext = &timelineInfo;
+    }
 
     m_queue.submit(vkSubmitInfo, vkFence);
 }

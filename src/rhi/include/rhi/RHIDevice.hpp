@@ -201,6 +201,25 @@ public:
      * @return Device name string (e.g., "NVIDIA GeForce RTX 3080")
      */
     virtual const std::string& getDeviceName() const = 0;
+
+    /**
+     * @brief Log GPU memory usage statistics (Phase 3.1)
+     */
+    virtual void logMemoryStats() const {}
+
+    /**
+     * @brief Create a timeline semaphore (Phase 3.2)
+     * @param initialValue Initial counter value
+     * @return Unique pointer to timeline semaphore, or nullptr if unsupported
+     */
+    virtual std::unique_ptr<RHITimelineSemaphore> createTimelineSemaphore(uint64_t initialValue = 0) { return nullptr; }
+
+    /**
+     * @brief Create a command encoder for a specific queue type (Phase 3.2)
+     * @param queueType Queue type to allocate command buffer from
+     * @return Unique pointer to the created command encoder
+     */
+    virtual std::unique_ptr<RHICommandEncoder> createCommandEncoder(QueueType queueType) { return createCommandEncoder(); }
 };
 
 } // namespace rhi

@@ -179,6 +179,16 @@ VulkanRHITexture::VulkanRHITexture(VulkanRHIDevice* device, const TextureDesc& d
     allocInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
     allocInfo.flags = 0;
 
+    // Phase 3.1: Transient resource optimization
+    if (desc.transient) {
+        allocInfo.flags |= VMA_ALLOCATION_CREATE_CAN_ALIAS_BIT;
+        // For transient depth/stencil attachments, enable lazily allocated memory
+        if (hasFlag(desc.usage, rhi::TextureUsage::DepthStencil)) {
+            imageInfo.usage |= VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+            allocInfo.preferredFlags = VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT;
+        }
+    }
+
     // Create image with VMA
     VkResult result = vmaCreateImage(
         m_device->getVmaAllocator(),

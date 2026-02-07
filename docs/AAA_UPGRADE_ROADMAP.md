@@ -2,7 +2,7 @@
 
 **Goal**: Elevate the engine from toy-project level to a tech demo with **PBR visuals** and **GPU-Driven optimization**, proving production-ready engine development capability.
 
-**Progress**: Phase 2.2+2.3 Complete (2026-02-06)
+**Progress**: Phase 3.1+3.2 Complete (2026-02-07)
 
 ---
 
@@ -93,25 +93,29 @@
 
 **Core Objective**: Demonstrate systems-level understanding (memory, synchronization) as an engine developer.
 
-### 3.1 Memory Aliasing (Resource Management)
+### 3.1 Memory Aliasing (Resource Management) -- COMPLETE
 
-**Target File**: `src/rhi/backends/vulkan/src/VulkanMemoryAllocator.cpp`
-
-**Tasks**:
-
-- [ ] **Transient Resource Identification**: Identify resources not used simultaneously (e.g., Shadow Map vs Post-process Buffer).
-- [ ] **Aliasing Implementation**: Use VMA's `VMA_ALLOCATION_CREATE_CAN_ALIAS_BIT` to share the same `VkDeviceMemory` region.
-- [ ] **Memory Savings Report**: Capture GPU memory usage comparison data before and after aliasing.
-
-### 3.2 Async Compute (Parallelism)
-
-**Target Files**: `src/rhi/backends/vulkan/src/VulkanRHIQueue.cpp`, `src/rendering/Renderer.cpp`
+**Target Files**: `src/rhi/include/rhi/RHITexture.hpp`, `src/rhi/include/rhi/RHIBuffer.hpp`, `src/rhi/backends/vulkan/src/VulkanRHITexture.cpp`, `src/rhi/backends/vulkan/src/VulkanRHIBuffer.cpp`, `src/rhi/backends/vulkan/src/VulkanRHICapabilities.cpp`, `src/rendering/Renderer.cpp`
 
 **Tasks**:
 
-- [ ] **Queue Family Separation**: Acquire a Compute Queue separate from the Graphics Queue.
-- [ ] **Pipeline Separation**: Execute Culling (Compute) and Shadow Rendering (Graphics) in parallel.
-- [ ] **Explicit Sync**: Introduce Timeline Semaphores for precise synchronization between Compute completion and Graphics draw timing.
+- [x] **Transient Resource Flag**: Added `bool transient` to `TextureDesc` and `BufferDesc`. Transient textures use `VMA_ALLOCATION_CREATE_CAN_ALIAS_BIT` and depth attachments get `VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT` + `VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT`.
+- [x] **Capability Detection**: Added `memoryAliasing`, `lazilyAllocatedMemory`, `dedicatedComputeQueue`, `timelineSemaphores` to `RHIFeatures`. Vulkan backend queries memory types and queue families at initialization.
+- [x] **Depth Buffer Optimization**: Marked depth buffer as transient — on Apple M1 (tile-based), uses lazily allocated memory (7728 KB saved from physical allocation).
+- [x] **Memory Stats Logging**: Added `logMemoryStats()` to `RHIDevice` interface. Vulkan implementation reports allocation counts, block counts, MB allocated/reserved, lazily allocated stats, and feature flags via VMA statistics.
+
+### 3.2 Async Compute (Parallelism) -- COMPLETE
+
+**Target Files**: `src/rhi/include/rhi/RHISync.hpp`, `src/rhi/include/rhi/RHIQueue.hpp`, `src/rhi/include/rhi/RHIDevice.hpp`, `src/rhi/backends/vulkan/src/VulkanRHIDevice.cpp`, `src/rhi/backends/vulkan/src/VulkanRHISync.cpp`, `src/rhi/backends/vulkan/src/VulkanRHIQueue.cpp`, `src/rhi/backends/vulkan/src/VulkanRHICommandEncoder.cpp`, `src/rendering/Renderer.cpp`
+
+**Tasks**:
+
+- [x] **Timeline Semaphore RHI**: New `RHITimelineSemaphore` interface (`getCompletedValue()`, `wait()`, `signal()`). `SubmitInfo` extended with `TimelineWait`/`TimelineSignal` vectors. `VulkanRHITimelineSemaphore` wraps `VK_SEMAPHORE_TYPE_TIMELINE`.
+- [x] **Queue Family Separation**: Compute queue discovery scans for dedicated compute family (Compute without Graphics flag). Falls back to graphics queue on single-queue GPUs (M1). Separate `VkDeviceQueueCreateInfo` per unique family.
+- [x] **Compute Command Pool**: Dedicated `vk::raii::CommandPool` for compute queue family. `createCommandEncoder(QueueType::Compute)` allocates from compute pool. `getQueue(QueueType::Compute)` returns dedicated or fallback queue.
+- [x] **Timeline Semaphore Submission**: `VulkanRHIQueue::submit()` chains `VkTimelineSemaphoreSubmitInfo` into `pNext` when timeline waits/signals present. Binary and timeline semaphores coexist in same submission.
+- [x] **Async Compute Renderer**: `performFrustumCullingAsync()` creates separate compute encoder, dispatches frustum culling on compute queue with timeline signal. Graphics submit waits on timeline value. Buffers use `VK_SHARING_MODE_CONCURRENT` for cross-queue access.
+- [x] **Feature-Gated Fallback**: `useAsyncCompute` enabled only when `dedicatedComputeQueue + timelineSemaphores` detected. M1 (no dedicated compute) uses inline compute on graphics queue. Linux (discrete GPU) activates true async path.
 
 ---
 
@@ -139,4 +143,4 @@
 ---
 
 *Created: 2026-02-05*
-*Last Updated: 2026-02-06*
+*Last Updated: 2026-02-07*

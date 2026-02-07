@@ -13,6 +13,8 @@ struct BufferDesc {
     BufferUsage usage = BufferUsage::None;  // Usage flags
     bool mappedAtCreation = false;          // Whether to map the buffer at creation
     const char* label = nullptr;            // Optional debug label
+    bool transient = false;                 // Hint: frame-temporary, may alias memory (Phase 3.1)
+    bool concurrentSharing = false;         // Use concurrent sharing mode for cross-queue access (Phase 3.2)
 
     BufferDesc() = default;
     BufferDesc(uint64_t size_, BufferUsage usage_, bool mapped = false, const char* label_ = nullptr)

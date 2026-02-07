@@ -226,6 +226,11 @@ private:
     std::array<std::unique_ptr<rhi::RHIBindGroup>, MAX_FRAMES_IN_FLIGHT> cullBindGroups;
     static constexpr uint32_t MAX_CULL_OBJECTS = 4096;
 
+    // Phase 3.2: Async compute
+    std::unique_ptr<rhi::RHITimelineSemaphore> computeTimelineSemaphore;
+    uint64_t computeTimelineValue = 0;
+    bool useAsyncCompute = false;
+
     struct alignas(16) CullUBO {
         glm::vec4 frustumPlanes[6];
         uint32_t objectCount;
@@ -286,6 +291,7 @@ private:
     void createCullingPipeline();   // Phase 2.2: GPU frustum culling
     void performFrustumCulling(rhi::RHICommandEncoder* encoder, uint32_t frameIndex,
                                uint32_t objectCount, uint32_t indexCount);
+    void performFrustumCullingAsync(uint32_t frameIndex, uint32_t objectCount, uint32_t indexCount);
     void extractFrustumPlanes(const glm::mat4& vp, glm::vec4 planes[6]);
 
     // RHI command recording (Phase 4.2)

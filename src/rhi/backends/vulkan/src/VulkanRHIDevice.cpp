@@ -34,12 +34,17 @@ VulkanRHIDevice::VulkanRHIDevice(GLFWwindow* window, bool enableValidation)
     createLogicalDevice();
     createVmaAllocator();
     createCommandPool();
+    createComputeCommandPool();
     createDescriptorPool();
     queryCapabilities();
 
-    // Create RHI queue wrapper
+    // Create RHI queue wrappers
     m_rhiGraphicsQueue = std::make_unique<VulkanRHIQueue>(
         this, m_graphicsQueue, m_graphicsQueueFamily, QueueType::Graphics);
+    if (m_hasDedicatedComputeQueue) {
+        m_rhiComputeQueue = std::make_unique<VulkanRHIQueue>(
+            this, m_computeQueue, m_computeQueueFamily, QueueType::Compute);
+    }
 }
 
 VulkanRHIDevice::~VulkanRHIDevice() {
@@ -142,14 +147,14 @@ void VulkanRHIDevice::pickPhysicalDevice() {
 
 void VulkanRHIDevice::createLogicalDevice() {
     std::cout << "Creating logical device..." << std::endl;
-    
-    // Find graphics queue family
+
+    // Find queue families
     auto queueFamilies = m_physicalDevice.getQueueFamilyProperties();
     std::cout << "Found " << queueFamilies.size() << " queue families" << std::endl;
 
+    // Find graphics queue family
     for (uint32_t i = 0; i < queueFamilies.size(); i++) {
         if (queueFamilies[i].queueFlags & vk::QueueFlagBits::eGraphics) {
-            // Check if this queue family supports present
             if (m_physicalDevice.getSurfaceSupportKHR(i, *m_surface)) {
                 m_graphicsQueueFamily = i;
                 std::cout << "Using queue family " << i << " for graphics and present" << std::endl;
@@ -162,26 +167,52 @@ void VulkanRHIDevice::createLogicalDevice() {
         throw std::runtime_error("Failed to find suitable queue family!");
     }
 
-    // Queue create info
-    float queuePriority = 1.0f;
-    vk::DeviceQueueCreateInfo queueCreateInfo{
-        .queueFamilyIndex = m_graphicsQueueFamily,
-        .queueCount = 1,
-        .pQueuePriorities = &queuePriority
-    };
+    // Find dedicated compute queue family (has Compute but not Graphics)
+    for (uint32_t i = 0; i < queueFamilies.size(); i++) {
+        if ((queueFamilies[i].queueFlags & vk::QueueFlagBits::eCompute) &&
+            !(queueFamilies[i].queueFlags & vk::QueueFlagBits::eGraphics)) {
+            m_computeQueueFamily = i;
+            m_hasDedicatedComputeQueue = true;
+            std::cout << "Dedicated compute queue family: " << i << std::endl;
+            break;
+        }
+    }
 
-    // Device features - query available features first
+    // Fallback: use graphics queue family for compute
+    if (m_computeQueueFamily == ~0u) {
+        m_computeQueueFamily = m_graphicsQueueFamily;
+        m_hasDedicatedComputeQueue = false;
+        std::cout << "No dedicated compute queue, using graphics queue fallback" << std::endl;
+    }
+
+    // Queue create infos for unique families
+    float queuePriority = 1.0f;
+    std::vector<vk::DeviceQueueCreateInfo> queueCreateInfos;
+    std::set<uint32_t> uniqueQueueFamilies = { m_graphicsQueueFamily, m_computeQueueFamily };
+    for (uint32_t family : uniqueQueueFamilies) {
+        queueCreateInfos.push_back(vk::DeviceQueueCreateInfo{
+            .queueFamilyIndex = family,
+            .queueCount = 1,
+            .pQueuePriorities = &queuePriority
+        });
+    }
+
+    // Device features
     std::cout << "Querying device features..." << std::endl;
     auto availableFeatures = m_physicalDevice.getFeatures();
     vk::PhysicalDeviceFeatures deviceFeatures{
-        .fillModeNonSolid = availableFeatures.fillModeNonSolid,  // Only enable if supported
-        .samplerAnisotropy = availableFeatures.samplerAnisotropy  // Only enable if supported
+        .fillModeNonSolid = availableFeatures.fillModeNonSolid,
+        .samplerAnisotropy = availableFeatures.samplerAnisotropy
     };
     std::cout << "fillModeNonSolid: " << availableFeatures.fillModeNonSolid << ", samplerAnisotropy: " << availableFeatures.samplerAnisotropy << std::endl;
 
-#ifdef __APPLE__
-    std::cout << "Enabling macOS dynamic rendering features..." << std::endl;
-    // macOS: Enable Vulkan 1.3 features for dynamic rendering
+    // Query timeline semaphore support
+    auto featureChain = m_physicalDevice.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan12Features>();
+    auto& features12 = featureChain.get<vk::PhysicalDeviceVulkan12Features>();
+    m_hasTimelineSemaphores = features12.timelineSemaphore;
+    std::cout << "Timeline semaphores: " << (m_hasTimelineSemaphores ? "supported" : "not supported") << std::endl;
+
+    // Build pNext chain: dynamicRendering -> sync2 -> (optional) timelineSemaphore
     vk::PhysicalDeviceDynamicRenderingFeatures dynamicRenderingFeatures{
         .dynamicRendering = VK_TRUE
     };
@@ -189,34 +220,34 @@ void VulkanRHIDevice::createLogicalDevice() {
         .pNext = &dynamicRenderingFeatures,
         .synchronization2 = VK_TRUE
     };
-    vk::PhysicalDeviceFeatures2 deviceFeatures2{
+    vk::PhysicalDeviceTimelineSemaphoreFeatures timelineSemaphoreFeatures{
         .pNext = &sync2Features,
+        .timelineSemaphore = m_hasTimelineSemaphores ? VK_TRUE : VK_FALSE
+    };
+
+    void* featureChainHead = m_hasTimelineSemaphores
+        ? static_cast<void*>(&timelineSemaphoreFeatures)
+        : static_cast<void*>(&sync2Features);
+
+    vk::PhysicalDeviceFeatures2 deviceFeatures2{
+        .pNext = featureChainHead,
         .features = deviceFeatures
     };
 
-    // Device create info with features2
     vk::DeviceCreateInfo createInfo{
         .pNext = &deviceFeatures2,
-        .queueCreateInfoCount = 1,
-        .pQueueCreateInfos = &queueCreateInfo,
+        .queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size()),
+        .pQueueCreateInfos = queueCreateInfos.data(),
         .enabledExtensionCount = static_cast<uint32_t>(m_deviceExtensions.size()),
         .ppEnabledExtensionNames = m_deviceExtensions.data()
     };
-    
+
+#ifdef __APPLE__
     std::cout << "Device extensions: ";
     for (const auto& ext : m_deviceExtensions) {
         std::cout << ext << " ";
     }
     std::cout << std::endl;
-#else
-    // Linux/Windows: Use traditional device creation (no dynamic rendering)
-    vk::DeviceCreateInfo createInfo{
-        .queueCreateInfoCount = 1,
-        .pQueueCreateInfos = &queueCreateInfo,
-        .enabledExtensionCount = static_cast<uint32_t>(m_deviceExtensions.size()),
-        .ppEnabledExtensionNames = m_deviceExtensions.data(),
-        .pEnabledFeatures = &deviceFeatures
-    };
 #endif
 
     if (m_enableValidationLayers) {
@@ -226,8 +257,9 @@ void VulkanRHIDevice::createLogicalDevice() {
 
     std::cout << "Creating vk::raii::Device..." << std::endl;
     m_device = vk::raii::Device(m_physicalDevice, createInfo);
-    std::cout << "Device created, getting queue..." << std::endl;
+    std::cout << "Device created, getting queues..." << std::endl;
     m_graphicsQueue = vk::raii::Queue(m_device, m_graphicsQueueFamily, 0);
+    m_computeQueue = vk::raii::Queue(m_device, m_computeQueueFamily, 0);
     std::cout << "Logical device creation complete" << std::endl;
 }
 
@@ -252,6 +284,16 @@ void VulkanRHIDevice::createCommandPool() {
     poolInfo.queueFamilyIndex = m_graphicsQueueFamily;
 
     m_commandPool = vk::raii::CommandPool(m_device, poolInfo);
+}
+
+void VulkanRHIDevice::createComputeCommandPool() {
+    if (m_hasDedicatedComputeQueue) {
+        vk::CommandPoolCreateInfo poolInfo;
+        poolInfo.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
+        poolInfo.queueFamilyIndex = m_computeQueueFamily;
+
+        m_computeCommandPool = vk::raii::CommandPool(m_device, poolInfo);
+    }
 }
 
 void VulkanRHIDevice::createDescriptorPool() {
@@ -298,12 +340,13 @@ const std::string& VulkanRHIDevice::getDeviceName() const {
 }
 
 RHIQueue* VulkanRHIDevice::getQueue(QueueType type) {
-    // Currently only graphics queue is supported
     if (type == QueueType::Graphics) {
         return m_rhiGraphicsQueue.get();
     }
-
-    // TODO: Support compute and transfer queues
+    if (type == QueueType::Compute) {
+        // Return dedicated compute queue if available, otherwise fallback to graphics
+        return m_rhiComputeQueue ? m_rhiComputeQueue.get() : m_rhiGraphicsQueue.get();
+    }
     return nullptr;
 }
 
@@ -367,8 +410,60 @@ std::unique_ptr<RHISemaphore> VulkanRHIDevice::createSemaphore() {
     return std::make_unique<VulkanRHISemaphore>(this);
 }
 
+std::unique_ptr<RHITimelineSemaphore> VulkanRHIDevice::createTimelineSemaphore(uint64_t initialValue) {
+    if (!m_hasTimelineSemaphores) {
+        return nullptr;
+    }
+    return std::make_unique<VulkanRHITimelineSemaphore>(this, initialValue);
+}
+
+std::unique_ptr<RHICommandEncoder> VulkanRHIDevice::createCommandEncoder(QueueType queueType) {
+    if (queueType == QueueType::Compute && m_hasDedicatedComputeQueue) {
+        return std::make_unique<VulkanRHICommandEncoder>(this, *m_computeCommandPool);
+    }
+    return createCommandEncoder();
+}
+
 void VulkanRHIDevice::waitIdle() {
     m_device.waitIdle();
+}
+
+void VulkanRHIDevice::logMemoryStats() const {
+    if (!m_vmaAllocator) return;
+
+    VmaTotalStatistics stats;
+    vmaCalculateStatistics(m_vmaAllocator, &stats);
+
+    auto& total = stats.total;
+    std::cout << "[GPU Memory] Allocations: " << total.statistics.allocationCount
+              << " | Blocks: " << total.statistics.blockCount
+              << " | Allocated: " << (total.statistics.allocationBytes / (1024 * 1024)) << " MB"
+              << " | Reserved: " << (total.statistics.blockBytes / (1024 * 1024)) << " MB"
+              << std::endl;
+
+    // Check lazily allocated memory usage
+    auto memProps = m_physicalDevice.getMemoryProperties();
+    for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
+        if (memProps.memoryTypes[i].propertyFlags & vk::MemoryPropertyFlagBits::eLazilyAllocated) {
+            auto& heapStats = stats.memoryType[i];
+            if (heapStats.statistics.allocationCount > 0) {
+                std::cout << "[GPU Memory] Lazily allocated: " << heapStats.statistics.allocationCount
+                          << " allocs, " << (heapStats.statistics.allocationBytes / 1024) << " KB"
+                          << std::endl;
+            }
+        }
+    }
+
+    const auto& features = getCapabilities().getFeatures();
+    std::cout << "[GPU Memory] Features: aliasing="
+              << (features.memoryAliasing ? "yes" : "no")
+              << " lazily_allocated="
+              << (features.lazilyAllocatedMemory ? "yes" : "no")
+              << " dedicated_compute="
+              << (features.dedicatedComputeQueue ? "yes" : "no")
+              << " timeline_semaphores="
+              << (features.timelineSemaphores ? "yes" : "no")
+              << std::endl;
 }
 
 // ============================================================================

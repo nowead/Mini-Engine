@@ -22,6 +22,7 @@ struct TextureDesc {
     TextureFormat format = TextureFormat::RGBA8Unorm;          // Pixel format
     TextureUsage usage = TextureUsage::Sampled;                // Usage flags
     const char* label = nullptr;                // Optional debug label
+    bool transient = false;                     // Hint: frame-temporary, may alias memory (Phase 3.1)
 
     TextureDesc() = default;
     TextureDesc(uint32_t width, uint32_t height, TextureFormat fmt = TextureFormat::RGBA8Unorm)

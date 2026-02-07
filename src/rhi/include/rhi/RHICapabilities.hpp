@@ -113,6 +113,14 @@ struct RHIFeatures {
 
     // Large points
     bool largePoints = false;
+
+    // Phase 3.1: Memory aliasing
+    bool memoryAliasing = false;            // VMA aliasing support
+    bool lazilyAllocatedMemory = false;     // Lazily allocated memory for transient attachments
+
+    // Phase 3.2: Async compute
+    bool dedicatedComputeQueue = false;     // Separate compute queue available
+    bool timelineSemaphores = false;        // Timeline semaphore support
 };
 
 /**

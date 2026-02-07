@@ -9,17 +9,32 @@ namespace rhi {
 class RHICommandBuffer;
 class RHIFence;
 class RHISemaphore;
+class RHITimelineSemaphore;
 class RHISwapchain;
 
 /**
  * @brief Submit info for queue submission
  */
+struct TimelineWait {
+    RHITimelineSemaphore* semaphore = nullptr;
+    uint64_t value = 0;
+};
+
+struct TimelineSignal {
+    RHITimelineSemaphore* semaphore = nullptr;
+    uint64_t value = 0;
+};
+
 struct SubmitInfo {
     std::vector<RHICommandBuffer*> commandBuffers;
 
-    // Synchronization (optional)
+    // Binary semaphore synchronization (optional)
     std::vector<RHISemaphore*> waitSemaphores;      // Semaphores to wait on before execution
     std::vector<RHISemaphore*> signalSemaphores;    // Semaphores to signal after execution
+
+    // Timeline semaphore synchronization (optional, Phase 3.2)
+    std::vector<TimelineWait> timelineWaits;
+    std::vector<TimelineSignal> timelineSignals;
 
     RHIFence* signalFence = nullptr;  // Fence to signal after execution (optional)
 

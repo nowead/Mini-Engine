@@ -11,6 +11,7 @@ class VulkanRHIDevice;
 // Bring RHI types into scope
 using rhi::RHIFence;
 using rhi::RHISemaphore;
+using rhi::RHITimelineSemaphore;
 
 /**
  * @brief Vulkan implementation of RHIFence
@@ -67,6 +68,33 @@ public:
     VulkanRHISemaphore& operator=(VulkanRHISemaphore&&) noexcept;
 
     // Vulkan-specific accessors
+    vk::Semaphore getVkSemaphore() const { return *m_semaphore; }
+
+private:
+    VulkanRHIDevice* m_device;
+    vk::raii::Semaphore m_semaphore;
+};
+
+/**
+ * @brief Vulkan implementation of RHITimelineSemaphore
+ *
+ * Wraps VkSemaphore with VK_SEMAPHORE_TYPE_TIMELINE for fine-grained
+ * CPU-GPU and GPU-GPU synchronization across async compute and graphics queues.
+ */
+class VulkanRHITimelineSemaphore : public RHITimelineSemaphore {
+public:
+    VulkanRHITimelineSemaphore(VulkanRHIDevice* device, uint64_t initialValue = 0);
+    ~VulkanRHITimelineSemaphore() override;
+
+    VulkanRHITimelineSemaphore(const VulkanRHITimelineSemaphore&) = delete;
+    VulkanRHITimelineSemaphore& operator=(const VulkanRHITimelineSemaphore&) = delete;
+    VulkanRHITimelineSemaphore(VulkanRHITimelineSemaphore&&) noexcept;
+    VulkanRHITimelineSemaphore& operator=(VulkanRHITimelineSemaphore&&) noexcept;
+
+    uint64_t getCompletedValue() const override;
+    void wait(uint64_t value, uint64_t timeout = UINT64_MAX) override;
+    void signal(uint64_t value) override;
+
     vk::Semaphore getVkSemaphore() const { return *m_semaphore; }
 
 private:

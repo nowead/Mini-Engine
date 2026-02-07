@@ -48,4 +48,20 @@ public:
     // No CPU-side operations are exposed
 };
 
+/**
+ * @brief Timeline semaphore for fine-grained GPU-GPU and CPU-GPU synchronization
+ *
+ * Timeline semaphores maintain a monotonically increasing 64-bit counter.
+ * They can be signaled and waited on from both CPU and GPU, enabling
+ * precise synchronization between async compute and graphics queues.
+ */
+class RHITimelineSemaphore {
+public:
+    virtual ~RHITimelineSemaphore() = default;
+
+    virtual uint64_t getCompletedValue() const = 0;
+    virtual void wait(uint64_t value, uint64_t timeout = UINT64_MAX) = 0;
+    virtual void signal(uint64_t value) = 0;
+};
+
 } // namespace rhi

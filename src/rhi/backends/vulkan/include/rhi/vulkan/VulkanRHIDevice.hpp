@@ -35,6 +35,7 @@ using rhi::RHISwapchain;
 using rhi::SwapchainDesc;
 using rhi::RHIFence;
 using rhi::RHISemaphore;
+using rhi::RHITimelineSemaphore;
 
 /**
  * @brief Vulkan implementation of RHIDevice
@@ -80,8 +81,11 @@ public:
     std::unique_ptr<RHISwapchain> createSwapchain(const SwapchainDesc& desc) override;
     std::unique_ptr<RHIFence> createFence(bool signaled = false) override;
     std::unique_ptr<RHISemaphore> createSemaphore() override;
+    std::unique_ptr<RHITimelineSemaphore> createTimelineSemaphore(uint64_t initialValue = 0) override;
+    std::unique_ptr<RHICommandEncoder> createCommandEncoder(QueueType queueType) override;
 
     void waitIdle() override;
+    void logMemoryStats() const override;
 
     // Vulkan-specific accessors (for internal use)
     vk::raii::Device& getVkDevice() { return m_device; }
@@ -90,9 +94,13 @@ public:
     VmaAllocator getVmaAllocator() { return m_vmaAllocator; }
     vk::raii::Queue& getVkGraphicsQueue() { return m_graphicsQueue; }
     uint32_t getGraphicsQueueFamilyIndex() const { return m_graphicsQueueFamily; }
+    uint32_t getComputeQueueFamilyIndex() const { return m_computeQueueFamily; }
     vk::raii::SurfaceKHR& getVkSurface() { return m_surface; }
     vk::DescriptorPool getDescriptorPool() { return *m_descriptorPool; }
     vk::CommandPool getCommandPool() { return *m_commandPool; }
+    vk::CommandPool getComputeCommandPool() { return m_hasDedicatedComputeQueue ? *m_computeCommandPool : *m_commandPool; }
+    bool hasDedicatedComputeQueue() const { return m_hasDedicatedComputeQueue; }
+    bool hasTimelineSemaphoreSupport() const { return m_hasTimelineSemaphores; }
 
 private:
     // Initialization methods
@@ -103,6 +111,7 @@ private:
     void createLogicalDevice();
     void createVmaAllocator();
     void createCommandPool();
+    void createComputeCommandPool();
     void createDescriptorPool();
     void queryCapabilities();
 
@@ -122,12 +131,17 @@ private:
     // Queues
     vk::raii::Queue m_graphicsQueue = nullptr;
     uint32_t m_graphicsQueueFamily = ~0u;
+    vk::raii::Queue m_computeQueue = nullptr;
+    uint32_t m_computeQueueFamily = ~0u;
+    bool m_hasDedicatedComputeQueue = false;
+    bool m_hasTimelineSemaphores = false;
 
     // VMA
     VmaAllocator m_vmaAllocator = VK_NULL_HANDLE;
 
-    // Command pool for command buffers
+    // Command pools
     vk::raii::CommandPool m_commandPool = nullptr;
+    vk::raii::CommandPool m_computeCommandPool = nullptr;
 
     // Descriptor pool for bind groups
     vk::raii::DescriptorPool m_descriptorPool = nullptr;
@@ -135,6 +149,7 @@ private:
     // RHI objects
     std::unique_ptr<RHICapabilities> m_capabilities;
     std::unique_ptr<RHIQueue> m_rhiGraphicsQueue;
+    std::unique_ptr<RHIQueue> m_rhiComputeQueue;
 
     // Configuration
     bool m_enableValidationLayers = false;
