@@ -122,6 +122,11 @@ public:
      * @brief Get ImGui manager (for external UI updates)
      */
     class ImGuiManager* getImGuiManager() { return imguiManager.get(); }
+
+    /**
+     * @brief Get GPU profiler (for external timing display)
+     */
+    class GpuProfiler* getGpuProfiler();
 #endif
 
     /**
@@ -224,7 +229,12 @@ private:
     std::array<std::unique_ptr<rhi::RHIBuffer>, MAX_FRAMES_IN_FLIGHT> indirectDrawBuffers;
     std::array<std::unique_ptr<rhi::RHIBuffer>, MAX_FRAMES_IN_FLIGHT> visibleIndicesBuffers;
     std::array<std::unique_ptr<rhi::RHIBindGroup>, MAX_FRAMES_IN_FLIGHT> cullBindGroups;
-    static constexpr uint32_t MAX_CULL_OBJECTS = 4096;
+    static constexpr uint32_t MAX_CULL_OBJECTS = 131072;  // Support up to 100K+ objects
+
+    // Phase 4.1: GPU Profiling
+#ifndef __EMSCRIPTEN__
+    std::unique_ptr<class GpuProfiler> gpuProfiler;
+#endif
 
     // Phase 3.2: Async compute
     std::unique_ptr<rhi::RHITimelineSemaphore> computeTimelineSemaphore;

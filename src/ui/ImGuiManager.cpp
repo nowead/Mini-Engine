@@ -55,7 +55,22 @@ void ImGuiManager::renderUI(Camera& camera, uint32_t buildingCount,
     // Scene info
     if (ImGui::CollapsingHeader("Scene", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Text("Buildings: %u", buildingCount);
-        ImGui::Text("Rendering: GPU Instancing");
+        ImGui::Text("Rendering: GPU-Driven (Indirect Draw)");
+
+        // Phase 4.1: Stress test — building count slider
+        ImGui::Separator();
+        ImGui::Text("Stress Test:");
+        if (ImGui::SliderInt("Count", &m_targetBuildingCount, 16, 100000, "%d",
+                             ImGuiSliderFlags_Logarithmic)) {
+            m_buildingCountChanged = true;
+        }
+        if (ImGui::Button("16")) { m_targetBuildingCount = 16; m_buildingCountChanged = true; }
+        ImGui::SameLine();
+        if (ImGui::Button("1K")) { m_targetBuildingCount = 1000; m_buildingCountChanged = true; }
+        ImGui::SameLine();
+        if (ImGui::Button("10K")) { m_targetBuildingCount = 10000; m_buildingCountChanged = true; }
+        ImGui::SameLine();
+        if (ImGui::Button("100K")) { m_targetBuildingCount = 100000; m_buildingCountChanged = true; }
     }
 
     ImGui::Separator();
@@ -180,9 +195,18 @@ void ImGuiManager::renderUI(Camera& camera, uint32_t buildingCount,
     ImGui::Separator();
 
     // Statistics
-    if (ImGui::CollapsingHeader("Statistics")) {
+    if (ImGui::CollapsingHeader("Statistics", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
         ImGui::Text("Frame Time: %.3f ms", 1000.0f / ImGui::GetIO().Framerate);
+
+        // Phase 4.1: GPU Timing
+        ImGui::Separator();
+        ImGui::Text("GPU Timings:");
+        ImGui::Text("  Frustum Cull: %.3f ms", m_gpuTiming.cullingMs);
+        ImGui::Text("  Shadow Pass:  %.3f ms", m_gpuTiming.shadowMs);
+        ImGui::Text("  Main Pass:    %.3f ms", m_gpuTiming.mainPassMs);
+        float gpuTotal = m_gpuTiming.cullingMs + m_gpuTiming.shadowMs + m_gpuTiming.mainPassMs;
+        ImGui::Text("  GPU Total:    %.3f ms", gpuTotal);
     }
 
     // Demo window toggle

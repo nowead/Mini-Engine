@@ -1,6 +1,7 @@
 #include "Renderer.hpp"
 #ifndef __EMSCRIPTEN__
 #include "src/ui/ImGuiManager.hpp"
+#include "src/utils/GpuProfiler.hpp"
 #endif
 #include "InstancedRenderData.hpp"
 #include "src/utils/Logger.hpp"
@@ -13,6 +14,7 @@
 #include <rhi/vulkan/VulkanRHICommandEncoder.hpp>
 #include <rhi/vulkan/VulkanRHITexture.hpp>
 #include <rhi/vulkan/VulkanRHIBuffer.hpp>
+#include <rhi/vulkan/VulkanRHIDevice.hpp>
 #endif
 
 #include <stdexcept>
@@ -79,6 +81,19 @@ Renderer::Renderer(GLFWwindow* window,
     // Phase 3.3: Create shadow renderer
     createShadowRenderer();
 
+    // Phase 4.1: GPU Profiler
+#ifndef __EMSCRIPTEN__
+    {
+        auto* vulkanDevice = dynamic_cast<RHI::Vulkan::VulkanRHIDevice*>(rhiBridge->getDevice());
+        if (vulkanDevice) {
+            gpuProfiler = std::make_unique<GpuProfiler>(
+                vulkanDevice->getVkDevice(),
+                vulkanDevice->getVkPhysicalDevice(),
+                MAX_FRAMES_IN_FLIGHT);
+        }
+    }
+#endif
+
     // Phase 3.1: Log GPU memory statistics
     rhiBridge->getDevice()->logMemoryStats();
 }
@@ -90,6 +105,12 @@ Renderer::~Renderer() {
     }
     // All resources cleaned up by RAII in reverse declaration order
 }
+
+#ifndef __EMSCRIPTEN__
+GpuProfiler* Renderer::getGpuProfiler() {
+    return gpuProfiler.get();
+}
+#endif
 
 void Renderer::loadModel(const std::string& modelPath) {
     sceneManager->loadMesh(modelPath);  // Delegates to SceneManager
@@ -1511,6 +1532,16 @@ void Renderer::drawFrame() {
         return;
     }
 
+    // Phase 4.1: GPU Profiling — begin frame (read back previous results, reset query pool)
+#ifndef __EMSCRIPTEN__
+    if (gpuProfiler) {
+        auto* vulkanEncoder = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
+        if (vulkanEncoder) {
+            gpuProfiler->beginFrame(vulkanEncoder->getCommandBuffer(), frameIndex);
+        }
+    }
+#endif
+
     // Step 5: SSBO setup + frustum culling + shadow pass
     if (pendingInstancedData && pendingInstancedData->instanceCount > 0) {
         auto* mesh = pendingInstancedData->mesh;
@@ -1534,6 +1565,16 @@ void Renderer::drawFrame() {
             // Phase 2.2+3.2: Perform GPU frustum culling
             uint32_t instanceCount = pendingInstancedData->instanceCount;
             uint32_t meshIndexCount = static_cast<uint32_t>(mesh->getIndexCount());
+
+#ifndef __EMSCRIPTEN__
+            // GPU Profiling: begin frustum culling timer
+            if (gpuProfiler && !useAsyncCompute) {
+                auto* ve = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
+                if (ve) gpuProfiler->beginTimer(ve->getCommandBuffer(), frameIndex,
+                    GpuProfiler::TimerId::FrustumCulling, vk::PipelineStageFlagBits::eComputeShader);
+            }
+#endif
+
             if (useAsyncCompute) {
                 // Async: separate compute encoder submitted to compute queue
                 performFrustumCullingAsync(frameIndex, instanceCount, meshIndexCount);
@@ -1542,7 +1583,23 @@ void Renderer::drawFrame() {
                 performFrustumCulling(encoder.get(), frameIndex, instanceCount, meshIndexCount);
             }
 
+#ifndef __EMSCRIPTEN__
+            // GPU Profiling: end frustum culling timer
+            if (gpuProfiler && !useAsyncCompute) {
+                auto* ve = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
+                if (ve) gpuProfiler->endTimer(ve->getCommandBuffer(), frameIndex,
+                    GpuProfiler::TimerId::FrustumCulling, vk::PipelineStageFlagBits::eComputeShader);
+            }
+#endif
+
             // Shadow pass (render scene from light's perspective — uses direct drawIndexed, no culling)
+#ifndef __EMSCRIPTEN__
+            if (gpuProfiler) {
+                auto* ve = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
+                if (ve) gpuProfiler->beginTimer(ve->getCommandBuffer(), frameIndex,
+                    GpuProfiler::TimerId::ShadowPass);
+            }
+#endif
             if (shadowRenderer && shadowRenderer->isInitialized() && instanceCount > 1) {
 #ifndef __EMSCRIPTEN__
                 // macOS/Windows: Transition shadow map to depth attachment for writing
@@ -1623,6 +1680,13 @@ void Renderer::drawFrame() {
 #endif
                 }
             }
+#ifndef __EMSCRIPTEN__
+            if (gpuProfiler) {
+                auto* ve = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
+                if (ve) gpuProfiler->endTimer(ve->getCommandBuffer(), frameIndex,
+                    GpuProfiler::TimerId::ShadowPass);
+            }
+#endif
         }
     }
 
@@ -1703,6 +1767,15 @@ void Renderer::drawFrame() {
         VkFramebuffer vkFramebuffer = static_cast<VkFramebuffer>(rhiVulkanSwapchain->getFramebuffer(currentImageIndex));
         renderPassDesc.nativeRenderPass = reinterpret_cast<void*>(vkPass);
         renderPassDesc.nativeFramebuffer = reinterpret_cast<void*>(vkFramebuffer);
+    }
+#endif
+
+    // Phase 4.1: GPU Profiling — begin main render pass timer
+#ifndef __EMSCRIPTEN__
+    if (gpuProfiler) {
+        auto* ve = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
+        if (ve) gpuProfiler->beginTimer(ve->getCommandBuffer(), frameIndex,
+            GpuProfiler::TimerId::MainRenderPass);
     }
 #endif
 
@@ -1801,6 +1874,15 @@ void Renderer::drawFrame() {
 
         renderPass->end();
     }
+
+    // Phase 4.1: GPU Profiling — end main render pass timer
+#ifndef __EMSCRIPTEN__
+    if (gpuProfiler) {
+        auto* ve = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
+        if (ve) gpuProfiler->endTimer(ve->getCommandBuffer(), frameIndex,
+            GpuProfiler::TimerId::MainRenderPass);
+    }
+#endif
 
 #ifndef __EMSCRIPTEN__
     // Phase 9: Transition swapchain image from COLOR_ATTACHMENT_OPTIMAL to PRESENT_SRC

@@ -71,6 +71,27 @@ public:
 
     LightingSettings& getLightingSettings() { return m_lightingSettings; }
 
+    // Phase 4.1: GPU timing data (passed from Renderer)
+    struct GpuTimingData {
+        float cullingMs = 0.0f;
+        float shadowMs = 0.0f;
+        float mainPassMs = 0.0f;
+    };
+
+    void setGpuTimingData(const GpuTimingData& data) { m_gpuTiming = data; }
+
+    // Phase 4.1: Stress test — building count change request
+    struct ScaleRequest {
+        bool requested = false;
+        int targetCount = 16;
+    };
+
+    ScaleRequest getAndClearScaleRequest() {
+        ScaleRequest req{m_buildingCountChanged, m_targetBuildingCount};
+        m_buildingCountChanged = false;
+        return req;
+    }
+
 private:
     std::unique_ptr<ui::ImGuiBackend> backend;
 
@@ -87,4 +108,11 @@ private:
     LightingSettings m_lightingSettings;
     float m_sunAzimuth = 45.0f;   // Horizontal angle (degrees)
     float m_sunElevation = 15.0f; // Low sunset angle (degrees)
+
+    // Phase 4.1: GPU profiling
+    GpuTimingData m_gpuTiming;
+
+    // Phase 4.1: Stress test
+    int m_targetBuildingCount = 16;
+    bool m_buildingCountChanged = false;
 };

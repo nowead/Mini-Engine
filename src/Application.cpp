@@ -1,8 +1,10 @@
 #include "Application.hpp"
 #ifndef __EMSCRIPTEN__
 #include "src/ui/ImGuiManager.hpp"
+#include "src/utils/GpuProfiler.hpp"
 #endif
 #include "src/rendering/InstancedRenderData.hpp"
+#include "src/utils/Logger.hpp"
 
 #include <iostream>
 #include <stdexcept>
@@ -242,6 +244,21 @@ void Application::mainLoopFrame() {
             renderer->setShadowBias(lighting.shadowBias);
             renderer->setShadowStrength(lighting.shadowStrength);
             renderer->setExposure(lighting.exposure);
+
+            // Phase 4.1: Pass GPU timing data to ImGui
+            if (auto* profiler = renderer->getGpuProfiler()) {
+                ImGuiManager::GpuTimingData gpuTiming;
+                gpuTiming.cullingMs = profiler->getElapsedMs(GpuProfiler::TimerId::FrustumCulling);
+                gpuTiming.shadowMs = profiler->getElapsedMs(GpuProfiler::TimerId::ShadowPass);
+                gpuTiming.mainPassMs = profiler->getElapsedMs(GpuProfiler::TimerId::MainRenderPass);
+                imgui->setGpuTimingData(gpuTiming);
+            }
+
+            // Phase 4.1: Handle stress test building count change
+            auto scaleReq = imgui->getAndClearScaleRequest();
+            if (scaleReq.requested) {
+                regenerateBuildings(scaleReq.targetCount);
+            }
         }
 #endif
 
@@ -323,6 +340,44 @@ void Application::cursorPosCallback(GLFWwindow* window, double xpos, double ypos
 void Application::scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
     auto app = reinterpret_cast<Application*>(glfwGetWindowUserPointer(window));
     app->camera->zoom(static_cast<float>(yoffset));
+}
+
+void Application::regenerateBuildings(int targetCount) {
+    if (!worldManager) return;
+    auto* buildingManager = worldManager->getBuildingManager();
+    if (!buildingManager) return;
+
+    // Wait for GPU to finish using current buffers
+    renderer->waitIdle();
+
+    // Destroy existing buildings
+    buildingManager->destroyAllBuildings();
+    mockDataGen = std::make_unique<MockDataGenerator>();
+
+    // Calculate grid dimensions
+    int gridSize = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(targetCount))));
+    float spacing = std::max(15.0f, 30.0f * (16.0f / static_cast<float>(std::max(targetCount, 16))));
+    spacing = std::clamp(spacing, 8.0f, 30.0f);
+    float startX = -(gridSize - 1) * spacing / 2.0f;
+    float startZ = -(gridSize - 1) * spacing / 2.0f;
+
+    int created = 0;
+    for (int x = 0; x < gridSize && created < targetCount; x++) {
+        for (int z = 0; z < gridSize && created < targetCount; z++) {
+            float posX = startX + x * spacing;
+            float posZ = startZ + z * spacing;
+            float height = 10.0f + static_cast<float>(rand() % 50);
+
+            std::string ticker = "B_" + std::to_string(created);
+            buildingManager->createBuilding(ticker, "STRESS", glm::vec3(posX, 0.0f, posZ), height);
+            mockDataGen->registerTicker(ticker, 100.0f + static_cast<float>(rand() % 200));
+            created++;
+        }
+    }
+
+    buildingManager->markObjectBufferDirty();
+    LOG_INFO("StressTest") << "Regenerated " << created << " buildings (grid " << gridSize << "x" << gridSize
+                           << ", spacing " << spacing << "m)";
 }
 
 void Application::keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {

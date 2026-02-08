@@ -1,6 +1,6 @@
 # Mini-Engine
 
-> Modern C++20 Multi-Backend 3D Rendering Engine with RHI Architecture
+> PBR & GPU-Driven Rendering Engine with Multi-Backend RHI Architecture
 
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
 ![Vulkan](https://img.shields.io/badge/Vulkan-1.3-red.svg)
@@ -12,15 +12,18 @@
 
 ## Korean Summary
 
-**프로젝트 목표**: Vulkan Tutorial을 학습하며 만든 렌더러를 멀티 백엔드 엔진 아키텍처로 발전
+**프로젝트 목표**: PBR 렌더링과 GPU-Driven 최적화를 갖춘 프로덕션 수준의 렌더링 엔진 개발
 
 **핵심 성과**:
 
-- **RHI (Render Hardware Interface) 아키텍처 마이그레이션 완료**
-- 그래픽스 API 추상화 계층으로 멀티 백엔드 지원 (Vulkan 준비 완료)
-- 4계층 객체지향 아키텍처 + RAII 패턴 적용
+- **Cook-Torrance PBR**: GGX Distribution, Smith Geometry, Fresnel-Schlick 기반 물리 기반 렌더링
+- **Image Based Lighting (IBL)**: HDR 환경맵 기반 Irradiance/Prefiltered Specular/BRDF LUT
+- **GPU-Driven Rendering**: SSBO 기반 오브젝트 데이터 + Compute Shader Frustum Culling + Indirect Draw
+- **RHI 멀티 백엔드**: Vulkan 1.3 (Desktop) + WebGPU (Web/WASM)
+- **GPU 프로파일링**: vkCmdWriteTimestamp 기반 per-pass GPU 타이밍
+- 100,000+ 오브젝트 실시간 렌더링 지원
 
-**현재 기능**: FDF Wireframe, OBJ Model Loading, ImGui UI, Camera Controls, 100% RHI-Native Rendering
+**현재 기능**: Cook-Torrance PBR, IBL, GPU Frustum Culling, Indirect Draw, Shadow Mapping, GPU Profiling, ImGui UI
 
 **상세 문서**: [docs/refactoring/layered-to-rhi/](docs/refactoring/layered-to-rhi/) 폴더 참고
 
@@ -54,57 +57,81 @@ Mini-Engine is a modern multi-backend rendering engine built from scratch, evolv
 
 | Feature | Status | Description |
 |---------|--------|-------------|
+| **Cook-Torrance PBR** | **COMPLETED** | Physically-based rendering with metallic/roughness workflow |
+| **Image Based Lighting** | **COMPLETED** | HDR environment maps, irradiance convolution, prefiltered specular |
+| **GPU-Driven Rendering** | **COMPLETED** | SSBO-based per-object data, compute shader culling, indirect draw |
+| **GPU Frustum Culling** | **COMPLETED** | Compute shader AABB-plane test with atomic indirect draw |
+| **Shadow Mapping** | **COMPLETED** | Directional light PCF shadows with configurable bias/strength |
+| **GPU Profiling** | **COMPLETED** | Per-pass timestamp queries (Culling, Shadow, Main Pass) |
+| **Memory Aliasing** | **COMPLETED** | Transient resources, lazily allocated memory |
+| **Async Compute** | **COMPLETED** | Timeline semaphores, dedicated compute queue |
 | **RHI Architecture** | **COMPLETED** | Graphics API abstraction layer |
 | **Vulkan Backend** | **COMPLETED** | Full RHI implementation (Desktop) |
-| **WebGPU Backend** | **COMPLETED** | Full RHI implementation (Web only) |
-| **Legacy Code Cleanup** | **COMPLETED** | 100% RHI-native |
-| FDF Wireframe | Completed | Heightmap-based wireframe rendering |
-| OBJ Model Loading | Completed | 3D model loading with texture mapping |
-| ImGui UI | Completed | Real-time parameter adjustment UI |
-| Camera Controls | Completed | Mouse/keyboard camera manipulation |
-| Ray Tracing | Planned | Using VK_KHR_ray_tracing_pipeline |
+| **WebGPU Backend** | **COMPLETED** | Full RHI implementation (Web/WASM) |
+| ImGui UI | Completed | Real-time parameter adjustment + stress testing |
 
 **Latest Achievements**:
-- **WebGPU Backend Complete**: Full web deployment support via Emscripten + Browser WebGPU API
-- **Automatic Build System**: One-click Emscripten setup for simplified web builds
+- **GPU Profiling & Stress Test**: Per-pass GPU timing display, 100K object stress test with ImGui controls
+- **PBR & IBL Pipeline**: Cook-Torrance BRDF + HDR environment-based ambient lighting
+- **GPU-Driven Rendering**: Single indirect draw call for 100K+ objects with compute shader frustum culling
 
 ---
 
 ## Features
 
-### Multi-Backend Rendering Pipeline
+### Cook-Torrance PBR Pipeline
+
+- **Physically Based Rendering**: GGX Distribution, Smith Geometry, Fresnel-Schlick BRDF
+- **Metallic/Roughness Workflow**: Per-object material parameters via SSBO
+- **ACES Filmic Tone Mapping**: Configurable exposure with sRGB output
+- **Image Based Lighting (IBL)**: HDR environment maps with irradiance convolution, prefiltered specular, and BRDF LUT via compute shaders
+
+### GPU-Driven Rendering
+
+- **SSBO Object Data**: 128-byte `ObjectData` struct (world matrix, AABB, material) replaces per-instance vertex attributes
+- **Compute Shader Frustum Culling**: Per-object AABB vs 6 frustum plane test (workgroup size 64)
+- **Indirect Draw**: Single `drawIndexedIndirect` call renders 100K+ objects
+- **Visible Indices Buffer**: Atomic-based compaction for culled object indirection
+
+### Shadow Mapping
+
+- **Directional Light Shadows**: Orthographic projection from sun direction
+- **PCF Filtering**: Configurable shadow bias and strength
+- **Cross-Platform**: Y-coordinate flip for WebGPU texture coordinate system
+
+### GPU Profiling (Vulkan)
+
+- **Per-Pass Timing**: `vkCmdWriteTimestamp` for Frustum Cull, Shadow Pass, Main Pass
+- **EMA Smoothing**: Exponential moving average for stable timing display
+- **Stress Test UI**: ImGui logarithmic slider (16 → 100K objects) with preset buttons
+
+### Multi-Backend RHI
 
 **Vulkan Backend (Desktop)**:
+
 - Vulkan 1.3-based graphics pipeline
-- Swapchain management and frame synchronization (Semaphore, Fence)
+- VMA integration with memory aliasing and transient resources
+- Timeline semaphores and async compute queue
 - Slang shader compilation to SPIR-V
-- VMA (Vulkan Memory Allocator) integration
 
 **WebGPU Backend (Web)**:
-- Browser WebGPU API integration
-- Emscripten WebAssembly compilation
+
+- Browser WebGPU API integration via Emscripten
 - Runtime SPIR-V to WGSL shader conversion
-- Canvas-based swapchain for web rendering
 - Complete RHI parity with Vulkan backend
 
 ### Resource Management
 
-- **RAII Pattern**: Automatic RHI resource management
-- **Zero Memory Leak**: All GPU resources automatically cleaned up
-- Efficient GPU memory transfer via staging buffers
-- **RHI Abstraction**: Platform-independent buffer/texture creation
+- **RAII Pattern**: Automatic RHI resource management with zero memory leaks
+- **Memory Aliasing**: Transient depth buffer with lazily allocated memory
+- **Staging Buffers**: Efficient CPU-to-GPU data transfer
+- **RHI Abstraction**: Platform-independent buffer/texture/pipeline creation
 
-### 3D Rendering
+### Scene & UI
 
-- OBJ model loading (tinyobjloader)
-- FDF heightmap parsing and wireframe generation
-- MVP matrix transformations and camera system
-- Texture loading (STB Image)
-
-### UI System
-
-- ImGui integration (GLFW + Vulkan backend)
-- Real-time rendering parameter adjustment
+- OBJ model loading, camera system, skybox rendering
+- ImGui integration with real-time PBR parameter adjustment
+- GPU timing display and stress test controls
 
 ---
 
@@ -201,84 +228,95 @@ Mini-Engine is a modern multi-backend rendering engine built from scratch, evolv
 ```text
 src/
 ├── main.cpp                # Entry point
-├── Application.cpp/hpp     # Window management, main loop
+├── Application.cpp/hpp     # Window management, main loop, stress test control
+│
+├── rendering/              # High-Level Rendering (Layer 2)
+│   ├── Renderer.cpp/hpp        # Main renderer: PBR, GPU culling, indirect draw
+│   ├── RendererBridge.cpp/hpp  # RHI device management
+│   ├── ShadowRenderer.cpp/hpp # Directional shadow mapping with PCF
+│   ├── SkyboxRenderer.cpp/hpp # HDR skybox rendering
+│   ├── IBLManager.cpp/hpp     # IBL pipeline (irradiance, prefilter, BRDF LUT)
+│   ├── BatchRenderer.cpp/hpp  # Batch rendering utilities
+│   └── InstancedRenderData.hpp # ObjectData struct (128-byte SSBO layout)
+│
+├── game/                   # Game Logic (Layer 2)
+│   ├── entities/               # Entity definitions
+│   │   └── BuildingEntity.cpp/hpp
+│   ├── managers/               # Entity management
+│   │   ├── BuildingManager.cpp/hpp  # Building SSBO generation
+│   │   └── WorldManager.cpp/hpp     # World state management
+│   ├── world/                  # World data structures
+│   │   └── Sector.hpp
+│   ├── sync/                   # Data synchronization
+│   │   ├── PriceUpdate.hpp
+│   │   └── MockDataGenerator.hpp
+│   └── utils/                  # Game utilities
+│       ├── AnimationUtils.hpp
+│       └── HeightCalculator.hpp
+│
+├── effects/                # Visual Effects (Layer 2)
+│   ├── ParticleSystem.cpp/hpp    # CPU particle simulation
+│   └── ParticleRenderer.cpp/hpp  # GPU particle rendering
 │
 ├── rhi/                    # RHI Abstraction Layer (Layer 3)
-│   ├── include/rhi/       # Pure abstract interfaces
-│   │   ├── RHIDevice.hpp          # Device abstraction
-│   │   ├── RHISwapchain.hpp       # Swapchain abstraction
-│   │   ├── RHIPipeline.hpp        # Pipeline abstraction
-│   │   ├── RHIBuffer.hpp          # Buffer abstraction
-│   │   ├── RHITexture.hpp         # Texture abstraction
-│   │   ├── RHICommandEncoder.hpp  # Command recording
-│   │   ├── RHIBindGroup.hpp       # Resource binding
-│   │   ├── RHIShader.hpp          # Shader abstraction
-│   │   ├── RHISync.hpp            # Synchronization
-│   │   ├── RHIQueue.hpp           # Queue abstraction
-│   │   └── ... (15 abstractions total)
+│   ├── include/rhi/       # Pure abstract interfaces (15 abstractions)
 │   └── src/
 │       └── RHIFactory.cpp  # Backend factory
 │
 ├── rhi-vulkan/             # Vulkan Backend (Layer 4)
-│   ├── include/rhi-vulkan/
-│   │   └── VulkanRHI*.hpp  # Vulkan implementations
-│   └── src/
-│       └── VulkanRHI*.cpp  # 15 Vulkan RHI classes
+│   └── src/VulkanRHI*.cpp  # 15 Vulkan RHI classes + VMA
 │
 ├── rhi-webgpu/             # WebGPU Backend (Layer 4)
-│   ├── include/rhi-webgpu/
-│   │   └── WebGPURHI*.hpp  # WebGPU implementations
-│   └── src/
-│       └── WebGPURHI*.cpp  # 15 WebGPU RHI classes
-│
-├── rendering/              # High-Level Rendering (Layer 2)
-│   ├── Renderer.cpp/hpp        # Orchestrates rendering (API-agnostic)
-│   └── RendererBridge.cpp/hpp  # RHI device management
+│   └── src/WebGPURHI*.cpp  # 15 WebGPU RHI classes
 │
 ├── resources/              # Resource Management (Layer 2)
-│   └── ResourceManager.cpp/hpp # GPU buffer/texture creation (RHI-based)
+│   └── ResourceManager.cpp/hpp
 │
 ├── scene/                  # Scene Management (Layer 2)
-│   ├── SceneManager.cpp/hpp    # Scene object management (RHI-based)
-│   ├── Mesh.cpp/hpp            # Mesh data (RHI buffers)
-│   └── Camera.cpp/hpp          # Camera system
+│   ├── SceneManager.cpp/hpp
+│   ├── Mesh.cpp/hpp
+│   └── Camera.cpp/hpp
 │
 ├── loaders/                # Asset Loaders
-│   ├── OBJLoader.cpp/hpp       # OBJ model loader
-│   └── FDFLoader.cpp/hpp       # FDF heightmap loader
+│   ├── OBJLoader.cpp/hpp
+│   └── FDFLoader.cpp/hpp
 │
 ├── ui/                     # UI System (Layer 2)
-│   ├── ImGuiManager.cpp/hpp        # ImGui integration (RHI-based)
-│   └── ImGuiVulkanBackend.cpp/hpp  # Vulkan-specific backend
+│   ├── ImGuiManager.cpp/hpp        # PBR controls, GPU timing, stress test UI
+│   └── ImGuiVulkanBackend.cpp/hpp
 │
-├── core/                   # Legacy Core (to be removed)
-│   └── VulkanDevice.cpp/hpp    # Direct Vulkan device (for ImGui compat)
+├── core/                   # Legacy Core (ImGui compatibility)
+│   └── VulkanDevice.cpp/hpp
 │
-└── utils/                  # Utilities (Header-only)
+└── utils/                  # Utilities
+    ├── GpuProfiler.cpp/hpp # Vulkan timestamp-based GPU profiler
+    ├── Logger.hpp          # Logging utility
     ├── Vertex.hpp
-    ├── VulkanCommon.hpp
     └── FileUtils.hpp
+
+shaders/                    # GLSL + WGSL dual shaders
+├── building.{vert,frag}.glsl / building.wgsl   # PBR + IBL + SSBO
+├── shadow.{vert,frag}.glsl / shadow.wgsl       # Shadow pass
+├── skybox.{vert,frag}.glsl / skybox.wgsl       # Skybox
+├── frustum_cull.comp.glsl / .wgsl              # GPU frustum culling
+├── equirect_to_cubemap.comp.glsl / .wgsl       # HDR → cubemap
+├── irradiance_map.comp.glsl / .wgsl            # Irradiance convolution
+├── prefilter_env.comp.glsl / .wgsl             # Specular prefilter
+├── brdf_lut.comp.glsl / .wgsl                  # BRDF integration LUT
+└── particle.{vert,frag}.glsl / particle.wgsl   # Particle effects
 
 scripts/
 └── setup_emscripten.sh     # Automatic Emscripten SDK installer
-
-tests/
-└── wasm_shell.html         # HTML template for WASM application
 ```
 
-**Migration Status**:
+**Development History**:
 
-- [COMPLETE] **Phase 1-7**: RHI architecture implementation complete
-- [COMPLETE] **Phase 8**: Legacy code cleanup complete
-  - Deleted: VulkanBuffer, VulkanImage, VulkanPipeline, VulkanSwapchain, SyncManager
-  - 100% RHI-native rendering
-  - Zero Vulkan validation errors
-- [COMPLETE] **Phase 9**: WebGPU backend implementation complete
-  - 15 WebGPU RHI classes implemented
-  - Full web deployment support via Emscripten
-  - Automatic build system with one-click Emscripten setup
-  - Complete architectural documentation
-- [PLANNED] **Phase 10+**: VulkanDevice removal, additional backend optimizations
+- **Phase 1-8**: RHI architecture design, implementation, and legacy cleanup (100% RHI-native)
+- **Phase 9**: WebGPU backend — 15 RHI classes, Emscripten WASM, full web deployment
+- **Week 1**: PBR pipeline — Cook-Torrance BRDF, IBL (irradiance/prefilter/BRDF LUT), HDR environment maps
+- **Week 2**: GPU-Driven rendering — SSBO, compute shader frustum culling, indirect draw (100K+ objects)
+- **Week 3**: Memory aliasing (transient resources, lazy allocation), async compute (timeline semaphores)
+- **Week 4**: GPU profiling (`vkCmdWriteTimestamp`), stress test UI, documentation
 
 ---
 
@@ -445,6 +483,6 @@ Free to use for learning - please provide attribution when using.
 
 ---
 
-**Built with Vulkan API and Modern C++**
+**PBR & GPU-Driven Rendering Engine — Vulkan 1.3 + WebGPU + Modern C++20**
 
 [Back to Top](#mini-engine)

@@ -97,6 +97,9 @@ private:
     // Input handling
     void processInput();
 
+    // Phase 4.1: Stress test
+    void regenerateBuildings(int targetCount);
+
     // Callbacks
     static void framebufferResizeCallback(GLFWwindow* window, int width, int height);
     static void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods);

@@ -194,6 +194,9 @@ if(NOT EMSCRIPTEN)
         # Phase 1.2: IBL (Image Based Lighting)
         src/rendering/IBLManager.cpp
         src/rendering/IBLManager.hpp
+        # Phase 4.1: GPU Profiling
+        src/utils/GpuProfiler.cpp
+        src/utils/GpuProfiler.hpp
     )
 
     target_include_directories(MiniEngine BEFORE PRIVATE
