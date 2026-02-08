@@ -67,6 +67,11 @@ public:
      */
     glm::vec3 getPosition() const { return position; }
 
+    /**
+     * @brief Set orbit distance and update camera position
+     */
+    void setDistance(float d) { distance = d; updateCameraVectors(); }
+
 private:
     // Camera parameters
     glm::vec3 position;

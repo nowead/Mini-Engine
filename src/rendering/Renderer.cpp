@@ -1519,8 +1519,7 @@ void Renderer::drawFrame() {
         // Use fixed scene center at origin - shadows should only depend on sun direction
         // not on camera position. This prevents shadows from shifting when camera moves.
         glm::vec3 sceneCenter = glm::vec3(0.0f, 0.0f, 0.0f);
-        float sceneRadius = 200.0f;  // Large enough to cover all buildings in NASDAQ sector
-        shadowRenderer->updateLightMatrix(sunDirection, sceneCenter, sceneRadius);
+        shadowRenderer->updateLightMatrix(sunDirection, sceneCenter, shadowSceneRadius);
     }
 
     // Step 3: Update uniform buffer with RHI (includes shadow matrix)
@@ -1601,8 +1600,9 @@ void Renderer::drawFrame() {
             }
 #endif
             if (shadowRenderer && shadowRenderer->isInitialized() && instanceCount > 1) {
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__linux__)
                 // macOS/Windows: Transition shadow map to depth attachment for writing
+                // Linux: Shadow render pass handles layout transitions automatically
                 auto* vulkanEncoder = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
                 auto* shadowTexture = dynamic_cast<RHI::Vulkan::VulkanRHITexture*>(shadowRenderer->getShadowMapTexture());
                 if (vulkanEncoder && shadowTexture) {
@@ -1630,7 +1630,7 @@ void Renderer::drawFrame() {
                         }
                     );
                 }
-#endif  // !__EMSCRIPTEN__
+#endif  // !__EMSCRIPTEN__ && !__linux__
 
                 auto* shadowPass = shadowRenderer->beginShadowPass(encoder.get(), frameIndex);
                 if (shadowPass) {
@@ -1648,8 +1648,9 @@ void Renderer::drawFrame() {
 
                     shadowRenderer->endShadowPass();
 
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__linux__)
                     // macOS/Windows: Transition shadow map from depth attachment to shader read
+                    // Linux: Shadow render pass finalLayout handles this transition automatically
                     auto* vulkanEncoderPost = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
                     auto* shadowTexturePost = dynamic_cast<RHI::Vulkan::VulkanRHITexture*>(shadowRenderer->getShadowMapTexture());
                     if (vulkanEncoderPost && shadowTexturePost) {
@@ -1696,9 +1697,9 @@ void Renderer::drawFrame() {
         return;
     }
 
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__linux__)
     // Phase 9: Transition swapchain image from UNDEFINED to COLOR_ATTACHMENT_OPTIMAL
-    // before starting the render pass (only needed for dynamic rendering on macOS/Windows)
+    // Only needed for dynamic rendering on macOS/Windows
     // Linux uses traditional render pass which handles layout transitions automatically
     if (swapchain) {
         // Use Vulkan-specific method to get current image for layout transition
@@ -1884,9 +1885,8 @@ void Renderer::drawFrame() {
     }
 #endif
 
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__linux__)
     // Phase 9: Transition swapchain image from COLOR_ATTACHMENT_OPTIMAL to PRESENT_SRC
-    // This must be done before finishing the command buffer
     // Only needed for dynamic rendering on macOS/Windows
     // Linux uses traditional render pass which handles layout transitions automatically
     if (swapchain) {

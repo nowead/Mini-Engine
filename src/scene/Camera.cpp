@@ -14,7 +14,7 @@ Camera::Camera(float aspectRatio)
       aspectRatio(aspectRatio),
       fov(glm::radians(70.0f)),        // Wider FOV for better visibility
       nearPlane(0.1f),
-      farPlane(1000.0f) {
+      farPlane(50000.0f) {             // Large far plane for 100K stress test
     // Don't call updateCameraVectors() - use fixed position/target
     LOG_DEBUG("Camera") << "Initialized at pos=(80, 80, 100), target=(0, 15, 0), FOV=70deg";
 }
@@ -56,9 +56,10 @@ void Camera::translate(float deltaX, float deltaY) {
 }
 
 void Camera::zoom(float delta) {
-    // Move camera closer/farther from target
-    distance -= delta * 1.5f;
-    distance = std::clamp(distance, 1.0f, 200.0f);  // Allow zooming out much further
+    // Adaptive zoom speed: faster when further away
+    float zoomSpeed = std::max(1.5f, distance * 0.08f);
+    distance -= delta * zoomSpeed;
+    distance = std::clamp(distance, 1.0f, 10000.0f);  // Allow zooming out for 100K stress test
     updateCameraVectors();
 }
 

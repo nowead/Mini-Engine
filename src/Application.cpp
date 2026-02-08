@@ -376,8 +376,18 @@ void Application::regenerateBuildings(int targetCount) {
     }
 
     buildingManager->markObjectBufferDirty();
+
+    // Auto-adjust camera to fit the new grid
+    float gridExtent = gridSize * spacing;
+    float cameraDistance = std::max(150.0f, gridExtent * 0.8f);
+    camera->setDistance(cameraDistance);
+
+    // Also adjust shadow scene radius for large scenes
+    float sceneRadius = std::max(200.0f, gridExtent * 0.6f);
+    renderer->setShadowSceneRadius(sceneRadius);
+
     LOG_INFO("StressTest") << "Regenerated " << created << " buildings (grid " << gridSize << "x" << gridSize
-                           << ", spacing " << spacing << "m)";
+                           << ", spacing " << spacing << "m, camera dist " << cameraDistance << "m)";
 }
 
 void Application::keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {

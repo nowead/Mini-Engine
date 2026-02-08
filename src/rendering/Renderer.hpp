@@ -164,6 +164,7 @@ public:
     float getShadowBias() const { return shadowBias; }
     void setShadowStrength(float strength) { shadowStrength = strength; }
     float getShadowStrength() const { return shadowStrength; }
+    void setShadowSceneRadius(float radius) { shadowSceneRadius = radius; }
 
     // PBR tone mapping
     void setExposure(float exp) { exposure = exp; }
@@ -285,6 +286,7 @@ private:
     std::unique_ptr<rendering::IBLManager> iblManager;
     float shadowBias = 0.008f;  // Constant bias to prevent shadow acne (uniform across all surfaces)
     float shadowStrength = 0.7f;  // Shadow darkness
+    float shadowSceneRadius = 200.0f;  // Scene radius for shadow orthographic projection
     float exposure = 1.0f;  // PBR tone mapping exposure
 
     // RHI initialization methods (Phase 4)
