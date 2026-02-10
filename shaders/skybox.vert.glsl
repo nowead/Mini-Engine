@@ -20,9 +20,12 @@ void main() {
     );
 
     vec2 pos = positions[gl_VertexIndex];
-    gl_Position = vec4(pos, 0.9999, 1.0);  // Near far plane
+
+    // Set depth to 1.0 (far plane) for proper depth testing
+    gl_Position = vec4(pos, 1.0, 1.0);
 
     // Calculate world-space ray direction from clip-space position
+    // Use z=1.0 to sample the far plane
     vec4 worldPos = ubo.invViewProj * vec4(pos, 1.0, 1.0);
-    fragRayDir = worldPos.xyz / worldPos.w;
+    fragRayDir = normalize(worldPos.xyz / worldPos.w);
 }

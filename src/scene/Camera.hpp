@@ -72,6 +72,11 @@ public:
      */
     void setDistance(float d) { distance = d; updateCameraVectors(); }
 
+    /**
+     * @brief Set camera target (look-at point) and update camera position
+     */
+    void setTarget(const glm::vec3& newTarget) { target = newTarget; updateCameraVectors(); }
+
 private:
     // Camera parameters
     glm::vec3 position;

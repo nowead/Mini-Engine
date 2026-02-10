@@ -5,6 +5,7 @@
 
 #include <stdexcept>
 #include <cstring>
+#include <iostream>
 
 ResourceManager::ResourceManager(rhi::RHIDevice* device, rhi::RHIQueue* queue)
     : rhiDevice(device), graphicsQueue(queue) {}
@@ -42,15 +43,26 @@ rhi::RHITexture* ResourceManager::loadHDRTexture(const std::string& path) {
         return it->second.get();
     }
 
-    // Load HDR image from disk
-    stbi_set_flip_vertically_on_load(true);
+    // Load HDR image from disk (no vertical flip — Vulkan UV origin is top-left)
     int texWidth, texHeight, texChannels;
     float* pixels = stbi_loadf(path.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
-    stbi_set_flip_vertically_on_load(false);
 
     if (!pixels) {
         throw std::runtime_error("Failed to load HDR texture: " + path);
     }
+
+    std::cout << "[ResourceManager] Loaded HDR: " << path << " (" << texWidth << "x" << texHeight
+              << ", " << texChannels << " channels)" << std::endl;
+
+    // Check if data is non-zero
+    bool hasData = false;
+    for (int i = 0; i < texWidth * texHeight * 4 && i < 1000; ++i) {
+        if (pixels[i] > 0.001f) {
+            hasData = true;
+            break;
+        }
+    }
+    std::cout << "[ResourceManager] HDR data check: " << (hasData ? "OK (non-zero)" : "WARNING (all zero)") << std::endl;
 
     // Upload to GPU as RGBA16Float
     auto texture = uploadHDRTexture(pixels, texWidth, texHeight);

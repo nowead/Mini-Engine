@@ -280,6 +280,13 @@ bool IBLManager::generateBRDFLut() {
     m_queue->submit(cmdBuffer.get());
     m_queue->waitIdle();
 
+    // Store resources to keep them alive (satisfy validation)
+    m_computeResources.shaders.push_back(std::move(shader));
+    m_computeResources.layouts.push_back(std::move(bindGroupLayout));
+    m_computeResources.bindGroups.push_back(std::move(bindGroup));
+    m_computeResources.pipelineLayouts.push_back(std::move(pipelineLayout));
+    m_computeResources.pipelines.push_back(std::move(pipeline));
+
     std::cout << "[IBLManager] Generated BRDF LUT (512x512)\n";
     return true;
 }
@@ -377,6 +384,15 @@ bool IBLManager::generateEnvCubemap(rhi::RHITexture* hdrTexture) {
     m_queue->submit(cmdBuffer.get());
     m_queue->waitIdle();
 
+    // Store resources to keep them alive (satisfy validation)
+    m_computeResources.shaders.push_back(std::move(shader));
+    m_computeResources.layouts.push_back(std::move(bindGroupLayout));
+    m_computeResources.bindGroups.push_back(std::move(bindGroup));
+    m_computeResources.pipelineLayouts.push_back(std::move(pipelineLayout));
+    m_computeResources.pipelines.push_back(std::move(pipeline));
+    m_computeResources.extraViews.push_back(std::move(envArrayView));
+    m_computeResources.extraViews.push_back(std::move(hdrView));
+
     std::cout << "[IBLManager] Generated environment cubemap (512x512x6)\n";
     return true;
 }
@@ -469,6 +485,14 @@ bool IBLManager::generateIrradianceMap() {
     m_queue->submit(cmdBuffer.get());
     m_queue->waitIdle();
 
+    // Store resources to keep them alive (satisfy validation)
+    m_computeResources.shaders.push_back(std::move(shader));
+    m_computeResources.layouts.push_back(std::move(bindGroupLayout));
+    m_computeResources.bindGroups.push_back(std::move(bindGroup));
+    m_computeResources.pipelineLayouts.push_back(std::move(pipelineLayout));
+    m_computeResources.pipelines.push_back(std::move(pipeline));
+    m_computeResources.extraViews.push_back(std::move(irrArrayView));
+
     std::cout << "[IBLManager] Generated irradiance map (32x32x6)\n";
     return true;
 }
@@ -530,11 +554,23 @@ bool IBLManager::generatePrefilteredMap() {
     auto pipeline = m_device->createComputePipeline(cpDesc);
     if (!pipeline) return false;
 
-    // Create roughness UBO
-    rhi::BufferDesc uboDesc{};
-    uboDesc.size = 16;  // vec4 alignment: float roughness + padding
-    uboDesc.usage = rhi::BufferUsage::Uniform | rhi::BufferUsage::MapWrite;
-    auto roughnessUBO = m_device->createBuffer(uboDesc);
+    // Create per-mip roughness UBOs (each dispatch needs its own immutable value)
+    // All dispatches are recorded into one command buffer, so a single shared UBO
+    // would only contain the last-written value when the GPU executes.
+    std::vector<std::unique_ptr<rhi::RHIBuffer>> roughnessUBOs;
+    for (uint32_t mip = 0; mip < 5; mip++) {
+        rhi::BufferDesc uboDesc{};
+        uboDesc.size = 16;  // vec4 alignment: float roughness + padding
+        uboDesc.usage = rhi::BufferUsage::Uniform | rhi::BufferUsage::MapWrite;
+        auto ubo = m_device->createBuffer(uboDesc);
+
+        float roughness = static_cast<float>(mip) / 4.0f;
+        void* mapped = ubo->map();
+        std::memcpy(mapped, &roughness, sizeof(float));
+        ubo->unmap();
+
+        roughnessUBOs.push_back(std::move(ubo));
+    }
 
     auto encoder = m_device->createCommandEncoder();
 
@@ -542,15 +578,13 @@ bool IBLManager::generatePrefilteredMap() {
                                      rhi::TextureLayout::Undefined,
                                      rhi::TextureLayout::General);
 
+    // Store mip-level resources to keep them alive
+    std::vector<std::unique_ptr<rhi::RHITextureView>> mipViews;
+    std::vector<std::unique_ptr<rhi::RHIBindGroup>> mipBindGroups;
+
     // Dispatch once per mip level (5 roughness levels)
     for (uint32_t mip = 0; mip < 5; mip++) {
-        float roughness = static_cast<float>(mip) / 4.0f;
         uint32_t mipSize = 128 >> mip;
-
-        // Update roughness UBO
-        void* mapped = roughnessUBO->map();
-        std::memcpy(mapped, &roughness, sizeof(float));
-        roughnessUBO->unmap();
 
         // Create per-mip view for storage write
         rhi::TextureViewDesc mipViewDesc{};
@@ -568,7 +602,7 @@ bool IBLManager::generatePrefilteredMap() {
             rhi::BindGroupEntry::TextureView(0, m_envCubemapView.get()),
             rhi::BindGroupEntry::Sampler(1, m_sampler.get()),
             rhi::BindGroupEntry::TextureView(2, mipView.get()),
-            rhi::BindGroupEntry::Buffer(3, roughnessUBO.get()),
+            rhi::BindGroupEntry::Buffer(3, roughnessUBOs[mip].get()),
         };
         auto bindGroup = m_device->createBindGroup(bgDesc);
 
@@ -578,6 +612,10 @@ bool IBLManager::generatePrefilteredMap() {
         computePass->setBindGroup(0, bindGroup.get());
         computePass->dispatch(workgroups, workgroups, 6);
         computePass->end();
+
+        // Store resources before they go out of scope
+        mipViews.push_back(std::move(mipView));
+        mipBindGroups.push_back(std::move(bindGroup));
     }
 
     encoder->transitionTextureLayout(m_prefilteredMap.get(),
@@ -587,6 +625,23 @@ bool IBLManager::generatePrefilteredMap() {
     auto cmdBuffer = encoder->finish();
     m_queue->submit(cmdBuffer.get());
     m_queue->waitIdle();
+
+    // Store resources to keep them alive (satisfy validation)
+    m_computeResources.shaders.push_back(std::move(shader));
+    m_computeResources.layouts.push_back(std::move(bindGroupLayout));
+    m_computeResources.pipelineLayouts.push_back(std::move(pipelineLayout));
+    m_computeResources.pipelines.push_back(std::move(pipeline));
+    for (auto& ubo : roughnessUBOs) {
+        m_computeResources.buffers.push_back(std::move(ubo));
+    }
+
+    // Move all mip-level resources into member storage
+    for (auto& view : mipViews) {
+        m_computeResources.extraViews.push_back(std::move(view));
+    }
+    for (auto& bg : mipBindGroups) {
+        m_computeResources.bindGroups.push_back(std::move(bg));
+    }
 
     std::cout << "[IBLManager] Generated prefiltered env map (128x128x6, 5 mips)\n";
     return true;

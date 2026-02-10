@@ -626,7 +626,136 @@ if(BUILD_TESTS)
         target_compile_options(instancing_test PRIVATE -O2 -g0 -ffunction-sections -fdata-sections)
     endif()
 
-    message(STATUS "Demo executables enabled: rhi_smoke_test, instancing_test")
+    # PBR Material Showcase Demo
+    add_executable(pbr_demo
+        tests/pbr_demo.cpp
+        src/rendering/RendererBridge.hpp
+        src/rendering/RendererBridge.cpp
+        src/rendering/IBLManager.cpp
+        src/rendering/IBLManager.hpp
+        src/rendering/SkyboxRenderer.hpp
+        src/rendering/SkyboxRenderer.cpp
+        src/resources/ResourceManager.cpp
+        src/resources/ResourceManager.hpp
+        src/scene/Camera.cpp
+        src/scene/Camera.hpp
+        src/utils/Vertex.hpp
+        src/utils/FileUtils.hpp
+    )
+
+    configure_rhi_test(pbr_demo)
+    target_link_libraries(pbr_demo PRIVATE Stb::stb tinyobjloader::tinyobjloader)
+
+    # Compile PBR demo shaders (GLSL -> SPIR-V)
+    if(NOT EMSCRIPTEN)
+        if(GLSLC_EXECUTABLE)
+            set(PBR_SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
+
+            add_custom_command(
+                OUTPUT ${PBR_SHADER_DIR}/pbr_sphere.vert.spv
+                COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=vertex
+                        -o ${PBR_SHADER_DIR}/pbr_sphere.vert.spv
+                        ${PBR_SHADER_DIR}/pbr_sphere.vert.glsl
+                DEPENDS ${PBR_SHADER_DIR}/pbr_sphere.vert.glsl
+                COMMENT "Compiling pbr_sphere.vert.glsl -> SPIR-V"
+            )
+
+            add_custom_command(
+                OUTPUT ${PBR_SHADER_DIR}/pbr_sphere.frag.spv
+                COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=fragment
+                        -o ${PBR_SHADER_DIR}/pbr_sphere.frag.spv
+                        ${PBR_SHADER_DIR}/pbr_sphere.frag.glsl
+                DEPENDS ${PBR_SHADER_DIR}/pbr_sphere.frag.glsl
+                COMMENT "Compiling pbr_sphere.frag.glsl -> SPIR-V"
+            )
+
+            add_custom_command(
+                OUTPUT ${PBR_SHADER_DIR}/skybox.vert.spv
+                COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=vertex
+                        -o ${PBR_SHADER_DIR}/skybox.vert.spv
+                        ${PBR_SHADER_DIR}/skybox.vert.glsl
+                DEPENDS ${PBR_SHADER_DIR}/skybox.vert.glsl
+                COMMENT "Compiling skybox.vert.glsl -> SPIR-V"
+            )
+
+            add_custom_command(
+                OUTPUT ${PBR_SHADER_DIR}/skybox.frag.spv
+                COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=fragment
+                        -o ${PBR_SHADER_DIR}/skybox.frag.spv
+                        ${PBR_SHADER_DIR}/skybox.frag.glsl
+                DEPENDS ${PBR_SHADER_DIR}/skybox.frag.glsl
+                COMMENT "Compiling skybox.frag.glsl -> SPIR-V"
+            )
+
+            add_custom_target(pbr_shaders DEPENDS
+                ${PBR_SHADER_DIR}/pbr_sphere.vert.spv
+                ${PBR_SHADER_DIR}/pbr_sphere.frag.spv
+                ${PBR_SHADER_DIR}/skybox.vert.spv
+                ${PBR_SHADER_DIR}/skybox.frag.spv
+            )
+
+            add_dependencies(pbr_demo pbr_shaders)
+            # Reuse IBL compute shader targets from main application
+            add_dependencies(pbr_demo building_shaders)
+        endif()
+    endif()
+
+    # Dual Light PBR Demo
+    add_executable(dual_light_demo
+        tests/dual_light_demo.cpp
+        src/rendering/RendererBridge.hpp
+        src/rendering/RendererBridge.cpp
+        src/scene/Camera.cpp
+        src/scene/Camera.hpp
+        src/utils/Vertex.hpp
+        src/utils/FileUtils.hpp
+    )
+
+    configure_rhi_test(dual_light_demo)
+
+    # Compile dual light shaders (GLSL -> SPIR-V)
+    if(NOT EMSCRIPTEN)
+        if(GLSLC_EXECUTABLE)
+            set(DL_SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
+
+            add_custom_command(
+                OUTPUT ${DL_SHADER_DIR}/dual_light_pbr.vert.spv
+                COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=vertex
+                        -o ${DL_SHADER_DIR}/dual_light_pbr.vert.spv
+                        ${DL_SHADER_DIR}/dual_light_pbr.vert.glsl
+                DEPENDS ${DL_SHADER_DIR}/dual_light_pbr.vert.glsl
+                COMMENT "Compiling dual_light_pbr.vert.glsl -> SPIR-V"
+            )
+
+            add_custom_command(
+                OUTPUT ${DL_SHADER_DIR}/dual_light_pbr.frag.spv
+                COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=fragment
+                        -o ${DL_SHADER_DIR}/dual_light_pbr.frag.spv
+                        ${DL_SHADER_DIR}/dual_light_pbr.frag.glsl
+                DEPENDS ${DL_SHADER_DIR}/dual_light_pbr.frag.glsl
+                COMMENT "Compiling dual_light_pbr.frag.glsl -> SPIR-V"
+            )
+
+            add_custom_target(dual_light_shaders DEPENDS
+                ${DL_SHADER_DIR}/dual_light_pbr.vert.spv
+                ${DL_SHADER_DIR}/dual_light_pbr.frag.spv
+            )
+
+            add_dependencies(dual_light_demo dual_light_shaders)
+        endif()
+    endif()
+
+    # Custom target to run PBR demo
+    add_custom_target(run
+        COMMAND ${CMAKE_CURRENT_BINARY_DIR}/pbr_demo
+        DEPENDS pbr_demo
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Running PBR Material Showcase Demo..."
+        USES_TERMINAL
+    )
+
+    message(STATUS "Demo executables enabled: rhi_smoke_test, instancing_test, pbr_demo, dual_light_demo")
+    message(STATUS "Run with: make pbr_demo && make run OR make demo-dual-light")
 else()
     message(STATUS "Demo executables disabled (BUILD_TESTS=OFF)")
 endif()

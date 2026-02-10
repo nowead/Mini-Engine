@@ -8,7 +8,7 @@ layout(binding = 2, rgba16f) uniform writeonly image2DArray outputIrradiance;
 
 const float PI = 3.14159265359;
 
-// Convert cubemap face + UV to 3D direction
+// Convert cubemap face + UV to 3D direction (Vulkan convention)
 vec3 getCubeDir(uint face, vec2 uv) {
     vec2 st = uv * 2.0 - 1.0;
     switch (face) {

@@ -60,7 +60,7 @@ COLOR_BLUE := \033[0;34m
 COLOR_YELLOW := \033[0;33m
 COLOR_RESET := \033[0m
 
-.PHONY: all build run run-only clean re help info demo-smoke demo-instancing release wasm configure-wasm build-wasm serve-wasm clean-wasm setup-emscripten
+.PHONY: all build run run-only clean re help info demo-smoke demo-instancing demo-pbr demo-dual-light release wasm configure-wasm build-wasm serve-wasm clean-wasm setup-emscripten
 
 # Default target
 all: build
@@ -128,6 +128,14 @@ demo-instancing: build
 	@echo "$(COLOR_YELLOW)Running GPU instancing demo...$(COLOR_RESET)"
 	@$(ENV_SETUP) && ./$(BUILD_DIR)/instancing_test
 
+demo-pbr: build
+	@echo "$(COLOR_YELLOW)Running PBR Material Showcase...$(COLOR_RESET)"
+	@$(ENV_SETUP) && cd $(CURDIR) && ./$(BUILD_DIR)/pbr_demo
+
+demo-dual-light: build
+	@echo "$(COLOR_YELLOW)Running Dual Light PBR Demo...$(COLOR_RESET)"
+	@$(ENV_SETUP) && cd $(CURDIR) && ./$(BUILD_DIR)/dual_light_demo
+
 # Display help
 help:
 	@echo "$(COLOR_BLUE)========================================$(COLOR_RESET)"
@@ -143,6 +151,8 @@ help:
 	@echo "$(COLOR_BLUE)Demos:$(COLOR_RESET)"
 	@echo "  $(COLOR_GREEN)make demo-smoke$(COLOR_RESET)         - Run RHI smoke test"
 	@echo "  $(COLOR_GREEN)make demo-instancing$(COLOR_RESET)    - Run GPU instancing demo (1000 cubes)"
+	@echo "  $(COLOR_GREEN)make demo-pbr$(COLOR_RESET)           - Run PBR Material Showcase (5x5 spheres)"
+	@echo "  $(COLOR_GREEN)make demo-dual-light$(COLOR_RESET)    - Run Dual Point Light PBR Demo"
 	@echo ""
 	@echo "$(COLOR_BLUE)Maintenance:$(COLOR_RESET)"
 	@echo "  $(COLOR_GREEN)make clean$(COLOR_RESET)              - Remove all build artifacts"

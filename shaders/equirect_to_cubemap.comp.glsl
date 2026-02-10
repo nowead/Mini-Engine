@@ -8,7 +8,7 @@ layout(binding = 2, rgba16f) uniform writeonly image2DArray outputCubemap;
 
 const float PI = 3.14159265359;
 
-// Convert cubemap face + UV to 3D direction
+// Convert cubemap face + UV to 3D direction (Vulkan convention)
 vec3 getCubeDir(uint face, vec2 uv) {
     // Map UV from [0,1] to [-1,1]
     vec2 st = uv * 2.0 - 1.0;
@@ -26,12 +26,12 @@ vec3 getCubeDir(uint face, vec2 uv) {
 
 // Convert 3D direction to equirectangular UV
 vec2 dirToEquirect(vec3 dir) {
-    float phi = atan(dir.z, dir.x);     // [-PI, PI]
-    float theta = asin(clamp(dir.y, -1.0, 1.0));  // [-PI/2, PI/2]
+    float phi = atan(dir.z, dir.x);     // Azimuth [-PI, PI]
+    float theta = acos(dir.y);          // Polar angle from +Y [0, PI]
 
     vec2 uv;
     uv.x = phi / (2.0 * PI) + 0.5;     // [0, 1]
-    uv.y = theta / PI + 0.5;            // [0, 1]
+    uv.y = theta / PI;                   // [0, 1] - Vulkan UV origin is top-left, no flip needed
     return uv;
 }
 
@@ -45,6 +45,7 @@ void main() {
     vec3 dir = getCubeDir(id.z, uv);
     vec2 equirectUV = dirToEquirect(dir);
 
+    // Sample HDR equirect texture and convert to cubemap
     vec4 color = texture(sampler2D(equirectMap, mapSampler), equirectUV);
 
     imageStore(outputCubemap, ivec3(id), color);

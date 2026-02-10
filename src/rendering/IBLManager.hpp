@@ -82,8 +82,19 @@ private:
     std::unique_ptr<rhi::RHITextureView> m_brdfLutView;
     std::unique_ptr<rhi::RHISampler> m_sampler;
 
-    // Compute pipelines (created on demand, then released)
-    // Stored as members to simplify the per-pass methods
+    // Compute resources - kept alive to satisfy validation requirements
+    // Even though compute passes complete during initialization,
+    // validation layers track these resources through command buffer lifecycle
+    struct ComputeResources {
+        std::vector<std::unique_ptr<rhi::RHIShader>> shaders;
+        std::vector<std::unique_ptr<rhi::RHIBindGroupLayout>> layouts;
+        std::vector<std::unique_ptr<rhi::RHIBindGroup>> bindGroups;
+        std::vector<std::unique_ptr<rhi::RHIPipelineLayout>> pipelineLayouts;
+        std::vector<std::unique_ptr<rhi::RHIComputePipeline>> pipelines;
+        std::vector<std::unique_ptr<rhi::RHITextureView>> extraViews;
+        std::vector<std::unique_ptr<rhi::RHIBuffer>> buffers;
+    };
+    ComputeResources m_computeResources;
 };
 
 } // namespace rendering

@@ -125,6 +125,23 @@ bool SkyboxRenderer::createBindGroups() {
     // Create bind group layout
     rhi::BindGroupLayoutDesc layoutDesc;
     layoutDesc.entries.push_back(rhi::BindGroupLayoutEntry(0, rhi::ShaderStage::Vertex | rhi::ShaderStage::Fragment, rhi::BindingType::UniformBuffer));
+
+    // Add bindings for optional environment cubemap (binding 1 = texture, binding 2 = sampler)
+    {
+        rhi::BindGroupLayoutEntry e;
+        e.binding = 1;
+        e.visibility = rhi::ShaderStage::Fragment;
+        e.type = rhi::BindingType::SampledTexture;
+        e.textureViewDimension = rhi::TextureViewDimension::ViewCube;
+        layoutDesc.entries.push_back(e);
+    }
+    {
+        rhi::BindGroupLayoutEntry e;
+        e.binding = 2;
+        e.visibility = rhi::ShaderStage::Fragment;
+        e.type = rhi::BindingType::Sampler;
+        layoutDesc.entries.push_back(e);
+    }
     layoutDesc.label = "SkyboxBindGroupLayout";
 
     m_bindGroupLayout = m_device->createBindGroupLayout(layoutDesc);
@@ -133,19 +150,8 @@ bool SkyboxRenderer::createBindGroups() {
         return false;
     }
 
-    // Create bind groups for each frame
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-        rhi::BindGroupDesc groupDesc;
-        groupDesc.layout = m_bindGroupLayout.get();
-        groupDesc.entries.push_back(rhi::BindGroupEntry::Buffer(0, m_uniformBuffers[i].get(), 0, sizeof(UniformData)));
-        groupDesc.label = "SkyboxBindGroup";
-
-        m_bindGroups[i] = m_device->createBindGroup(groupDesc);
-        if (!m_bindGroups[i]) {
-            std::cerr << "[SkyboxRenderer] Failed to create bind group " << i << "\n";
-            return false;
-        }
-    }
+    // Don't create bind groups yet - wait for environment map to be set
+    // Bind groups will be created in setEnvironmentMap()
 
     return true;
 }
@@ -217,13 +223,20 @@ void SkyboxRenderer::render(rhi::RHIRenderPassEncoder* renderPass, uint32_t fram
         return;
     }
 
+    // Check if we have bind groups created
     uint32_t bufferIndex = frameIndex % MAX_FRAMES_IN_FLIGHT;
+    if (!m_bindGroups[bufferIndex]) {
+        std::cerr << "[SkyboxRenderer] Bind group not created yet\n";
+        return;
+    }
 
     // Update uniform buffer
     UniformData uniformData{};
     uniformData.invViewProj = invViewProj;
     uniformData.sunDirection = m_sunDirection;
     uniformData.time = time;
+    uniformData.useEnvironmentMap = m_hasEnvMap ? 1 : 0;
+    uniformData.exposure = m_exposure;
 
     // Write to uniform buffer using write() for WebGPU compatibility
     auto* buffer = m_uniformBuffers[bufferIndex].get();
@@ -245,10 +258,28 @@ void SkyboxRenderer::setEnvironmentMap(rhi::RHITextureView* envView, rhi::RHISam
         return;
     }
 
-    // TODO: Rebuild bind groups and pipeline with environment cubemap
-    // Full implementation will replace procedural sky with HDR cubemap sampling
+    m_envView = envView;
+    m_envSampler = sampler;
     m_hasEnvMap = true;
-    std::cout << "[SkyboxRenderer] Environment map set\n";
+
+    // Rebuild bind groups with environment map
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        rhi::BindGroupDesc groupDesc;
+        groupDesc.layout = m_bindGroupLayout.get();
+        groupDesc.entries.push_back(rhi::BindGroupEntry::Buffer(0, m_uniformBuffers[i].get(), 0, sizeof(UniformData)));
+        groupDesc.entries.push_back(rhi::BindGroupEntry::TextureView(1, envView));
+        groupDesc.entries.push_back(rhi::BindGroupEntry::Sampler(2, sampler));
+        groupDesc.label = "SkyboxBindGroup";
+
+        m_bindGroups[i] = m_device->createBindGroup(groupDesc);
+        if (!m_bindGroups[i]) {
+            std::cerr << "[SkyboxRenderer] Failed to create bind group " << i << " with environment map\n";
+            m_hasEnvMap = false;
+            return;
+        }
+    }
+
+    std::cout << "[SkyboxRenderer] Environment map set and bind groups rebuilt\n";
 }
 
 } // namespace rendering
