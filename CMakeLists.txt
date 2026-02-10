@@ -55,17 +55,6 @@ else()
     set(GLM_BUILD_INSTALL OFF CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(glm)
 
-    # stb for image loading (WASM)
-    FetchContent_Declare(
-        stb
-        GIT_REPOSITORY https://github.com/nothings/stb.git
-        GIT_TAG master
-        GIT_SHALLOW TRUE
-    )
-    FetchContent_MakeAvailable(stb)
-    add_library(stb_image INTERFACE)
-    target_include_directories(stb_image INTERFACE ${stb_SOURCE_DIR})
-
     # tinyobjloader for OBJ loading (WASM)
     FetchContent_Declare(
         tinyobjloader
@@ -455,7 +444,6 @@ else()
     target_link_libraries(MiniEngine PRIVATE
         glm::glm
         rhi::factory
-        stb_image
         tinyobjloader
     )
 
@@ -522,7 +510,7 @@ if(BUILD_TESTS)
                 rhi::factory rhi::vulkan
             )
         else()
-            target_link_libraries(${TARGET} PRIVATE rhi::factory)
+            target_link_libraries(${TARGET} PRIVATE rhi::factory glm::glm)
             set_target_properties(${TARGET} PROPERTIES SUFFIX ".html")
             target_link_options(${TARGET} PRIVATE
                 "SHELL:-s USE_WEBGPU=1"
@@ -644,7 +632,11 @@ if(BUILD_TESTS)
     )
 
     configure_rhi_test(pbr_demo)
-    target_link_libraries(pbr_demo PRIVATE Stb::stb tinyobjloader::tinyobjloader)
+    if(NOT EMSCRIPTEN)
+        target_link_libraries(pbr_demo PRIVATE Stb::stb tinyobjloader::tinyobjloader)
+    else()
+        target_link_libraries(pbr_demo PRIVATE tinyobjloader)
+    endif()
 
     # Compile PBR demo shaders (GLSL -> SPIR-V)
     if(NOT EMSCRIPTEN)

@@ -1,7 +1,9 @@
 #include "ResourceManager.hpp"
 
+#ifndef __EMSCRIPTEN__
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
+#endif
 
 #include <stdexcept>
 #include <cstring>
@@ -11,6 +13,7 @@ ResourceManager::ResourceManager(rhi::RHIDevice* device, rhi::RHIQueue* queue)
     : rhiDevice(device), graphicsQueue(queue) {}
 
 rhi::RHITexture* ResourceManager::loadTexture(const std::string& path) {
+#ifndef __EMSCRIPTEN__
     // Check cache first
     auto it = textureCache.find(path);
     if (it != textureCache.end()) {
@@ -34,9 +37,14 @@ rhi::RHITexture* ResourceManager::loadTexture(const std::string& path) {
     rhi::RHITexture* result = texture.get();
     textureCache[path] = std::move(texture);
     return result;
+#else
+    std::cerr << "[ResourceManager] Texture loading not supported in WASM build: " << path << std::endl;
+    return nullptr;
+#endif
 }
 
 rhi::RHITexture* ResourceManager::loadHDRTexture(const std::string& path) {
+#ifndef __EMSCRIPTEN__
     // Check cache first
     auto it = textureCache.find(path);
     if (it != textureCache.end()) {
@@ -73,6 +81,10 @@ rhi::RHITexture* ResourceManager::loadHDRTexture(const std::string& path) {
     rhi::RHITexture* result = texture.get();
     textureCache[path] = std::move(texture);
     return result;
+#else
+    std::cerr << "[ResourceManager] HDR texture loading not supported in WASM build: " << path << std::endl;
+    return nullptr;
+#endif
 }
 
 rhi::RHITexture* ResourceManager::getTexture(const std::string& path) {
