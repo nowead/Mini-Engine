@@ -13,7 +13,7 @@
   <img src="docs/images/mini-engine.png" width="48%" alt="GPU-Driven Rendering" />
 </p>
 <p align="center">
-  <em>PBR Material Showcase with HDR IBL (left) &nbsp;|&nbsp; GPU-Driven Rendering with 100K+ Objects (right)</em>
+  <em>PBR Material Showcase with HDR IBL (left) &nbsp;|&nbsp; GPU-Driven Rendering with 10K+ Objects (right)</em>
 </p>
 
 ---
@@ -29,7 +29,7 @@
 - **GPU-Driven Rendering**: SSBO 기반 오브젝트 데이터 + Compute Shader Frustum Culling + Indirect Draw
 - **RHI 멀티 백엔드**: Vulkan 1.3 (Desktop) + WebGPU (Web/WASM)
 - **GPU 프로파일링**: vkCmdWriteTimestamp 기반 per-pass GPU 타이밍
-- 100,000+ 오브젝트 실시간 렌더링 지원
+- 10,000+ 오브젝트 실시간 렌더링 지원
 
 **현재 기능**: Cook-Torrance PBR, IBL, GPU Frustum Culling, Indirect Draw, Shadow Mapping, GPU Profiling, ImGui UI
 
@@ -295,10 +295,10 @@ make help               # Show all available targets
 
 - **Phase 1-8**: RHI architecture design, implementation, and legacy cleanup (100% RHI-native)
 - **Phase 9**: WebGPU backend — 15 RHI classes, Emscripten WASM, full web deployment
-- **Week 1**: PBR pipeline — Cook-Torrance BRDF, IBL (irradiance/prefilter/BRDF LUT), HDR environment maps
-- **Week 2**: GPU-Driven rendering — SSBO, compute shader frustum culling, indirect draw (100K+ objects)
-- **Week 3**: Memory aliasing (transient resources, lazy allocation), async compute (timeline semaphores)
-- **Week 4**: GPU profiling (`vkCmdWriteTimestamp`), stress test UI, documentation
+- **phase 10**: PBR pipeline — Cook-Torrance BRDF, IBL (irradiance/prefilter/BRDF LUT), HDR environment maps
+- **phase 11**: GPU-Driven rendering — SSBO, compute shader frustum culling, indirect draw (100K+ objects)
+- **phase 12**: Memory aliasing (transient resources, lazy allocation), async compute (timeline semaphores)
+- **phase 13**: GPU profiling (`vkCmdWriteTimestamp`), stress test UI, documentation
 
 ---
 
