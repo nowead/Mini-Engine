@@ -37,7 +37,54 @@ struct DeviceRequestData {
     std::string message;
 };
 
-// Adapter request callback
+// =============================================================================
+// Callbacks — emdawnwebgpu uses (status, adapter, WGPUStringView, void*, void*)
+//             native Dawn uses  (status, adapter, const char*, void*)
+// =============================================================================
+
+#ifdef __EMSCRIPTEN__
+static void onAdapterRequestEnded(WGPURequestAdapterStatus status,
+                                  WGPUAdapter adapter,
+                                  WGPUStringView message,
+                                  void* userdata1,
+                                  void* /*userdata2*/) {
+    auto* data = static_cast<AdapterRequestData*>(userdata1);
+    if (status == WGPURequestAdapterStatus_Success) {
+        data->adapter = adapter;
+    } else {
+        data->message = (message.data && message.length) ? std::string(message.data, message.length) : "Unknown error";
+    }
+    data->requestEnded = true;
+}
+
+static void onDeviceRequestEnded(WGPURequestDeviceStatus status,
+                                 WGPUDevice device,
+                                 WGPUStringView message,
+                                 void* userdata1,
+                                 void* /*userdata2*/) {
+    auto* data = static_cast<DeviceRequestData*>(userdata1);
+    if (status == WGPURequestDeviceStatus_Success) {
+        data->device = device;
+    } else {
+        data->message = (message.data && message.length) ? std::string(message.data, message.length) : "Unknown error";
+    }
+    data->requestEnded = true;
+}
+
+static void onDeviceError(WGPUDevice const* /*device*/, WGPUErrorType type,
+                          WGPUStringView message, void* /*userdata1*/, void* /*userdata2*/) {
+    const char* errorType = "Unknown";
+    switch (type) {
+        case WGPUErrorType_Validation: errorType = "Validation"; break;
+        case WGPUErrorType_OutOfMemory: errorType = "OutOfMemory"; break;
+        case WGPUErrorType_Internal:    errorType = "Internal"; break;
+        case WGPUErrorType_Unknown:     errorType = "Unknown"; break;
+        default: break;
+    }
+    std::string msg = (message.data && message.length) ? std::string(message.data, message.length) : "No message";
+    std::cerr << "[WebGPU Error] " << errorType << ": " << msg << "\n";
+}
+#else
 static void onAdapterRequestEnded(WGPURequestAdapterStatus status,
                                   WGPUAdapter adapter,
                                   const char* message,
@@ -51,11 +98,10 @@ static void onAdapterRequestEnded(WGPURequestAdapterStatus status,
     data->requestEnded = true;
 }
 
-// Device request callback
 static void onDeviceRequestEnded(WGPURequestDeviceStatus status,
-                                WGPUDevice device,
-                                const char* message,
-                                void* userdata) {
+                                 WGPUDevice device,
+                                 const char* message,
+                                 void* userdata) {
     auto* data = static_cast<DeviceRequestData*>(userdata);
     if (status == WGPURequestDeviceStatus_Success) {
         data->device = device;
@@ -65,8 +111,7 @@ static void onDeviceRequestEnded(WGPURequestDeviceStatus status,
     data->requestEnded = true;
 }
 
-// Device error callback
-static void onDeviceError(WGPUErrorType type, const char* message, void* userdata) {
+static void onDeviceError(WGPUErrorType type, const char* message, void* /*userdata*/) {
     const char* errorType = "Unknown";
     switch (type) {
         case WGPUErrorType_Validation: errorType = "Validation"; break;
@@ -79,8 +124,7 @@ static void onDeviceError(WGPUErrorType type, const char* message, void* userdat
     std::cerr << "[WebGPU Error] " << errorType << ": " << (message ? message : "No message") << "\n";
 }
 
-// Device lost callback
-static void onDeviceLost(WGPUDeviceLostReason reason, const char* message, void* userdata) {
+static void onDeviceLost(WGPUDeviceLostReason reason, const char* message, void* /*userdata*/) {
     const char* reasonStr = "Unknown";
     switch (reason) {
         case WGPUDeviceLostReason_Undefined: reasonStr = "Undefined"; break;
@@ -89,6 +133,7 @@ static void onDeviceLost(WGPUDeviceLostReason reason, const char* message, void*
     }
     std::cerr << "[WebGPU DeviceLost] " << reasonStr << ": " << (message ? message : "No message") << "\n";
 }
+#endif
 
 // =============================================================================
 // Constructor & Destructor
@@ -153,10 +198,11 @@ void WebGPURHIDevice::createSurface(GLFWwindow* window) {
     std::cout << "[WebGPU] Creating surface\n";
 
 #ifdef __EMSCRIPTEN__
-    // Emscripten: Get surface from canvas
-    WGPUSurfaceDescriptorFromCanvasHTMLSelector canvasDesc = {};
-    canvasDesc.chain.sType = WGPUSType_SurfaceDescriptorFromCanvasHTMLSelector;
-    canvasDesc.selector = "canvas";
+    // emdawnwebgpu: WGPUSurfaceDescriptorFromCanvasHTMLSelector →
+    //               WGPUEmscriptenSurfaceSourceCanvasHTMLSelector
+    WGPUEmscriptenSurfaceSourceCanvasHTMLSelector canvasDesc = {};
+    canvasDesc.chain.sType = WGPUSType_EmscriptenSurfaceSourceCanvasHTMLSelector;
+    canvasDesc.selector = wgpuStr("canvas");
 
     WGPUSurfaceDescriptor surfaceDesc = {};
     surfaceDesc.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&canvasDesc);
@@ -182,16 +228,18 @@ void WebGPURHIDevice::requestAdapter() {
 
     AdapterRequestData callbackData;
 
-    wgpuInstanceRequestAdapter(m_instance, &options, onAdapterRequestEnded, &callbackData);
-
-    // Synchronous wait for callback
 #ifdef __EMSCRIPTEN__
-    // Emscripten: Event loop handles this automatically
+    // emdawnwebgpu: uses WGPURequestAdapterCallbackInfo struct
+    WGPURequestAdapterCallbackInfo adapterCallbackInfo = {};
+    adapterCallbackInfo.mode      = WGPUCallbackMode_AllowSpontaneous;
+    adapterCallbackInfo.callback  = onAdapterRequestEnded;
+    adapterCallbackInfo.userdata1 = &callbackData;
+    wgpuInstanceRequestAdapter(m_instance, &options, adapterCallbackInfo);
     while (!callbackData.requestEnded) {
         emscripten_sleep(10);
     }
 #else
-    // Native: Manually process events
+    wgpuInstanceRequestAdapter(m_instance, &options, onAdapterRequestEnded, &callbackData);
     while (!callbackData.requestEnded) {
         wgpuInstanceProcessEvents(m_instance);
     }
@@ -214,6 +262,11 @@ void WebGPURHIDevice::requestDevice() {
 #ifdef __EMSCRIPTEN__
     // Emscripten: Don't specify limits, let WebGPU use defaults
     deviceDesc.requiredLimits = nullptr;
+
+    // emdawnwebgpu: register error callback via descriptor (wgpuDeviceSetUncapturedErrorCallback removed)
+    WGPUUncapturedErrorCallbackInfo errorCallbackInfo = {};
+    errorCallbackInfo.callback = onDeviceError;
+    deviceDesc.uncapturedErrorCallbackInfo = errorCallbackInfo;
 #else
     // Native: Query adapter limits and use them
     WGPUSupportedLimits supportedLimits = {};
@@ -225,27 +278,24 @@ void WebGPURHIDevice::requestDevice() {
     deviceDesc.requiredLimits = &requiredLimits;
 #endif
 
-    deviceDesc.defaultQueue.label = "Default Queue";
-
-    // Request features (none for now)
-#if defined(__EMSCRIPTEN__) && EMSCRIPTEN_VERSION_LESS_THAN(3, 1, 60)
-    deviceDesc.requiredFeaturesCount = 0;
-#else
+    deviceDesc.defaultQueue.label = WGPU_LABEL("Default Queue");
     deviceDesc.requiredFeatureCount = 0;
-#endif
     deviceDesc.requiredFeatures = nullptr;
 
     DeviceRequestData callbackData;
 
-    wgpuAdapterRequestDevice(m_adapter, &deviceDesc, onDeviceRequestEnded, &callbackData);
-
-    // Synchronous wait for callback
 #ifdef __EMSCRIPTEN__
-    // Emscripten: Event loop handles this automatically
+    // emdawnwebgpu: uses WGPURequestDeviceCallbackInfo struct
+    WGPURequestDeviceCallbackInfo deviceCallbackInfo = {};
+    deviceCallbackInfo.mode      = WGPUCallbackMode_AllowSpontaneous;
+    deviceCallbackInfo.callback  = onDeviceRequestEnded;
+    deviceCallbackInfo.userdata1 = &callbackData;
+    wgpuAdapterRequestDevice(m_adapter, &deviceDesc, deviceCallbackInfo);
     while (!callbackData.requestEnded) {
         emscripten_sleep(10);
     }
 #else
+    wgpuAdapterRequestDevice(m_adapter, &deviceDesc, onDeviceRequestEnded, &callbackData);
     while (!callbackData.requestEnded) {
         wgpuInstanceProcessEvents(m_instance);
     }
@@ -257,10 +307,9 @@ void WebGPURHIDevice::requestDevice() {
 
     m_device = callbackData.device;
 
-    // Set error callbacks
-    wgpuDeviceSetUncapturedErrorCallback(m_device, onDeviceError, nullptr);
 #ifndef __EMSCRIPTEN__
-    // Note: Emscripten WebGPU doesn't have wgpuDeviceSetDeviceLostCallback
+    // Native: register error/lost callbacks after device creation
+    wgpuDeviceSetUncapturedErrorCallback(m_device, onDeviceError, nullptr);
     wgpuDeviceSetDeviceLostCallback(m_device, onDeviceLost, nullptr);
 #endif
 

@@ -152,11 +152,17 @@ bool IBLManager::createTextures() {
         m_prefilteredView = m_prefilteredMap->createDefaultView();
     }
 
-    // BRDF LUT: 512x512, RG16Float
+    // BRDF LUT: 512x512
+    // WebGPU does not support RG16Float as a storage texture, so use RGBA16Float in WASM
+#ifdef __EMSCRIPTEN__
+    constexpr rhi::TextureFormat brdfTexFormat = rhi::TextureFormat::RGBA16Float;
+#else
+    constexpr rhi::TextureFormat brdfTexFormat = rhi::TextureFormat::RG16Float;
+#endif
     {
         rhi::TextureDesc desc{};
         desc.size = {512, 512, 1};
-        desc.format = rhi::TextureFormat::RG16Float;
+        desc.format = brdfTexFormat;
         desc.usage = rhi::TextureUsage::Storage | rhi::TextureUsage::Sampled;
         desc.mipLevelCount = 1;
         desc.label = "IBL_BRDF_LUT";
@@ -191,7 +197,7 @@ bool IBLManager::createSampler() {
 
 std::unique_ptr<rhi::RHIShader> IBLManager::loadComputeShader(const std::string& name) {
 #ifdef __EMSCRIPTEN__
-    std::string path = "shaders/" + name + ".wgsl";
+    std::string path = "shaders/" + name + ".comp.wgsl";
     auto codeRaw = FileUtils::readFile(path);
     if (codeRaw.empty()) {
         std::cerr << "[IBLManager] Failed to load " << path << "\n";
@@ -225,13 +231,19 @@ bool IBLManager::generateBRDFLut() {
         return true;  // Non-fatal: allow skeleton to build
     }
 
-    // Create bind group layout: binding 0 = storage texture (write-only RG16Float)
+    // Create bind group layout: binding 0 = storage texture (write-only)
+    // WebGPU does not support RG16Float as a storage texture — use RGBA16Float instead
+#ifdef __EMSCRIPTEN__
+    constexpr rhi::TextureFormat brdfLutFormat = rhi::TextureFormat::RGBA16Float;
+#else
+    constexpr rhi::TextureFormat brdfLutFormat = rhi::TextureFormat::RG16Float;
+#endif
     rhi::BindGroupLayoutDesc layoutDesc{};
     rhi::BindGroupLayoutEntry entry{};
     entry.binding = 0;
     entry.visibility = rhi::ShaderStage::Compute;
     entry.type = rhi::BindingType::StorageTexture;
-    entry.storageTextureFormat = rhi::TextureFormat::RG16Float;
+    entry.storageTextureFormat = brdfLutFormat;
     layoutDesc.entries = {entry};
     layoutDesc.label = "BRDF_LUT_BindGroupLayout";
 

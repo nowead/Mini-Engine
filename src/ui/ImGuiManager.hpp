@@ -71,26 +71,22 @@ public:
 
     LightingSettings& getLightingSettings() { return m_lightingSettings; }
 
-    // Phase 4.1: GPU timing data (passed from Renderer)
-    struct GpuTimingData {
-        float cullingMs = 0.0f;
-        float shadowMs = 0.0f;
+    // Phase 4.1: Stress test — building count changed by UI slider
+    // Returns true if the count was changed since last call (clears the flag)
+    bool getBuildingCountChange(int& outCount) {
+        if (!m_buildingCountChanged) return false;
+        outCount = m_targetBuildingCount;
+        m_buildingCountChanged = false;
+        return true;
+    }
+
+    // Phase 4.1: GPU timing data (set by Application, displayed in Statistics panel)
+    struct GPUTiming {
+        float cullingMs  = 0.0f;
+        float shadowMs   = 0.0f;
         float mainPassMs = 0.0f;
     };
-
-    void setGpuTimingData(const GpuTimingData& data) { m_gpuTiming = data; }
-
-    // Phase 4.1: Stress test — building count change request
-    struct ScaleRequest {
-        bool requested = false;
-        int targetCount = 16;
-    };
-
-    ScaleRequest getAndClearScaleRequest() {
-        ScaleRequest req{m_buildingCountChanged, m_targetBuildingCount};
-        m_buildingCountChanged = false;
-        return req;
-    }
+    void setGPUTiming(const GPUTiming& timing) { m_gpuTiming = timing; }
 
 private:
     std::unique_ptr<ui::ImGuiBackend> backend;
@@ -109,10 +105,10 @@ private:
     float m_sunAzimuth = 45.0f;   // Horizontal angle (degrees)
     float m_sunElevation = 15.0f; // Low sunset angle (degrees)
 
-    // Phase 4.1: GPU profiling
-    GpuTimingData m_gpuTiming;
-
-    // Phase 4.1: Stress test
-    int m_targetBuildingCount = 16;
+    // Phase 4.1: Stress test controls
+    int  m_targetBuildingCount  = 1000;
     bool m_buildingCountChanged = false;
+
+    // Phase 4.1: GPU timing (written by Application, read by Statistics panel)
+    GPUTiming m_gpuTiming;
 };

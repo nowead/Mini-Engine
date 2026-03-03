@@ -122,11 +122,6 @@ public:
      * @brief Get ImGui manager (for external UI updates)
      */
     class ImGuiManager* getImGuiManager() { return imguiManager.get(); }
-
-    /**
-     * @brief Get GPU profiler (for external timing display)
-     */
-    class GpuProfiler* getGpuProfiler();
 #endif
 
     /**
@@ -164,7 +159,6 @@ public:
     float getShadowBias() const { return shadowBias; }
     void setShadowStrength(float strength) { shadowStrength = strength; }
     float getShadowStrength() const { return shadowStrength; }
-    void setShadowSceneRadius(float radius) { shadowSceneRadius = radius; }
 
     // PBR tone mapping
     void setExposure(float exp) { exposure = exp; }
@@ -230,12 +224,7 @@ private:
     std::array<std::unique_ptr<rhi::RHIBuffer>, MAX_FRAMES_IN_FLIGHT> indirectDrawBuffers;
     std::array<std::unique_ptr<rhi::RHIBuffer>, MAX_FRAMES_IN_FLIGHT> visibleIndicesBuffers;
     std::array<std::unique_ptr<rhi::RHIBindGroup>, MAX_FRAMES_IN_FLIGHT> cullBindGroups;
-    static constexpr uint32_t MAX_CULL_OBJECTS = 131072;  // Support up to 100K+ objects
-
-    // Phase 4.1: GPU Profiling
-#ifndef __EMSCRIPTEN__
-    std::unique_ptr<class GpuProfiler> gpuProfiler;
-#endif
+    static constexpr uint32_t MAX_CULL_OBJECTS = 4096;
 
     // Phase 3.2: Async compute
     std::unique_ptr<rhi::RHITimelineSemaphore> computeTimelineSemaphore;
@@ -286,7 +275,6 @@ private:
     std::unique_ptr<rendering::IBLManager> iblManager;
     float shadowBias = 0.008f;  // Constant bias to prevent shadow acne (uniform across all surfaces)
     float shadowStrength = 0.7f;  // Shadow darkness
-    float shadowSceneRadius = 200.0f;  // Scene radius for shadow orthographic projection
     float exposure = 1.0f;  // PBR tone mapping exposure
 
     // RHI initialization methods (Phase 4)

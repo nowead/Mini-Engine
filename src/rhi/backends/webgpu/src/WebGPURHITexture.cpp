@@ -17,7 +17,7 @@ WebGPURHITextureView::WebGPURHITextureView(WebGPURHIDevice* device,
     , m_dimension(desc.dimension)
 {
     WGPUTextureViewDescriptor viewDesc{};
-    viewDesc.label = desc.label;
+    viewDesc.label = WGPU_LABEL(desc.label);
     viewDesc.format = ToWGPUFormat(desc.format);
     viewDesc.dimension = ToWGPUTextureViewDimension(desc.dimension);
     viewDesc.baseMipLevel = desc.baseMipLevel;
@@ -25,8 +25,15 @@ WebGPURHITextureView::WebGPURHITextureView(WebGPURHIDevice* device,
     viewDesc.baseArrayLayer = desc.baseArrayLayer;
     viewDesc.arrayLayerCount = desc.arrayLayerCount;
 
-    // Aspect is determined automatically by WebGPU based on format
-    viewDesc.aspect = WGPUTextureAspect_All;
+    // WebGPU requires DepthOnly aspect for depth texture views used as sampled textures
+    // (WGPUTextureSampleType_Depth bindings). Using DepthOnly is also valid for depth attachments.
+    // All is used only for stencil-combined formats where both aspects are needed.
+    auto fmt = desc.format;
+    bool isDepthFormat = (fmt == rhi::TextureFormat::Depth32Float ||
+                          fmt == rhi::TextureFormat::Depth24Plus ||
+                          fmt == rhi::TextureFormat::Depth24PlusStencil8 ||
+                          fmt == rhi::TextureFormat::Depth16Unorm);
+    viewDesc.aspect = isDepthFormat ? WGPUTextureAspect_DepthOnly : WGPUTextureAspect_All;
 
     m_textureView = wgpuTextureCreateView(texture, &viewDesc);
     if (!m_textureView) {
@@ -100,7 +107,7 @@ WebGPURHITexture::WebGPURHITexture(WebGPURHIDevice* device, const TextureDesc& d
     , m_usage(desc.usage)
 {
     WGPUTextureDescriptor textureDesc{};
-    textureDesc.label = desc.label;
+    textureDesc.label = WGPU_LABEL(desc.label);
     textureDesc.usage = ToWGPUTextureUsage(desc.usage);
     textureDesc.dimension = ToWGPUTextureDimension(desc.dimension);
 

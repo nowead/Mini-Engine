@@ -13,15 +13,25 @@ namespace WebGPU {
 // Callback data for async map operations
 struct BufferMapCallbackData {
     bool mapComplete = false;
-    WGPUBufferMapAsyncStatus status = WGPUBufferMapAsyncStatus_Unknown;
+    WGPUBufferMapAsyncStatus status = WGPUBufferMapAsyncStatus_Success;
 };
 
 // Callback for wgpuBufferMapAsync
+// emdawnwebgpu changes signature: (WGPUMapAsyncStatus, WGPUStringView, void*, void*)
+#ifdef __EMSCRIPTEN__
+static void onBufferMapCallback(WGPUMapAsyncStatus status, WGPUStringView /*message*/,
+                                void* userdata1, void* /*userdata2*/) {
+    auto* data = static_cast<BufferMapCallbackData*>(userdata1);
+    data->status = status;
+    data->mapComplete = true;
+}
+#else
 static void onBufferMapCallback(WGPUBufferMapAsyncStatus status, void* userdata) {
     auto* data = static_cast<BufferMapCallbackData*>(userdata);
     data->status = status;
     data->mapComplete = true;
 }
+#endif
 
 WebGPURHIBuffer::WebGPURHIBuffer(WebGPURHIDevice* device, const BufferDesc& desc)
     : m_device(device)
@@ -33,7 +43,7 @@ WebGPURHIBuffer::WebGPURHIBuffer(WebGPURHIDevice* device, const BufferDesc& desc
 
     // Create buffer descriptor
     WGPUBufferDescriptor bufferDesc{};
-    bufferDesc.label = desc.label;
+    bufferDesc.label = WGPU_LABEL(desc.label);
     bufferDesc.size = desc.size;
     bufferDesc.usage = wgpuUsage;
     bufferDesc.mappedAtCreation = desc.mappedAtCreation;
@@ -115,7 +125,16 @@ void* WebGPURHIBuffer::mapInternal(WGPUMapModeFlags mode, uint64_t offset, uint6
     BufferMapCallbackData callbackData;
 
     // Request async map
+#ifdef __EMSCRIPTEN__
+    // emdawnwebgpu: uses WGPUBufferMapCallbackInfo struct
+    WGPUBufferMapCallbackInfo mapCallbackInfo{};
+    mapCallbackInfo.mode      = WGPUCallbackMode_AllowSpontaneous;
+    mapCallbackInfo.callback  = onBufferMapCallback;
+    mapCallbackInfo.userdata1 = &callbackData;
+    wgpuBufferMapAsync(m_buffer, mode, offset, size, mapCallbackInfo);
+#else
     wgpuBufferMapAsync(m_buffer, mode, offset, size, onBufferMapCallback, &callbackData);
+#endif
 
     // Synchronous wait for map to complete
 #ifdef __EMSCRIPTEN__

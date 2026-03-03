@@ -25,7 +25,7 @@ WebGPURHIPipelineLayout::WebGPURHIPipelineLayout(WebGPURHIDevice* device,
     }
 
     WGPUPipelineLayoutDescriptor layoutDesc{};
-    layoutDesc.label = desc.label;
+    layoutDesc.label = WGPU_LABEL(desc.label);
     layoutDesc.bindGroupLayoutCount = static_cast<uint32_t>(wgpuLayouts.size());
     layoutDesc.bindGroupLayouts = wgpuLayouts.data();
 
@@ -108,7 +108,7 @@ WebGPURHIRenderPipeline::WebGPURHIRenderPipeline(WebGPURHIDevice* device,
     // Vertex state
     WGPUVertexState vertexState{};
     vertexState.module = vertexShader->getWGPUShaderModule();
-    vertexState.entryPoint = vertexShader->getEntryPoint().c_str();
+    vertexState.entryPoint = WGPU_LABEL(vertexShader->getEntryPoint().c_str());
     vertexState.bufferCount = static_cast<uint32_t>(vertexBuffers.size());
     vertexState.buffers = vertexBuffers.data();
 
@@ -129,7 +129,13 @@ WebGPURHIRenderPipeline::WebGPURHIRenderPipeline(WebGPURHIDevice* device,
     WGPUDepthStencilState* pDepthStencil = nullptr;
     if (desc.depthStencil) {
         depthStencilState.format = ToWGPUFormat(desc.depthStencil->format);
+#ifdef __EMSCRIPTEN__
+        // emdawnwebgpu: depthWriteEnabled changed from WGPUBool to WGPUOptionalBool
+        depthStencilState.depthWriteEnabled = desc.depthStencil->depthWriteEnabled
+            ? WGPUOptionalBool_True : WGPUOptionalBool_False;
+#else
         depthStencilState.depthWriteEnabled = desc.depthStencil->depthWriteEnabled;
+#endif
         depthStencilState.depthCompare = ToWGPUCompareFunc(desc.depthStencil->depthCompare);
 
         // Stencil (simplified - full stencil state can be added if needed)
@@ -181,7 +187,7 @@ WebGPURHIRenderPipeline::WebGPURHIRenderPipeline(WebGPURHIDevice* device,
     WGPUFragmentState* pFragment = nullptr;
     if (fragmentShader) {
         fragmentState.module = fragmentShader->getWGPUShaderModule();
-        fragmentState.entryPoint = fragmentShader->getEntryPoint().c_str();
+        fragmentState.entryPoint = WGPU_LABEL(fragmentShader->getEntryPoint().c_str());
         fragmentState.targetCount = static_cast<uint32_t>(colorTargets.size());
         fragmentState.targets = colorTargets.data();
         pFragment = &fragmentState;
@@ -195,7 +201,7 @@ WebGPURHIRenderPipeline::WebGPURHIRenderPipeline(WebGPURHIDevice* device,
 
     // Create render pipeline
     WGPURenderPipelineDescriptor pipelineDesc{};
-    pipelineDesc.label = desc.label;
+    pipelineDesc.label = WGPU_LABEL(desc.label);
     pipelineDesc.layout = webgpuLayout->getWGPUPipelineLayout();
     pipelineDesc.vertex = vertexState;
     pipelineDesc.primitive = primitiveState;
@@ -249,10 +255,10 @@ WebGPURHIComputePipeline::WebGPURHIComputePipeline(WebGPURHIDevice* device,
     auto* computeShader = static_cast<WebGPURHIShader*>(desc.computeShader);
 
     WGPUComputePipelineDescriptor pipelineDesc{};
-    pipelineDesc.label = desc.label;
+    pipelineDesc.label = WGPU_LABEL(desc.label);
     pipelineDesc.layout = webgpuLayout->getWGPUPipelineLayout();
     pipelineDesc.compute.module = computeShader->getWGPUShaderModule();
-    pipelineDesc.compute.entryPoint = computeShader->getEntryPoint().c_str();
+    pipelineDesc.compute.entryPoint = WGPU_LABEL(computeShader->getEntryPoint().c_str());
 
     m_pipeline = wgpuDeviceCreateComputePipeline(m_device->getWGPUDevice(), &pipelineDesc);
     if (!m_pipeline) {

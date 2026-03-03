@@ -36,6 +36,9 @@ VulkanRHIBindGroupLayout::VulkanRHIBindGroupLayout(VulkanRHIDevice* device, cons
                     : vk::DescriptorType::eUniformBuffer;
                 break;
             case rhi::BindingType::StorageBuffer:
+            case rhi::BindingType::ReadOnlyStorageBuffer:
+                // Vulkan uses the same descriptor type for both read-write and read-only SSBOs;
+                // read-only semantics are enforced at the shader level
                 binding.descriptorType = entry.hasDynamicOffset
                     ? vk::DescriptorType::eStorageBufferDynamic
                     : vk::DescriptorType::eStorageBuffer;
@@ -173,6 +176,7 @@ VulkanRHIBindGroup::VulkanRHIBindGroup(VulkanRHIDevice* device, const BindGroupD
             // Set correct buffer descriptor type
             switch (bindingType) {
                 case rhi::BindingType::StorageBuffer:
+                case rhi::BindingType::ReadOnlyStorageBuffer:
                     write.descriptorType = vk::DescriptorType::eStorageBuffer;
                     break;
                 default:

@@ -75,10 +75,6 @@ public:
 
     bool hasEnvironmentMap() const { return m_hasEnvMap; }
 
-    /**
-     * @brief Set exposure for HDR environment map
-     * @param exposure Exposure multiplier (default 1.0)
-     */
     void setExposure(float exposure) { m_exposure = exposure; }
     float getExposure() const { return m_exposure; }
 
@@ -110,18 +106,22 @@ private:
     glm::vec3 m_sunDirection = glm::normalize(glm::vec3(0.7f, 0.25f, 0.5f));
     bool m_hasEnvMap = false;
     float m_exposure = 1.0f;
+    rhi::RHITextureView* m_envView = nullptr;
+    rhi::RHISampler* m_envSampler = nullptr;
 
-    // Environment map resources
-    rhi::RHITextureView* m_envView = nullptr;  // Not owned
-    rhi::RHISampler* m_envSampler = nullptr;  // Not owned
+    // Dummy 1x1 cubemap used for initial bind group (before real env map is set)
+    std::unique_ptr<rhi::RHITexture> m_dummyEnvTexture;
+    std::unique_ptr<rhi::RHITextureView> m_dummyEnvView;
+    std::unique_ptr<rhi::RHISampler> m_dummyEnvSampler;
 
     // Uniform buffer structure (must match shader)
     struct alignas(16) UniformData {
         glm::mat4 invViewProj;
         glm::vec3 sunDirection;
         float time;
-        alignas(4) int useEnvironmentMap;  // 1 = use HDR, 0 = procedural
-        alignas(4) float exposure;
+        int useEnvironmentMap;
+        float exposure;
+        float _pad[2];
     };
 };
 

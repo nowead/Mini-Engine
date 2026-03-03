@@ -36,17 +36,18 @@ if(NOT EMSCRIPTEN)
             dawn::tint  # For SPIR-V → WGSL conversion
     )
 else()
-    # Emscripten build: Use browser's WebGPU API
+    # Emscripten build: Use browser's WebGPU API via emdawnwebgpu port
     target_link_libraries(rhi_webgpu
         PUBLIC
             rhi::interface
     )
-    # Optimize for size in WASM builds
+    # Optimize for size in WASM builds; --use-port=emdawnwebgpu provides webgpu/webgpu.h
     target_compile_options(rhi_webgpu PRIVATE
         -Oz
         -g0
         -ffunction-sections
         -fdata-sections
+        --use-port=emdawnwebgpu
     )
 endif()
 

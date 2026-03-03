@@ -1,4 +1,6 @@
-@group(0) @binding(0) var outputLUT: texture_storage_2d<rg16float, write>;
+// WebGPU does not support rg16float as a storage texture; rgba16float is used instead.
+// On Vulkan the GLSL variant uses rg16f — the .wgsl file is WebGPU-only.
+@group(0) @binding(0) var outputLUT: texture_storage_2d<rgba16float, write>;
 
 const PI: f32 = 3.14159265359;
 

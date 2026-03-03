@@ -1,7 +1,6 @@
 #include "Renderer.hpp"
 #ifndef __EMSCRIPTEN__
 #include "src/ui/ImGuiManager.hpp"
-#include "src/utils/GpuProfiler.hpp"
 #endif
 #include "InstancedRenderData.hpp"
 #include "src/utils/Logger.hpp"
@@ -14,7 +13,6 @@
 #include <rhi/vulkan/VulkanRHICommandEncoder.hpp>
 #include <rhi/vulkan/VulkanRHITexture.hpp>
 #include <rhi/vulkan/VulkanRHIBuffer.hpp>
-#include <rhi/vulkan/VulkanRHIDevice.hpp>
 #endif
 
 #include <stdexcept>
@@ -81,19 +79,6 @@ Renderer::Renderer(GLFWwindow* window,
     // Phase 3.3: Create shadow renderer
     createShadowRenderer();
 
-    // Phase 4.1: GPU Profiler
-#ifndef __EMSCRIPTEN__
-    {
-        auto* vulkanDevice = dynamic_cast<RHI::Vulkan::VulkanRHIDevice*>(rhiBridge->getDevice());
-        if (vulkanDevice) {
-            gpuProfiler = std::make_unique<GpuProfiler>(
-                vulkanDevice->getVkDevice(),
-                vulkanDevice->getVkPhysicalDevice(),
-                MAX_FRAMES_IN_FLIGHT);
-        }
-    }
-#endif
-
     // Phase 3.1: Log GPU memory statistics
     rhiBridge->getDevice()->logMemoryStats();
 }
@@ -105,12 +90,6 @@ Renderer::~Renderer() {
     }
     // All resources cleaned up by RAII in reverse declaration order
 }
-
-#ifndef __EMSCRIPTEN__
-GpuProfiler* Renderer::getGpuProfiler() {
-    return gpuProfiler.get();
-}
-#endif
 
 void Renderer::loadModel(const std::string& modelPath) {
     sceneManager->loadMesh(modelPath);  // Delegates to SceneManager
@@ -273,13 +252,9 @@ void Renderer::createRHIBindGroups() {
     uboEntry.type = rhi::BindingType::UniformBuffer;
     layoutDesc.entries.push_back(uboEntry);
 
-    // Binding 1: Combined image sampler
-    rhi::BindGroupLayoutEntry samplerEntry;
-    samplerEntry.binding = 1;
-    samplerEntry.visibility = rhi::ShaderStage::Fragment;
-    samplerEntry.type = rhi::BindingType::SampledTexture;
-    layoutDesc.entries.push_back(samplerEntry);
-
+    // Note: binding 1 (SampledTexture) is intentionally omitted — it is never
+    // provided in the bind group and the legacy slang pipeline is only used on
+    // native where Vulkan does not strictly validate unused layout entries.
     layoutDesc.label = "RHI Main Bind Group Layout";
     rhiBindGroupLayout = rhiDevice->createBindGroupLayout(layoutDesc);
 
@@ -660,14 +635,16 @@ void Renderer::createBuildingPipeline() {
         rhi::BindGroupLayoutEntry ssboEntry;
         ssboEntry.binding = 0;
         ssboEntry.visibility = rhi::ShaderStage::Vertex;
-        ssboEntry.type = rhi::BindingType::StorageBuffer;
+        // WebGPU requires ReadOnlyStorageBuffer for vertex-stage SSBOs (var<storage, read>)
+        // Vulkan treats ReadOnlyStorageBuffer and StorageBuffer identically (both → eStorageBuffer)
+        ssboEntry.type = rhi::BindingType::ReadOnlyStorageBuffer;
         ssboLayoutDesc.entries.push_back(ssboEntry);
 
         // Phase 2.2: Visible indices buffer for frustum culling indirection
         rhi::BindGroupLayoutEntry visibleIndicesEntry;
         visibleIndicesEntry.binding = 1;
         visibleIndicesEntry.visibility = rhi::ShaderStage::Vertex;
-        visibleIndicesEntry.type = rhi::BindingType::StorageBuffer;
+        visibleIndicesEntry.type = rhi::BindingType::ReadOnlyStorageBuffer;
         ssboLayoutDesc.entries.push_back(visibleIndicesEntry);
 
         ssboLayoutDesc.label = "SSBO Bind Group Layout";
@@ -1038,11 +1015,12 @@ void Renderer::createCullingPipeline() {
     cullUboEntry.type = rhi::BindingType::UniformBuffer;
     cullLayoutDesc.entries.push_back(cullUboEntry);
 
-    // Binding 1: ObjectData[] (storage, read)
+    // Binding 1: ObjectData[] (storage, read) — shader declares var<storage, read>
+    // WebGPU requires ReadOnlyStorageBuffer; Vulkan maps both to eStorageBuffer
     rhi::BindGroupLayoutEntry objEntry;
     objEntry.binding = 1;
     objEntry.visibility = rhi::ShaderStage::Compute;
-    objEntry.type = rhi::BindingType::StorageBuffer;
+    objEntry.type = rhi::BindingType::ReadOnlyStorageBuffer;
     cullLayoutDesc.entries.push_back(objEntry);
 
     // Binding 2: IndirectDrawCommand (storage, read_write)
@@ -1106,9 +1084,10 @@ void Renderer::createCullingPipeline() {
         indirectDrawBuffers[i] = device->createBuffer(indirectDesc);
 
         // Visible indices buffer: 4 bytes per object
+        // CopyDst is needed for wgpuQueueWriteBuffer (used in WASM to write identity indices)
         rhi::BufferDesc visDesc;
         visDesc.size = sizeof(uint32_t) * MAX_CULL_OBJECTS;
-        visDesc.usage = rhi::BufferUsage::Storage;
+        visDesc.usage = rhi::BufferUsage::Storage | rhi::BufferUsage::CopyDst;
         visDesc.label = "Visible Indices Buffer";
         visDesc.concurrentSharing = needsConcurrent;
         visibleIndicesBuffers[i] = device->createBuffer(visDesc);
@@ -1174,6 +1153,17 @@ void Renderer::extractFrustumPlanes(const glm::mat4& vp, glm::vec4 planes[6]) {
 
 void Renderer::performFrustumCulling(rhi::RHICommandEncoder* encoder, uint32_t frameIndex,
                                      uint32_t objectCount, uint32_t indexCount) {
+#ifdef __EMSCRIPTEN__
+    (void)encoder; (void)indexCount;
+    // WASM: write identity mapping [0,1,2,...,N-1] into visible indices buffer so
+    // building.wgsl's visibleIndices.indices[instanceIndex] == instanceIndex
+    if (visibleIndicesBuffers[frameIndex] && objectCount > 0) {
+        std::vector<uint32_t> identityIndices(objectCount);
+        for (uint32_t i = 0; i < objectCount; ++i) identityIndices[i] = i;
+        visibleIndicesBuffers[frameIndex]->write(identityIndices.data(), objectCount * sizeof(uint32_t));
+    }
+    return;
+#endif
     if (!cullPipeline || objectCount == 0) return;
 
     auto* objectBuffer = pendingInstancedData->objectBuffer;
@@ -1519,7 +1509,8 @@ void Renderer::drawFrame() {
         // Use fixed scene center at origin - shadows should only depend on sun direction
         // not on camera position. This prevents shadows from shifting when camera moves.
         glm::vec3 sceneCenter = glm::vec3(0.0f, 0.0f, 0.0f);
-        shadowRenderer->updateLightMatrix(sunDirection, sceneCenter, shadowSceneRadius);
+        float sceneRadius = 200.0f;  // Large enough to cover all buildings in NASDAQ sector
+        shadowRenderer->updateLightMatrix(sunDirection, sceneCenter, sceneRadius);
     }
 
     // Step 3: Update uniform buffer with RHI (includes shadow matrix)
@@ -1530,16 +1521,6 @@ void Renderer::drawFrame() {
     if (!encoder) {
         return;
     }
-
-    // Phase 4.1: GPU Profiling — begin frame (read back previous results, reset query pool)
-#ifndef __EMSCRIPTEN__
-    if (gpuProfiler) {
-        auto* vulkanEncoder = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
-        if (vulkanEncoder) {
-            gpuProfiler->beginFrame(vulkanEncoder->getCommandBuffer(), frameIndex);
-        }
-    }
-#endif
 
     // Step 5: SSBO setup + frustum culling + shadow pass
     if (pendingInstancedData && pendingInstancedData->instanceCount > 0) {
@@ -1564,16 +1545,6 @@ void Renderer::drawFrame() {
             // Phase 2.2+3.2: Perform GPU frustum culling
             uint32_t instanceCount = pendingInstancedData->instanceCount;
             uint32_t meshIndexCount = static_cast<uint32_t>(mesh->getIndexCount());
-
-#ifndef __EMSCRIPTEN__
-            // GPU Profiling: begin frustum culling timer
-            if (gpuProfiler && !useAsyncCompute) {
-                auto* ve = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
-                if (ve) gpuProfiler->beginTimer(ve->getCommandBuffer(), frameIndex,
-                    GpuProfiler::TimerId::FrustumCulling, vk::PipelineStageFlagBits::eComputeShader);
-            }
-#endif
-
             if (useAsyncCompute) {
                 // Async: separate compute encoder submitted to compute queue
                 performFrustumCullingAsync(frameIndex, instanceCount, meshIndexCount);
@@ -1582,27 +1553,10 @@ void Renderer::drawFrame() {
                 performFrustumCulling(encoder.get(), frameIndex, instanceCount, meshIndexCount);
             }
 
-#ifndef __EMSCRIPTEN__
-            // GPU Profiling: end frustum culling timer
-            if (gpuProfiler && !useAsyncCompute) {
-                auto* ve = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
-                if (ve) gpuProfiler->endTimer(ve->getCommandBuffer(), frameIndex,
-                    GpuProfiler::TimerId::FrustumCulling, vk::PipelineStageFlagBits::eComputeShader);
-            }
-#endif
-
             // Shadow pass (render scene from light's perspective — uses direct drawIndexed, no culling)
-#ifndef __EMSCRIPTEN__
-            if (gpuProfiler) {
-                auto* ve = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
-                if (ve) gpuProfiler->beginTimer(ve->getCommandBuffer(), frameIndex,
-                    GpuProfiler::TimerId::ShadowPass);
-            }
-#endif
             if (shadowRenderer && shadowRenderer->isInitialized() && instanceCount > 1) {
-#if !defined(__EMSCRIPTEN__) && !defined(__linux__)
+#ifndef __EMSCRIPTEN__
                 // macOS/Windows: Transition shadow map to depth attachment for writing
-                // Linux: Shadow render pass handles layout transitions automatically
                 auto* vulkanEncoder = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
                 auto* shadowTexture = dynamic_cast<RHI::Vulkan::VulkanRHITexture*>(shadowRenderer->getShadowMapTexture());
                 if (vulkanEncoder && shadowTexture) {
@@ -1630,7 +1584,7 @@ void Renderer::drawFrame() {
                         }
                     );
                 }
-#endif  // !__EMSCRIPTEN__ && !__linux__
+#endif  // !__EMSCRIPTEN__
 
                 auto* shadowPass = shadowRenderer->beginShadowPass(encoder.get(), frameIndex);
                 if (shadowPass) {
@@ -1648,9 +1602,8 @@ void Renderer::drawFrame() {
 
                     shadowRenderer->endShadowPass();
 
-#if !defined(__EMSCRIPTEN__) && !defined(__linux__)
+#ifndef __EMSCRIPTEN__
                     // macOS/Windows: Transition shadow map from depth attachment to shader read
-                    // Linux: Shadow render pass finalLayout handles this transition automatically
                     auto* vulkanEncoderPost = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
                     auto* shadowTexturePost = dynamic_cast<RHI::Vulkan::VulkanRHITexture*>(shadowRenderer->getShadowMapTexture());
                     if (vulkanEncoderPost && shadowTexturePost) {
@@ -1681,13 +1634,6 @@ void Renderer::drawFrame() {
 #endif
                 }
             }
-#ifndef __EMSCRIPTEN__
-            if (gpuProfiler) {
-                auto* ve = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
-                if (ve) gpuProfiler->endTimer(ve->getCommandBuffer(), frameIndex,
-                    GpuProfiler::TimerId::ShadowPass);
-            }
-#endif
         }
     }
 
@@ -1697,9 +1643,9 @@ void Renderer::drawFrame() {
         return;
     }
 
-#if !defined(__EMSCRIPTEN__) && !defined(__linux__)
+#ifndef __EMSCRIPTEN__
     // Phase 9: Transition swapchain image from UNDEFINED to COLOR_ATTACHMENT_OPTIMAL
-    // Only needed for dynamic rendering on macOS/Windows
+    // before starting the render pass (only needed for dynamic rendering on macOS/Windows)
     // Linux uses traditional render pass which handles layout transitions automatically
     if (swapchain) {
         // Use Vulkan-specific method to get current image for layout transition
@@ -1771,15 +1717,6 @@ void Renderer::drawFrame() {
     }
 #endif
 
-    // Phase 4.1: GPU Profiling — begin main render pass timer
-#ifndef __EMSCRIPTEN__
-    if (gpuProfiler) {
-        auto* ve = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
-        if (ve) gpuProfiler->beginTimer(ve->getCommandBuffer(), frameIndex,
-            GpuProfiler::TimerId::MainRenderPass);
-    }
-#endif
-
     // Record commands
     auto renderPass = encoder->beginRenderPass(renderPassDesc);
     if (renderPass) {
@@ -1846,7 +1783,13 @@ void Renderer::drawFrame() {
                 renderPass->setIndexBuffer(mesh->getIndexBuffer(), rhi::IndexFormat::Uint32, 0);
 
                 // Phase 2.2: Draw via indirect buffer (GPU frustum culling sets instanceCount)
+#ifdef __EMSCRIPTEN__
+                // WASM: no GPU frustum culling — draw all instances directly
+                renderPass->drawIndexed(static_cast<uint32_t>(mesh->getIndexCount()),
+                                        pendingInstancedData->instanceCount, 0, 0, 0);
+#else
                 renderPass->drawIndexedIndirect(indirectDrawBuffers[frameIndex].get(), 0);
+#endif
             }
 
             // Clear pending data after rendering
@@ -1876,17 +1819,9 @@ void Renderer::drawFrame() {
         renderPass->end();
     }
 
-    // Phase 4.1: GPU Profiling — end main render pass timer
 #ifndef __EMSCRIPTEN__
-    if (gpuProfiler) {
-        auto* ve = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
-        if (ve) gpuProfiler->endTimer(ve->getCommandBuffer(), frameIndex,
-            GpuProfiler::TimerId::MainRenderPass);
-    }
-#endif
-
-#if !defined(__EMSCRIPTEN__) && !defined(__linux__)
     // Phase 9: Transition swapchain image from COLOR_ATTACHMENT_OPTIMAL to PRESENT_SRC
+    // This must be done before finishing the command buffer
     // Only needed for dynamic rendering on macOS/Windows
     // Linux uses traditional render pass which handles layout transitions automatically
     if (swapchain) {

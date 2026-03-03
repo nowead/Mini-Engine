@@ -9,7 +9,7 @@ WebGPURHISampler::WebGPURHISampler(WebGPURHIDevice* device, const SamplerDesc& d
     : m_device(device)
 {
     WGPUSamplerDescriptor samplerDesc{};
-    samplerDesc.label = desc.label;
+    samplerDesc.label = WGPU_LABEL(desc.label);
 
     // Filtering
     samplerDesc.magFilter = ToWGPUFilterMode(desc.magFilter);

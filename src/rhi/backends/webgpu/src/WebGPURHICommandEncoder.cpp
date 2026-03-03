@@ -276,7 +276,7 @@ std::unique_ptr<RHIRenderPassEncoder> WebGPURHICommandEncoder::beginRenderPass(c
     }
 
     WGPURenderPassDescriptor renderPassDesc{};
-    renderPassDesc.label = desc.label;
+    renderPassDesc.label = WGPU_LABEL(desc.label);
     renderPassDesc.colorAttachmentCount = static_cast<uint32_t>(colorAttachments.size());
     renderPassDesc.colorAttachments = colorAttachments.data();
     renderPassDesc.depthStencilAttachment = pDepthStencil;
@@ -287,7 +287,7 @@ std::unique_ptr<RHIRenderPassEncoder> WebGPURHICommandEncoder::beginRenderPass(c
 
 std::unique_ptr<RHIComputePassEncoder> WebGPURHICommandEncoder::beginComputePass(const char* label) {
     WGPUComputePassDescriptor desc{};
-    desc.label = label;
+    desc.label = WGPU_LABEL(label);
 
     WGPUComputePassEncoder encoder = wgpuCommandEncoderBeginComputePass(m_encoder, &desc);
     return std::make_unique<WebGPURHIComputePassEncoder>(m_device, encoder);

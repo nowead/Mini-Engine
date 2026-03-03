@@ -15,14 +15,24 @@ namespace WebGPU {
 // Callback data for queue work done
 struct QueueWorkDoneData {
     bool done = false;
-    WGPUQueueWorkDoneStatus status = WGPUQueueWorkDoneStatus_Unknown;
+    WGPUQueueWorkDoneStatus status = WGPUQueueWorkDoneStatus_Success;
 };
 
+// emdawnwebgpu: signature changes to (WGPUQueueWorkDoneStatus, WGPUStringView, void*, void*)
+#ifdef __EMSCRIPTEN__
+static void onQueueWorkDone(WGPUQueueWorkDoneStatus status, WGPUStringView /*message*/,
+                            void* userdata1, void* /*userdata2*/) {
+    auto* data = static_cast<QueueWorkDoneData*>(userdata1);
+    data->status = status;
+    data->done = true;
+}
+#else
 static void onQueueWorkDone(WGPUQueueWorkDoneStatus status, void* userdata) {
     auto* data = static_cast<QueueWorkDoneData*>(userdata);
     data->status = status;
     data->done = true;
 }
+#endif
 
 WebGPURHIFence::WebGPURHIFence(WebGPURHIDevice* device, bool signaled)
     : m_device(device)
@@ -49,8 +59,13 @@ bool WebGPURHIFence::wait(uint64_t timeout) {
 
     // Use wgpuQueueOnSubmittedWorkDone for synchronization
     QueueWorkDoneData callbackData;
-#if defined(__EMSCRIPTEN__) && EMSCRIPTEN_VERSION_LESS_THAN(3, 1, 60)
-    wgpuQueueOnSubmittedWorkDone(m_lastQueue, 0, onQueueWorkDone, &callbackData);
+#ifdef __EMSCRIPTEN__
+    // emdawnwebgpu: uses WGPUQueueWorkDoneCallbackInfo struct
+    WGPUQueueWorkDoneCallbackInfo workDoneCallbackInfo{};
+    workDoneCallbackInfo.mode      = WGPUCallbackMode_AllowSpontaneous;
+    workDoneCallbackInfo.callback  = onQueueWorkDone;
+    workDoneCallbackInfo.userdata1 = &callbackData;
+    wgpuQueueOnSubmittedWorkDone(m_lastQueue, workDoneCallbackInfo);
 #else
     wgpuQueueOnSubmittedWorkDone(m_lastQueue, onQueueWorkDone, &callbackData);
 #endif

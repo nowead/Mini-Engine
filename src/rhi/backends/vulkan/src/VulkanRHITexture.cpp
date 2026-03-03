@@ -248,7 +248,12 @@ VulkanRHITexture& VulkanRHITexture::operator=(VulkanRHITexture&& other) noexcept
 }
 
 std::unique_ptr<RHITextureView> VulkanRHITexture::createView(const TextureViewDesc& desc) {
-    return std::make_unique<VulkanRHITextureView>(m_device, m_image, desc);
+    // Use texture format if view format is undefined (mirrors WebGPURHITexture::createView)
+    TextureViewDesc actualDesc = desc;
+    if (actualDesc.format == TextureFormat::Undefined) {
+        actualDesc.format = m_format;
+    }
+    return std::make_unique<VulkanRHITextureView>(m_device, m_image, actualDesc);
 }
 
 std::unique_ptr<RHITextureView> VulkanRHITexture::createDefaultView() {

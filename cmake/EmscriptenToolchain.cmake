@@ -7,11 +7,8 @@ set(CMAKE_AR emar CACHE FILEPATH "Emscripten ar")
 set(CMAKE_RANLIB emranlib CACHE FILEPATH "Emscripten ranlib")
 set(EMSCRIPTEN 1)
 
-# WebGPU and GLFW support
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -s USE_WEBGPU=1")
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -s USE_GLFW=3")
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -s ALLOW_MEMORY_GROWTH=1")
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -s WASM=1")
+# Note: USE_WEBGPU=1 removed — emdawnwebgpu is now specified per-target via --use-port=emdawnwebgpu
+# Global linker flags here are applied during CMake's compiler test and must not include port flags
 
 # Optimization
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")

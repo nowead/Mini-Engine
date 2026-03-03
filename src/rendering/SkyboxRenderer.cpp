@@ -150,8 +150,53 @@ bool SkyboxRenderer::createBindGroups() {
         return false;
     }
 
-    // Don't create bind groups yet - wait for environment map to be set
-    // Bind groups will be created in setEnvironmentMap()
+    // Create a 1x1 dummy cubemap texture so we can build bind groups immediately.
+    // These will be replaced when setEnvironmentMap() is called.
+    rhi::TextureDesc dummyDesc;
+    dummyDesc.size = {1, 1, 1};
+    dummyDesc.arrayLayerCount = 6;
+    dummyDesc.isCubemap = true;
+    dummyDesc.format = rhi::TextureFormat::RGBA8Unorm;
+    dummyDesc.usage = rhi::TextureUsage::Sampled;
+    dummyDesc.label = "SkyboxDummyCubemap";
+    m_dummyEnvTexture = m_device->createTexture(dummyDesc);
+    if (!m_dummyEnvTexture) {
+        std::cerr << "[SkyboxRenderer] Failed to create dummy cubemap texture\n";
+        return false;
+    }
+
+    rhi::TextureViewDesc viewDesc;
+    viewDesc.dimension = rhi::TextureViewDimension::ViewCube;
+    viewDesc.arrayLayerCount = 6;
+    m_dummyEnvView = m_dummyEnvTexture->createView(viewDesc);
+    if (!m_dummyEnvView) {
+        std::cerr << "[SkyboxRenderer] Failed to create dummy cubemap view\n";
+        return false;
+    }
+
+    rhi::SamplerDesc sampDesc;
+    sampDesc.label = "SkyboxDummySampler";
+    m_dummyEnvSampler = m_device->createSampler(sampDesc);
+    if (!m_dummyEnvSampler) {
+        std::cerr << "[SkyboxRenderer] Failed to create dummy sampler\n";
+        return false;
+    }
+
+    // Build initial bind groups using the dummy cubemap
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        rhi::BindGroupDesc groupDesc;
+        groupDesc.layout = m_bindGroupLayout.get();
+        groupDesc.entries.push_back(rhi::BindGroupEntry::Buffer(0, m_uniformBuffers[i].get(), 0, sizeof(UniformData)));
+        groupDesc.entries.push_back(rhi::BindGroupEntry::TextureView(1, m_dummyEnvView.get()));
+        groupDesc.entries.push_back(rhi::BindGroupEntry::Sampler(2, m_dummyEnvSampler.get()));
+        groupDesc.label = "SkyboxBindGroup";
+
+        m_bindGroups[i] = m_device->createBindGroup(groupDesc);
+        if (!m_bindGroups[i]) {
+            std::cerr << "[SkyboxRenderer] Failed to create initial bind group " << i << "\n";
+            return false;
+        }
+    }
 
     return true;
 }

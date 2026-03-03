@@ -53,7 +53,9 @@ private:
 
     WebGPURHIDevice* m_device;
     WGPUSurface m_surface = nullptr;
-    WGPUSwapChain m_swapchain = nullptr;
+#ifndef __EMSCRIPTEN__
+    WGPUSwapChain m_swapchain = nullptr;  // Native (Dawn) only
+#endif
 
     uint32_t m_width;
     uint32_t m_height;

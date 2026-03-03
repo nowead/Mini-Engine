@@ -465,12 +465,17 @@ else()
             ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shadow.wgsl
             ${CMAKE_CURRENT_SOURCE_DIR}/shaders/skybox.wgsl
             ${CMAKE_CURRENT_SOURCE_DIR}/shaders/particle.wgsl
+            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/brdf_lut.comp.wgsl
+            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/equirect_to_cubemap.comp.wgsl
+            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/irradiance_map.comp.wgsl
+            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/prefilter_env.comp.wgsl
+            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/frustum_cull.comp.wgsl
             ${MINIENGINE_SHADER_DIR}/
         COMMENT "Copying WGSL shaders for MiniEngine WASM"
     )
 
     target_link_options(MiniEngine PRIVATE
-        "SHELL:-s USE_WEBGPU=1"
+        "SHELL:--use-port=emdawnwebgpu"
         "SHELL:-s USE_GLFW=3"
         "SHELL:-s ALLOW_MEMORY_GROWTH=1"
         "SHELL:-s WASM=1"
@@ -480,12 +485,16 @@ else()
         "SHELL:-s ASYNCIFY=1"
         "SHELL:-s ASYNCIFY_STACK_SIZE=16384"
         "SHELL:-s ASSERTIONS=1"
+        "SHELL:-s DISABLE_EXCEPTION_CATCHING=0"
         "SHELL:-s ERROR_ON_UNDEFINED_SYMBOLS=0"
         "SHELL:-O2"
         "SHELL:--preload-file ${CMAKE_CURRENT_BINARY_DIR}/shaders@/shaders"
         "SHELL:--shell-file ${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm_shell.html"
     )
-    target_compile_options(MiniEngine PRIVATE -O2 -g0 -ffunction-sections -fdata-sections)
+    target_compile_options(MiniEngine PRIVATE
+        -O2 -g0 -ffunction-sections -fdata-sections
+        --use-port=emdawnwebgpu
+    )
 endif()
 
 # =============================================================================
@@ -513,18 +522,22 @@ if(BUILD_TESTS)
             target_link_libraries(${TARGET} PRIVATE rhi::factory glm::glm)
             set_target_properties(${TARGET} PROPERTIES SUFFIX ".html")
             target_link_options(${TARGET} PRIVATE
-                "SHELL:-s USE_WEBGPU=1"
+                "SHELL:--use-port=emdawnwebgpu"
                 "SHELL:-s USE_GLFW=3"
                 "SHELL:-s ALLOW_MEMORY_GROWTH=1"
                 "SHELL:-s WASM=1"
                 "SHELL:-s INITIAL_MEMORY=134217728"
                 "SHELL:-s MAXIMUM_MEMORY=4294967296"
                 "SHELL:-s STACK_SIZE=16777216"
+                "SHELL:-s DISABLE_EXCEPTION_CATCHING=0"
                 "SHELL:-Oz"
                 "SHELL:-s ERROR_ON_UNDEFINED_SYMBOLS=0"
                 "SHELL:--shell-file ${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm_shell.html"
             )
-            target_compile_options(${TARGET} PRIVATE -Oz -g0 -ffunction-sections -fdata-sections)
+            target_compile_options(${TARGET} PRIVATE
+                -Oz -g0 -ffunction-sections -fdata-sections
+                --use-port=emdawnwebgpu
+            )
         endif()
     endfunction()
 

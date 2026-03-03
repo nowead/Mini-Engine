@@ -39,6 +39,13 @@ WebGPURHIBindGroupLayout::WebGPURHIBindGroupLayout(WebGPURHIDevice* device,
                 wgpuEntry.buffer.minBindingSize = entry.minBufferBindingSize;
                 break;
 
+            case rhi::BindingType::ReadOnlyStorageBuffer:
+                // WebGPU requires ReadOnlyStorage for Vertex-stage SSBO bindings
+                wgpuEntry.buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+                wgpuEntry.buffer.hasDynamicOffset = entry.hasDynamicOffset;
+                wgpuEntry.buffer.minBindingSize = entry.minBufferBindingSize;
+                break;
+
             case rhi::BindingType::Sampler:
                 wgpuEntry.sampler.type = WGPUSamplerBindingType_Filtering;
                 break;
@@ -80,7 +87,7 @@ WebGPURHIBindGroupLayout::WebGPURHIBindGroupLayout(WebGPURHIDevice* device,
     }
 
     WGPUBindGroupLayoutDescriptor layoutDesc{};
-    layoutDesc.label = desc.label;
+    layoutDesc.label = WGPU_LABEL(desc.label);
     layoutDesc.entryCount = static_cast<uint32_t>(wgpuEntries.size());
     layoutDesc.entries = wgpuEntries.data();
 
@@ -152,7 +159,7 @@ WebGPURHIBindGroup::WebGPURHIBindGroup(WebGPURHIDevice* device, const BindGroupD
     }
 
     WGPUBindGroupDescriptor bindGroupDesc{};
-    bindGroupDesc.label = desc.label;
+    bindGroupDesc.label = WGPU_LABEL(desc.label);
     bindGroupDesc.layout = webgpuLayout->getWGPUBindGroupLayout();
     bindGroupDesc.entryCount = static_cast<uint32_t>(wgpuEntries.size());
     bindGroupDesc.entries = wgpuEntries.data();

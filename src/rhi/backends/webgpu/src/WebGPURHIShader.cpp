@@ -46,12 +46,14 @@ WebGPURHIShader::WebGPURHIShader(WebGPURHIDevice* device, const ShaderDesc& desc
     }
 
     // Create WGSL shader module
+    // emdawnwebgpu: WGPUShaderModuleWGSLDescriptor → WGPUShaderSourceWGSL (typedef'd in WebGPUCommon.hpp)
+    //               .code field changed from const char* to WGPUStringView
     WGPUShaderModuleWGSLDescriptor wgslDesc{};
     wgslDesc.chain.sType = WGPUSType_ShaderModuleWGSLDescriptor;
-    wgslDesc.code = wgslCode.c_str();
+    wgslDesc.code = WGPU_LABEL(wgslCode.c_str());
 
     WGPUShaderModuleDescriptor moduleDesc{};
-    moduleDesc.label = desc.label;
+    moduleDesc.label = WGPU_LABEL(desc.label);
     moduleDesc.nextInChain = &wgslDesc.chain;
 
     m_shaderModule = wgpuDeviceCreateShaderModule(m_device->getWGPUDevice(), &moduleDesc);

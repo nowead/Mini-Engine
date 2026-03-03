@@ -12,8 +12,6 @@
 // =============================================================================
 // Emscripten Version Comparison Macros
 // =============================================================================
-// WebGPU API changed between Emscripten 3.1.50 and 3.1.60.
-// These macros simplify conditional compilation for API compatibility.
 #ifdef __EMSCRIPTEN__
     #define EMSCRIPTEN_VERSION_LESS_THAN(major, minor, tiny) \
         ((__EMSCRIPTEN_major__ < (major)) || \
@@ -22,6 +20,45 @@
 
     #define EMSCRIPTEN_VERSION_AT_LEAST(major, minor, tiny) \
         (!EMSCRIPTEN_VERSION_LESS_THAN(major, minor, tiny))
+
+    // =========================================================================
+    // emdawnwebgpu API Compatibility Layer
+    // =========================================================================
+    // emdawnwebgpu removes the `Flags` suffix from bitfield typedefs
+    typedef WGPUBufferUsage    WGPUBufferUsageFlags;
+    typedef WGPUTextureUsage   WGPUTextureUsageFlags;
+    typedef WGPUShaderStage    WGPUShaderStageFlags;
+    typedef WGPUColorWriteMask WGPUColorWriteMaskFlags;
+    typedef WGPUMapMode        WGPUMapModeFlags;
+
+    // emdawnwebgpu renames WGPUBufferMapAsyncStatus → WGPUMapAsyncStatus
+    typedef WGPUMapAsyncStatus WGPUBufferMapAsyncStatus;
+    #define WGPUBufferMapAsyncStatus_Success WGPUMapAsyncStatus_Success
+
+    // emdawnwebgpu renames WGPUShaderModuleWGSLDescriptor → WGPUShaderSourceWGSL
+    typedef WGPUShaderSourceWGSL WGPUShaderModuleWGSLDescriptor;
+    #define WGPUSType_ShaderModuleWGSLDescriptor WGPUSType_ShaderSourceWGSL
+
+    // emdawnwebgpu removes WGPUErrorType_DeviceLost and WGPUDeviceLostReason_Undefined
+    #define WGPUErrorType_DeviceLost       WGPUErrorType_Unknown
+    #define WGPUDeviceLostReason_Undefined WGPUDeviceLostReason_Unknown
+
+    // emdawnwebgpu renames WGPUImageCopyBuffer/Texture
+    typedef WGPUTexelCopyBufferInfo  WGPUImageCopyBuffer;
+    typedef WGPUTexelCopyTextureInfo WGPUImageCopyTexture;
+
+    // emdawnwebgpu removes WGPUQueueWorkDoneStatus_Unknown
+    #define WGPUQueueWorkDoneStatus_Unknown WGPUQueueWorkDoneStatus_Error
+
+    // WGPUStringView helper — all label/string fields changed from const char* to WGPUStringView
+    #include <cstring>
+    inline WGPUStringView wgpuStr(const char* s) {
+        return s ? WGPUStringView{s, WGPU_STRLEN} : WGPUStringView{nullptr, 0};
+    }
+    #define WGPU_LABEL(s) wgpuStr(s)
+#else
+    // Native build: keep const char* assignment compatible via identity macro
+    #define WGPU_LABEL(s) (s)
 #endif
 
 #include <stdexcept>
