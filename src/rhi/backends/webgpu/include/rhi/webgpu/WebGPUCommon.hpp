@@ -33,6 +33,7 @@
 
     // emdawnwebgpu renames WGPUBufferMapAsyncStatus → WGPUMapAsyncStatus
     typedef WGPUMapAsyncStatus WGPUBufferMapAsyncStatus;
+    #define WGPUBufferMapAsyncStatus_Unknown WGPUMapAsyncStatus_Error
     #define WGPUBufferMapAsyncStatus_Success WGPUMapAsyncStatus_Success
 
     // emdawnwebgpu renames WGPUShaderModuleWGSLDescriptor → WGPUShaderSourceWGSL
@@ -56,9 +57,20 @@
         return s ? WGPUStringView{s, WGPU_STRLEN} : WGPUStringView{nullptr, 0};
     }
     #define WGPU_LABEL(s) wgpuStr(s)
+
+    // depthWriteEnabled: WGPUBool -> WGPUOptionalBool
+    inline WGPUOptionalBool wgpuBoolOpt(bool v) {
+        return v ? WGPUOptionalBool_True : WGPUOptionalBool_False;
+    }
+    #define WGPU_BOOL(v) wgpuBoolOpt(v)
+
+    // WGPUSurfaceDescriptorFromCanvasHTMLSelector renamed in emdawnwebgpu
+    typedef WGPUEmscriptenSurfaceSourceCanvasHTMLSelector WGPUSurfaceDescriptorFromCanvasHTMLSelector;
+    #define WGPUSType_SurfaceDescriptorFromCanvasHTMLSelector WGPUSType_EmscriptenSurfaceSourceCanvasHTMLSelector
 #else
     // Native build: keep const char* assignment compatible via identity macro
     #define WGPU_LABEL(s) (s)
+    #define WGPU_BOOL(v)  (v)
 #endif
 
 #include <stdexcept>

@@ -721,14 +721,14 @@ void Renderer::createBuildingPipeline() {
         rhi::BindGroupLayoutEntry ssboEntry;
         ssboEntry.binding = 0;
         ssboEntry.visibility = rhi::ShaderStage::Vertex;
-        ssboEntry.type = rhi::BindingType::StorageBuffer;
+        ssboEntry.type = rhi::BindingType::ReadOnlyStorageBuffer;  // shader: var<storage, read>
         ssboLayoutDesc.entries.push_back(ssboEntry);
 
         // Phase 2.2: Visible indices buffer for frustum culling indirection
         rhi::BindGroupLayoutEntry visibleIndicesEntry;
         visibleIndicesEntry.binding = 1;
         visibleIndicesEntry.visibility = rhi::ShaderStage::Vertex;
-        visibleIndicesEntry.type = rhi::BindingType::StorageBuffer;
+        visibleIndicesEntry.type = rhi::BindingType::ReadOnlyStorageBuffer;  // shader: var<storage, read>
         ssboLayoutDesc.entries.push_back(visibleIndicesEntry);
 
         ssboLayoutDesc.label = "SSBO Bind Group Layout";
@@ -782,14 +782,20 @@ void Renderer::createBuildingPipeline() {
     depthStencilState.format = rhi::TextureFormat::Depth32Float;
     pipelineDesc.depthStencil = &depthStencilState;
 
-    // Color target - match swapchain format
-    rhi::ColorTargetState colorTarget;
+    // Color target format:
+    //   WebGPU: RGBA16Float (geometry renders to HDR offscreen target)
+    //   Vulkan: swapchain format (geometry renders directly to swapchain)
     auto* swapchain = rhiBridge->getSwapchain();
+    rhi::ColorTargetState colorTarget;
+#ifdef __EMSCRIPTEN__
+    colorTarget.format = rhi::TextureFormat::RGBA16Float;
+#else
     if (swapchain) {
         colorTarget.format = swapchain->getFormat();
     } else {
         colorTarget.format = rhi::TextureFormat::BGRA8UnormSrgb;
     }
+#endif
     colorTarget.blend.blendEnabled = false;
     pipelineDesc.colorTargets.push_back(colorTarget);
 
@@ -839,8 +845,13 @@ void Renderer::createParticleRenderer() {
     // Create particle renderer
     particleRenderer = std::make_unique<effects::ParticleRenderer>(rhiDevice, rhiQueue);
 
-    // Initialize with swapchain format and depth format
+    // Initialize with color format and depth format
+    // WASM: renders into HDR RGBA16Float offscreen target; native: renders to swapchain
+#ifdef __EMSCRIPTEN__
+    rhi::TextureFormat colorFormat = rhi::TextureFormat::RGBA16Float;
+#else
     rhi::TextureFormat colorFormat = swapchain->getFormat();
+#endif
     rhi::TextureFormat depthFormat = rhi::TextureFormat::Depth32Float;
 
     // Get native render pass for Linux
@@ -880,8 +891,13 @@ void Renderer::createSkyboxRenderer() {
     // Create skybox renderer
     skyboxRenderer = std::make_unique<rendering::SkyboxRenderer>(rhiDevice, rhiQueue);
 
-    // Initialize with swapchain format and depth format
+    // Initialize with color format and depth format
+    // WASM: renders into HDR RGBA16Float offscreen target; native: renders to swapchain
+#ifdef __EMSCRIPTEN__
+    rhi::TextureFormat colorFormat = rhi::TextureFormat::RGBA16Float;
+#else
     rhi::TextureFormat colorFormat = swapchain->getFormat();
+#endif
     rhi::TextureFormat depthFormat = rhi::TextureFormat::Depth32Float;
 
     // Get native render pass for Linux
@@ -1099,11 +1115,11 @@ void Renderer::createCullingPipeline() {
     cullUboEntry.type = rhi::BindingType::UniformBuffer;
     cullLayoutDesc.entries.push_back(cullUboEntry);
 
-    // Binding 1: ObjectData[] (storage, read)
+    // Binding 1: ObjectData[] (storage, read) — must match WGSL var<storage, read>
     rhi::BindGroupLayoutEntry objEntry;
     objEntry.binding = 1;
     objEntry.visibility = rhi::ShaderStage::Compute;
-    objEntry.type = rhi::BindingType::StorageBuffer;
+    objEntry.type = rhi::BindingType::ReadOnlyStorageBuffer;
     cullLayoutDesc.entries.push_back(objEntry);
 
     // Binding 2: IndirectDrawCommand (storage, read_write)

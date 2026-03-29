@@ -1,6 +1,6 @@
 # Changelog: 2026-03-29
 
-> WASM Post-Process Pipeline + Deferred Resize + Bug Fixes
+> WASM Post-Process Pipeline + Deferred Resize + WebGPU Runtime Fix + Visual Polish
 
 ---
 
@@ -161,3 +161,202 @@ Build complete!
 - Phase 3 (WebSocket 실시간 데이터 레이어)는 이번 작업 범위에 포함되지 않았다.
 - `finance-city-engine`과의 비교에서 도출된 Phase 1 (WASM 렌더링 품질) + Phase 2 (WASM 안정성)만 역이식했다.
 - FXAA는 현재 WASM 빌드에서만 활성화된다. 네이티브 빌드에서의 FXAA 도입은 별도 작업이 필요하다.
+
+---
+
+## 추가 작업: WebGPU 런타임 오류 수정 + 시각적 개선
+
+> 브라우저 콘솔에서 발견된 파이프라인 validation 오류들을 연쇄적으로 수정하고, finance-city-engine 비교를 통해 시각적 품질을 개선한다.
+
+---
+
+## 배경: WebGPU 파이프라인 validation 오류 패턴
+
+WebGPU는 잘못된 파이프라인 생성 시 null 대신 **poisoned 객체**를 반환한다. 이 객체를 사용하면 `[Invalid CommandBuffer]` → `Queue.Submit failed` 오류가 매 프레임 연쇄 발생한다. 오류 메시지 패턴:
+
+```
+[Invalid ComputePipeline "..."] is invalid due to a previous error.
+[Invalid RenderPipeline "..."] is invalid due to a previous error.
+[WebGPU Error] Validation: [Invalid CommandBuffer] is invalid...
+[Queue].Submit([[Invalid CommandBuffer]])
+```
+
+근본 원인: WGSL 셰이더의 `var<storage, read>` 선언과 바인드 그룹 레이아웃의 `StorageBuffer`(read-write) 타입 불일치.
+
+---
+
+## 수정된 WebGPU 오류
+
+### 오류 1: `[Invalid ComputePipeline "Frustum_Cull_Pipeline"]`
+
+**원인**: `frustum_cull.comp.wgsl`의 binding 1 (`objectBuffer`)이 `var<storage, read>`인데, C++ 레이아웃에서 `StorageBuffer`(read-write)로 선언됨.
+
+**수정** — `src/rendering/Renderer.cpp` (`createCullingPipeline()`):
+
+```cpp
+// Before
+objEntry.type = rhi::BindingType::StorageBuffer;
+// After
+objEntry.type = rhi::BindingType::ReadOnlyStorageBuffer;  // shader: var<storage, read>
+```
+
+---
+
+### 오류 2: `[Invalid RenderPipeline "ShadowPipeline"]`
+
+**원인**: 렌더 셰이더(`shadow.wgsl`, `building.wgsl`) set 1의 `objectBuffer`와 `visibleIndices` 두 바인딩 모두 `var<storage, read>`인데, SSBO 바인드 그룹 레이아웃이 둘 다 `StorageBuffer`로 선언됨.
+
+**수정** — `src/rendering/Renderer.cpp` (`createBuildingPipeline()` 내 SSBO layout):
+
+```cpp
+// Before (두 바인딩 모두)
+ssboEntry.type = rhi::BindingType::StorageBuffer;
+visibleIndicesEntry.type = rhi::BindingType::StorageBuffer;
+// After
+ssboEntry.type = rhi::BindingType::ReadOnlyStorageBuffer;         // var<storage, read>
+visibleIndicesEntry.type = rhi::BindingType::ReadOnlyStorageBuffer; // var<storage, read>
+```
+
+> **원칙**: `var<storage, read>` → `ReadOnlyStorageBuffer`, `var<storage, read_write>` → `StorageBuffer`. Frustum cull compute 레이아웃의 `indirect`(binding 2)와 `visibleIndices`(binding 3)는 write가 필요하므로 `StorageBuffer` 유지.
+
+---
+
+### 파이프라인 색상 포맷 불일치 수정
+
+WASM에서 geometry pass는 HDR 오프스크린 타겟(RGBA16Float)으로 렌더링하는데, 빌딩/파티클/스카이박스 파이프라인이 모두 스왑체인 포맷(`BGRA8Unorm`)으로 선언되어 있었다. 런타임에 render pass 색상 첨부 포맷과 불일치로 draw call validation 오류 발생.
+
+**수정** — `src/rendering/Renderer.cpp`:
+
+| 함수                       | 수정 내용                                    |
+|----------------------------|----------------------------------------------|
+| `createBuildingPipeline()` | `#ifdef __EMSCRIPTEN__` → `RGBA16Float`      |
+| `createParticleRenderer()` | `#ifdef __EMSCRIPTEN__` → `RGBA16Float`      |
+| `createSkyboxRenderer()`   | `#ifdef __EMSCRIPTEN__` → `RGBA16Float`      |
+
+```cpp
+// Before
+rhi::TextureFormat colorFormat = swapchain->getFormat();  // BGRA8Unorm on WASM
+
+// After
+#ifdef __EMSCRIPTEN__
+    rhi::TextureFormat colorFormat = rhi::TextureFormat::RGBA16Float;
+#else
+    rhi::TextureFormat colorFormat = swapchain->getFormat();
+#endif
+```
+
+---
+
+## WebGPU surface/swapchain 연쇄 수정 (이전 세션 누적)
+
+초기 "context is not configured" 오류를 해결하기 위해 finance-city-engine 패턴을 역이식한 내용:
+
+| 파일                      | 수정 내용                                                                           |
+|---------------------------|-------------------------------------------------------------------------------------|
+| `WebGPURHIDevice.cpp`     | EMSCRIPTEN에서도 device-level surface 생성 유지 (two-surface 패턴)                  |
+| `WebGPURHISwapchain.cpp`  | `WGPUCompositeAlphaMode_Auto` 사용; `wgpuTextureRelease()` 호출 제거                |
+| `RendererBridge.cpp`      | 신규 스왑체인 생성 전 `m_swapchain.reset()` 명시 호출 (RAII 순서 버그)              |
+| `WebGPUCommon.hpp`        | emdawnwebgpu 호환 shim 추가 (`WGPUSurfaceDescriptorFromCanvasHTMLSelector` typedef) |
+| `tests/wasm_shell.html`   | JS `canvas.width/height` 조작 제거; CSS `100vw/100vh` 풀스크린; 로딩 오버레이 추가  |
+
+---
+
+## 시각적 개선 (finance-city-engine 비교 분석)
+
+### 셰이더: building.wgsl — HDR 파이프라인 정합성
+
+**문제**: HDR 렌더 타겟(RGBA16Float) 도입 후에도 빌딩 셰이더가 내부적으로 ACES 톤매핑 + 감마 보정을 수행하고 있었다. 이는 이미 별도의 `tonemap.wgsl` pass가 동일한 작업을 수행하므로 이중 처리에 해당한다.
+
+**수정** — `shaders/building.wgsl` (WASM 소스):
+- `ACESFilm()` 함수 제거
+- `fs_main()` 말미의 `ACESFilm(color * exp)` + `pow(color, 1/2.2)` 제거
+- exposure 스케일링만 유지하여 HDR 값 그대로 출력
+
+```wgsl
+// Before
+color = ACESFilm(color * exp);
+color = pow(color, vec3<f32>(1.0 / 2.2));
+return vec4<f32>(color, 1.0);
+
+// After — HDR output; tonemap pass handles ACES + gamma
+color = color * exp;
+return vec4<f32>(color, 1.0);
+```
+
+> `shaders/building.frag.glsl` (Vulkan): Vulkan 경로에는 별도 tonemap pass가 없으므로 ACES 유지.
+
+---
+
+### 셰이더: skybox.wgsl — 따뜻한 일몰 팔레트
+
+finance-city-engine과의 비교를 통해 차가운 낮 하늘을 따뜻한 일몰 색상으로 교체:
+
+| 요소 | Before | After |
+|------|--------|-------|
+| 천정(zenith) | `(0.15, 0.35, 0.65)` 낮 파랑 | `(0.05, 0.15, 0.40)` 심청색 |
+| 지평선(horizon) | `(0.60, 0.75, 0.90)` 연한 파랑 | `(0.60, 0.40, 0.25)` 오렌지 |
+| 지면(ground) | `(0.20, 0.20, 0.22)` 회색 | `(0.10, 0.08, 0.05)` 어두운 갈색 |
+| 수평선 헤이즈 | `(0.70, 0.75, 0.85)` 차가운 청회색 | `(0.65, 0.50, 0.35)` 황갈색 |
+| 태양 광채(glow) | `pow(s,8) * 0.3` | `pow(s,8) * 0.5` (더 밝게) |
+| 함수명 | `getSkyColor()` | `proceduralSky()` |
+
+`shaders/skybox.frag.glsl` (Vulkan)은 이미 `proceduralSky()` 패턴과 같은 warm 색상을 사용하므로 수정 불필요.
+
+---
+
+### BuildingManager: 지면 무한대 확장
+
+**수정** — `src/game/managers/BuildingManager.cpp`:
+
+```cpp
+// Before: 빌딩 그리드 크기에 맞춰 동적 계산 (최소 300m)
+float gridExtent = 300.0f;
+// ...maxDist 계산...
+glm::vec3 scale(gridExtent, 0.1f, gridExtent);
+
+// After: 사실상 무한대 (100km)
+glm::vec3 scale(100000.0f, 0.1f, 100000.0f);
+```
+
+재질도 회녹색(`0.55, 0.58, 0.52`) → 아스팔트(`0.35, 0.35, 0.38`, roughness 0.92)로 변경.
+
+---
+
+### Camera: 도시 조망 시점 개선
+
+finance-city-engine의 aerial city overview 스타일을 mini-engine 씬 스케일에 맞게 적용:
+
+| 파라미터 | Before | After | 이유 |
+|---------|--------|-------|------|
+| FOV | 70° | 55° | 더 현실적인 도시 투시 |
+| pitch | 20° | 35° | 위에서 내려다보는 조망 |
+| distance | 150 | 250 | 4×4 그리드 전체 조망 |
+| target | `(0, 15, 0)` | `(0, 0, 0)` | 그리드 정중앙 |
+| nearPlane | 0.1 | 0.5 | depth precision 개선 |
+
+---
+
+## 렌더링 파이프라인 최종 구조 (WASM)
+
+```
+[Frustum Cull — Compute]
+  objectBuffer (binding 1): ReadOnlyStorageBuffer ✓
+
+[Shadow Pass]
+  set 0: LightSpaceUBO (uniform)
+  set 1: ssboBindGroupLayout
+    binding 0: objectBuffer → ReadOnlyStorageBuffer ✓
+    binding 1: visibleIndices → ReadOnlyStorageBuffer ✓
+
+[Geometry Pass → HDR RGBA16Float]
+  building pipeline: colorTarget = RGBA16Float ✓
+  particle pipeline: colorTarget = RGBA16Float ✓
+  skybox pipeline:   colorTarget = RGBA16Float ✓
+  building shader: HDR 출력 (ACES 제거) ✓
+
+[Tonemap Pass → LDR RGBA8Unorm]
+  ACES Filmic + gamma 2.2
+
+[FXAA Pass → Swapchain BGRA8Unorm]
+  FXAA 3.11 Simplified
+```

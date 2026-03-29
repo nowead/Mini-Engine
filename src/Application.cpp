@@ -62,7 +62,6 @@ void Application::initWindow() {
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
 #ifdef __EMSCRIPTEN__
-    // Use actual browser viewport size at startup
     int winW = EM_ASM_INT({ return window.innerWidth; });
     int winH = EM_ASM_INT({ return window.innerHeight; });
     if (winW <= 0) winW = WINDOW_WIDTH;

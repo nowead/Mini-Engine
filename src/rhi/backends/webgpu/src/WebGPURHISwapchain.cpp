@@ -31,11 +31,9 @@ WebGPURHISwapchain::WebGPURHISwapchain(WebGPURHIDevice* device, const SwapchainD
     auto* window = static_cast<GLFWwindow*>(desc.windowHandle);
 
 #ifdef __EMSCRIPTEN__
-    // emdawnwebgpu: WGPUSurfaceDescriptorFromCanvasHTMLSelector →
-    //               WGPUEmscriptenSurfaceSourceCanvasHTMLSelector
-    WGPUEmscriptenSurfaceSourceCanvasHTMLSelector canvasDesc{};
-    canvasDesc.chain.sType = WGPUSType_EmscriptenSurfaceSourceCanvasHTMLSelector;
-    canvasDesc.selector = wgpuStr("canvas");
+    WGPUSurfaceDescriptorFromCanvasHTMLSelector canvasDesc{};
+    canvasDesc.chain.sType = WGPUSType_SurfaceDescriptorFromCanvasHTMLSelector;
+    canvasDesc.selector = WGPU_LABEL("canvas");
 
     WGPUSurfaceDescriptor surfaceDesc{};
     surfaceDesc.nextInChain = &canvasDesc.chain;
@@ -87,7 +85,6 @@ WebGPURHISwapchain::~WebGPURHISwapchain() {
 
 void WebGPURHISwapchain::createSwapchain() {
 #ifdef __EMSCRIPTEN__
-    // emdawnwebgpu: configure surface instead of creating a swap chain object
     WGPUSurfaceConfiguration config{};
     config.device      = m_device->getWGPUDevice();
     config.format      = ToWGPUFormat(m_format);
@@ -95,8 +92,9 @@ void WebGPURHISwapchain::createSwapchain() {
     config.width       = m_width;
     config.height      = m_height;
     config.presentMode = WGPUPresentMode_Fifo;
-    config.alphaMode   = WGPUCompositeAlphaMode_Opaque;
+    config.alphaMode   = WGPUCompositeAlphaMode_Auto;
     wgpuSurfaceConfigure(m_surface, &config);
+    m_surfaceConfigured = true;
 #else
     WGPUSwapChainDescriptor swapchainDesc{};
     swapchainDesc.usage = WGPUTextureUsage_RenderAttachment;
@@ -116,8 +114,9 @@ void WebGPURHISwapchain::destroySwapchain() {
     m_currentTextureView.reset();
 
 #ifdef __EMSCRIPTEN__
-    if (m_surface) {
+    if (m_surfaceConfigured && m_surface) {
         wgpuSurfaceUnconfigure(m_surface);
+        m_surfaceConfigured = false;
     }
 #else
     if (m_swapchain) {
@@ -129,28 +128,18 @@ void WebGPURHISwapchain::destroySwapchain() {
 
 RHITextureView* WebGPURHISwapchain::acquireNextImage(RHISemaphore* /*signalSemaphore*/) {
 #ifdef __EMSCRIPTEN__
-    // emdawnwebgpu: acquire current texture from surface
     WGPUSurfaceTexture surfaceTexture{};
     wgpuSurfaceGetCurrentTexture(m_surface, &surfaceTexture);
-    if (surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal &&
-        surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal) {
-        throw std::runtime_error("Failed to acquire swapchain texture");
+    if (!surfaceTexture.texture ||
+        (surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal &&
+         surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal)) {
+        // Return nullptr — surface may be outdated after resize. Caller skips the frame.
+        return nullptr;
     }
 
-    WGPUTextureViewDescriptor viewDesc{};
-    viewDesc.format          = ToWGPUFormat(m_format);
-    viewDesc.dimension       = WGPUTextureViewDimension_2D;
-    viewDesc.baseMipLevel    = 0;
-    viewDesc.mipLevelCount   = 1;
-    viewDesc.baseArrayLayer  = 0;
-    viewDesc.arrayLayerCount = 1;
-    viewDesc.aspect          = WGPUTextureAspect_All;
-
-    WGPUTextureView textureView = wgpuTextureCreateView(surfaceTexture.texture, &viewDesc);
-    wgpuTextureRelease(surfaceTexture.texture);
-
+    WGPUTextureView textureView = wgpuTextureCreateView(surfaceTexture.texture, nullptr);
     if (!textureView) {
-        throw std::runtime_error("Failed to create swapchain texture view");
+        return nullptr;
     }
 
     m_currentTextureView.reset(new WebGPURHITextureView(

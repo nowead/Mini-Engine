@@ -403,21 +403,11 @@ void BuildingManager::updateObjectBuffer() {
     std::vector<ObjectData> objectData;
     objectData.reserve(entities.size() + 1);  // +1 for ground
 
-    // Add ground plane first (large flat plane at y=0, scaled to fit all buildings)
+    // Add ground plane first (effectively infinite — 100km flat plane at y=0)
     {
         ObjectData ground{};
         glm::vec3 pos(0.0f, -0.05f, 0.0f);
-        // Scale ground to cover building grid with margin
-        float gridExtent = 300.0f;  // default
-        if (!entities.empty()) {
-            float maxDist = 0.0f;
-            for (const auto& [id, b] : entities) {
-                float d = std::max(std::abs(b.position.x), std::abs(b.position.z));
-                if (d > maxDist) maxDist = d;
-            }
-            gridExtent = std::max(300.0f, (maxDist + 50.0f) * 2.0f);
-        }
-        glm::vec3 scale(gridExtent, 0.1f, gridExtent);
+        glm::vec3 scale(100000.0f, 0.1f, 100000.0f);
         ground.worldMatrix = glm::translate(glm::mat4(1.0f), pos)
                            * glm::scale(glm::mat4(1.0f), scale);
         // AABB
@@ -425,9 +415,9 @@ void BuildingManager::updateObjectBuffer() {
         ground.boundingBoxMax = glm::vec4(pos + scale * 0.5f, 0.0f);
         ground.boundingBoxMin.y = pos.y;
         ground.boundingBoxMax.y = pos.y + scale.y;
-        // Material
-        ground.colorAndMetallic = glm::vec4(0.55f, 0.58f, 0.52f, 0.0f);  // sRGB gray-green, non-metallic
-        ground.roughnessAOPad = glm::vec4(0.9f, 1.0f, 0.0f, 0.0f);
+        // Material: dark asphalt
+        ground.colorAndMetallic = glm::vec4(0.35f, 0.35f, 0.38f, 0.0f);
+        ground.roughnessAOPad = glm::vec4(0.92f, 1.0f, 0.0f, 0.0f);
         objectData.push_back(ground);
     }
 

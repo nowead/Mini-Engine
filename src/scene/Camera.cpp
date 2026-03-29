@@ -5,18 +5,18 @@
 #include <algorithm>
 
 Camera::Camera(float aspectRatio)
-    : position(80.0f, 80.0f, 100.0f),  // Higher and farther back for better view
-      target(0.0f, 15.0f, 0.0f),       // Look at center of building grid
+    : position(0.0f, 200.0f, 280.0f),  // Aerial city overview
+      target(0.0f, 0.0f, 0.0f),        // Look at building grid center
       up(0.0f, 1.0f, 0.0f),
-      yaw(glm::radians(45.0f)),
-      pitch(glm::radians(20.0f)),
-      distance(150.0f),
+      yaw(glm::radians(0.0f)),
+      pitch(glm::radians(35.0f)),
+      distance(250.0f),
       aspectRatio(aspectRatio),
-      fov(glm::radians(70.0f)),        // Wider FOV for better visibility
-      nearPlane(0.1f),
-      farPlane(50000.0f) {             // Large far plane for 100K stress test
+      fov(glm::radians(55.0f)),        // Narrower FOV for city overview
+      nearPlane(0.5f),
+      farPlane(50000.0f) {
     // Don't call updateCameraVectors() - use fixed position/target
-    LOG_DEBUG("Camera") << "Initialized at pos=(80, 80, 100), target=(0, 15, 0), FOV=70deg";
+    LOG_DEBUG("Camera") << "Initialized at pos=(0, 200, 280), target=(0, 0, 0), FOV=55deg";
 }
 
 glm::mat4 Camera::getViewMatrix() const {
@@ -68,12 +68,11 @@ void Camera::setAspectRatio(float newAspectRatio) {
 }
 
 void Camera::reset() {
-    position = glm::vec3(0.0f, 0.0f, 5.0f);
-    target = glm::vec3(0.0f, 25.0f, 0.0f);  // Match constructor
+    target = glm::vec3(0.0f, 0.0f, 0.0f);
     up = glm::vec3(0.0f, 1.0f, 0.0f);
-    yaw = glm::radians(45.0f);
-    pitch = glm::radians(30.0f);  // Match constructor
-    distance = 80.0f;  // Match initial distance
+    yaw = glm::radians(0.0f);
+    pitch = glm::radians(35.0f);
+    distance = 250.0f;
     updateCameraVectors();
 }
 

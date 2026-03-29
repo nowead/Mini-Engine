@@ -37,55 +37,37 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
     return output;
 }
 
-// Procedural sky gradient
-fn getSkyColor(rayDir: vec3<f32>, sunDir: vec3<f32>) -> vec3<f32> {
+// Procedural sky: gradient + sun disk, sunset-toned
+fn proceduralSky(rayDir: vec3<f32>, sunDir: vec3<f32>) -> vec3<f32> {
     let dir = normalize(rayDir);
+    let elev = dir.y;
 
-    // Sky colors
-    let skyColorZenith = vec3<f32>(0.15, 0.35, 0.65);   // Deep blue at top
-    let skyColorHorizon = vec3<f32>(0.6, 0.75, 0.9);    // Light blue at horizon
-    let groundColor = vec3<f32>(0.2, 0.2, 0.22);        // Dark gray below horizon
+    // Sky gradient: deep blue at zenith → warm orange at horizon → dark ground
+    let zenith  = vec3<f32>(0.05, 0.15, 0.40);
+    let horizon = vec3<f32>(0.60, 0.40, 0.25);
+    let ground  = vec3<f32>(0.10, 0.08, 0.05);
 
-    // Gradient based on Y component
-    let t = dir.y * 0.5 + 0.5;  // Map [-1,1] to [0,1]
-
-    var skyColor: vec3<f32>;
-
-    // Below horizon
-    if (dir.y < 0.0) {
-        let groundBlend = smoothstep(-0.1, 0.0, dir.y);
-        return mix(groundColor, skyColorHorizon, groundBlend);
+    var sky: vec3<f32>;
+    if (elev > 0.0) {
+        sky = mix(horizon, zenith, sqrt(elev));
+    } else {
+        sky = mix(horizon, ground, clamp(-elev * 4.0, 0.0, 1.0));
     }
 
-    // Above horizon - gradient from horizon to zenith
-    skyColor = mix(skyColorHorizon, skyColorZenith, pow(t, 0.5));
+    // Sun disk + glow
+    let s = max(0.0, dot(dir, normalize(sunDir)));
+    sky += vec3<f32>(1.0, 0.95, 0.8) * (pow(s, 512.0) + pow(s, 8.0) * 0.5);
 
-    // Sun
-    let sunDot = dot(dir, normalize(sunDir));
+    // Horizon haze (warm tones to match sunset palette)
+    let hazeAmount = 1.0 - pow(abs(elev), 0.3);
+    let hazeColor = vec3<f32>(0.65, 0.50, 0.35);
+    sky = mix(sky, hazeColor, hazeAmount * 0.3);
 
-    // Sun disk
-    let sunIntensity = pow(max(sunDot, 0.0), 256.0) * 2.0;  // Sharp sun disk
-    let sunColor = vec3<f32>(1.0, 0.95, 0.8);
-
-    // Sun glow (halo)
-    let glowIntensity = pow(max(sunDot, 0.0), 8.0) * 0.3;
-    let glowColor = vec3<f32>(1.0, 0.8, 0.5);
-
-    // Combine
-    var finalColor = skyColor;
-    finalColor += sunColor * sunIntensity;
-    finalColor += glowColor * glowIntensity;
-
-    // Horizon haze
-    let hazeAmount = 1.0 - pow(abs(dir.y), 0.3);
-    let hazeColor = vec3<f32>(0.7, 0.75, 0.85);
-    finalColor = mix(finalColor, hazeColor, hazeAmount * 0.3);
-
-    return finalColor;
+    return sky;
 }
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    let skyColor = getSkyColor(input.rayDir, ubo.sunDirection);
-    return vec4<f32>(skyColor, 1.0);
+    let color = proceduralSky(input.rayDir, ubo.sunDirection);
+    return vec4<f32>(color, 1.0);
 }

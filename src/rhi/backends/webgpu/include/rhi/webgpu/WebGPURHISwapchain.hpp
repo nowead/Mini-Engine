@@ -63,6 +63,9 @@ private:
     uint32_t m_bufferCount;
 
     std::unique_ptr<WebGPURHITextureView> m_currentTextureView;
+#ifdef __EMSCRIPTEN__
+    bool m_surfaceConfigured = false;
+#endif
 };
 
 } // namespace WebGPU

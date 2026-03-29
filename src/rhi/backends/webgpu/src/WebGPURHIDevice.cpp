@@ -198,11 +198,9 @@ void WebGPURHIDevice::createSurface(GLFWwindow* window) {
     std::cout << "[WebGPU] Creating surface\n";
 
 #ifdef __EMSCRIPTEN__
-    // emdawnwebgpu: WGPUSurfaceDescriptorFromCanvasHTMLSelector →
-    //               WGPUEmscriptenSurfaceSourceCanvasHTMLSelector
-    WGPUEmscriptenSurfaceSourceCanvasHTMLSelector canvasDesc = {};
-    canvasDesc.chain.sType = WGPUSType_EmscriptenSurfaceSourceCanvasHTMLSelector;
-    canvasDesc.selector = wgpuStr("canvas");
+    WGPUSurfaceDescriptorFromCanvasHTMLSelector canvasDesc = {};
+    canvasDesc.chain.sType = WGPUSType_SurfaceDescriptorFromCanvasHTMLSelector;
+    canvasDesc.selector = WGPU_LABEL("canvas");
 
     WGPUSurfaceDescriptor surfaceDesc = {};
     surfaceDesc.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&canvasDesc);

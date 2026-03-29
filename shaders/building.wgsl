@@ -125,15 +125,6 @@ fn fresnelSchlickRoughness(cosTheta: f32, F0: vec3<f32>, roughness: f32) -> vec3
     return F0 + (max(vec3<f32>(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
-fn ACESFilm(x: vec3<f32>) -> vec3<f32> {
-    let a = 2.51;
-    let b = 0.03;
-    let c = 2.43;
-    let d = 0.59;
-    let e = 0.14;
-    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), vec3<f32>(0.0), vec3<f32>(1.0));
-}
-
 // =============================================================================
 // Shadow Calculation
 // =============================================================================
@@ -246,15 +237,10 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // Shadow
     let shadow = calculateShadow(input.posLightSpace, N, L);
 
-    // Final color
+    // Final color — output HDR; tonemapping handled by separate tonemap pass
     var color = ambient + (1.0 - shadow) * Lo;
-
-    // Tone mapping (ACES)
     let exp = select(ubo.exposure, 1.0, ubo.exposure <= 0.0);
-    color = ACESFilm(color * exp);
-
-    // Gamma correction (WebGPU uses BGRA8Unorm, no auto sRGB conversion)
-    color = pow(color, vec3<f32>(1.0 / 2.2));
+    color = color * exp;
 
     return vec4<f32>(color, 1.0);
 }
