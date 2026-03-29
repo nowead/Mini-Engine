@@ -1,7 +1,7 @@
 # Mini-Engine Project Summary
 
-**Last Updated**: 2026-01-07
-**Status**: RHI Abstraction Complete ✅
+**Last Updated**: 2026-03-29
+**Status**: WASM Post-Process Pipeline Complete ✅
 
 ---
 
@@ -391,11 +391,12 @@ make help       # Show all available targets
    - Spatial hierarchy
    - Frustum culling
 
-8. **Advanced Rendering** 🔲
-   - Deferred shading
-   - PBR materials
-   - Shadow mapping
-   - HDR/tone mapping
+8. **Advanced Rendering** (Partially Complete)
+   - Deferred shading 🔲
+   - PBR materials ✅
+   - Shadow mapping ✅
+   - HDR/tone mapping ✅ (WASM), Vulkan inline ✅
+   - FXAA anti-aliasing ✅ (WASM)
 
 9. **Asset Pipeline** 🔲
    - GLTF 2.0 support
@@ -524,7 +525,8 @@ make serve-wasm
 | **2025-12-26** | WASM Build System Complete | ✅ |
 | **2026-01-07** | Directory Restructuring (backends/) | ✅ |
 | **2026-01-07** | Complete RHI Abstraction | ✅ |
-| **TBD** | Full Web Rendering Pipeline | ⏳ |
+| **2026-03-29** | WASM Multi-Pass Post-Process Pipeline (HDR+Tonemap+FXAA) | ✅ |
+| **2026-03-29** | Deferred Resize for WASM Asyncify Safety | ✅ |
 | **TBD** | DirectX 12 Backend | 🔲 |
 | **TBD** | Metal Backend | 🔲 |
 

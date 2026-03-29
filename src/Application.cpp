@@ -1,8 +1,10 @@
 #include "Application.hpp"
 #ifndef __EMSCRIPTEN__
 #include "src/ui/ImGuiManager.hpp"
+#include "src/utils/GpuProfiler.hpp"
 #endif
 #include "src/rendering/InstancedRenderData.hpp"
+#include "src/utils/Logger.hpp"
 
 #include <iostream>
 #include <stdexcept>
@@ -11,6 +13,7 @@
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
+#include <emscripten/html5.h>
 #endif
 
 Application::Application() {
@@ -58,13 +61,37 @@ void Application::initWindow() {
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
+#ifdef __EMSCRIPTEN__
+    // Use actual browser viewport size at startup
+    int winW = EM_ASM_INT({ return window.innerWidth; });
+    int winH = EM_ASM_INT({ return window.innerHeight; });
+    if (winW <= 0) winW = WINDOW_WIDTH;
+    if (winH <= 0) winH = WINDOW_HEIGHT;
+    window = glfwCreateWindow(winW, winH, WINDOW_TITLE, nullptr, nullptr);
+#else
     window = glfwCreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_TITLE, nullptr, nullptr);
+#endif
+
     glfwSetWindowUserPointer(window, this);
     glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
     glfwSetMouseButtonCallback(window, mouseButtonCallback);
     glfwSetCursorPosCallback(window, cursorPosCallback);
     glfwSetScrollCallback(window, scrollCallback);
     glfwSetKeyCallback(window, keyCallback);
+
+#ifdef __EMSCRIPTEN__
+    // Register deferred resize callback.
+    // We store the pending size and apply it safely at the start of the next frame,
+    // because swapchain recreation must happen inside the Asyncify main-loop coroutine.
+    emscripten_set_resize_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, this, false,
+        [](int, const EmscriptenUiEvent* e, void* userData) -> EM_BOOL {
+            auto* app = static_cast<Application*>(userData);
+            app->m_pendingResize = true;
+            app->m_pendingWidth  = e->windowInnerWidth;
+            app->m_pendingHeight = e->windowInnerHeight;
+            return EM_TRUE;
+        });
+#endif
 }
 
 void Application::initRenderer() {
@@ -137,6 +164,18 @@ void Application::mainLoopFrame() {
     if (glfwWindowShouldClose(window)) {
         emscripten_cancel_main_loop();
         return;
+    }
+
+    // Apply deferred resize with explicit dimensions, bypassing the GLFW callback chain.
+    // glfwSetWindowSize is called first so GLFW's internal state and the canvas buffer
+    // size are both updated, then handleFramebufferResize(w,h) recreates the swapchain/
+    // depth/pipeline directly without re-querying GLFW (which may still return stale data).
+    if (m_pendingResize && m_pendingWidth > 0 && m_pendingHeight > 0) {
+        glfwSetWindowSize(window, m_pendingWidth, m_pendingHeight);
+        renderer->handleFramebufferResize(m_pendingWidth, m_pendingHeight);
+        camera->setAspectRatio(static_cast<float>(m_pendingWidth) /
+                               static_cast<float>(m_pendingHeight));
+        m_pendingResize = false;
     }
 #endif
 
@@ -242,6 +281,21 @@ void Application::mainLoopFrame() {
             renderer->setShadowBias(lighting.shadowBias);
             renderer->setShadowStrength(lighting.shadowStrength);
             renderer->setExposure(lighting.exposure);
+
+            // Phase 4.1: Pass GPU timing data to ImGui
+            if (auto* profiler = renderer->getGpuProfiler()) {
+                ImGuiManager::GPUTiming gpuTiming;
+                gpuTiming.cullingMs  = profiler->getElapsedMs(GpuProfiler::TimerId::FrustumCulling);
+                gpuTiming.shadowMs   = profiler->getElapsedMs(GpuProfiler::TimerId::ShadowPass);
+                gpuTiming.mainPassMs = profiler->getElapsedMs(GpuProfiler::TimerId::MainRenderPass);
+                imgui->setGPUTiming(gpuTiming);
+            }
+
+            // Phase 4.1: Handle stress test building count change
+            int targetBuildingCount = 0;
+            if (imgui->getBuildingCountChange(targetBuildingCount)) {
+                regenerateBuildings(targetBuildingCount);
+            }
         }
 #endif
 
@@ -273,6 +327,12 @@ void Application::processInput() {
 }
 
 void Application::framebufferResizeCallback(GLFWwindow* window, int width, int height) {
+#ifdef __EMSCRIPTEN__
+    // On WASM, resize is handled via the deferred mechanism in mainLoopFrame().
+    // This callback can fire from a JS event handler (outside the Asyncify coroutine),
+    // so swapchain recreation here would be unsafe.
+    (void)window; (void)width; (void)height;
+#else
     auto app = reinterpret_cast<Application*>(glfwGetWindowUserPointer(window));
     app->renderer->handleFramebufferResize();
 
@@ -281,6 +341,7 @@ void Application::framebufferResizeCallback(GLFWwindow* window, int width, int h
         float aspectRatio = static_cast<float>(width) / static_cast<float>(height);
         app->camera->setAspectRatio(aspectRatio);
     }
+#endif
 }
 
 void Application::mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
@@ -323,6 +384,54 @@ void Application::cursorPosCallback(GLFWwindow* window, double xpos, double ypos
 void Application::scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
     auto app = reinterpret_cast<Application*>(glfwGetWindowUserPointer(window));
     app->camera->zoom(static_cast<float>(yoffset));
+}
+
+void Application::regenerateBuildings(int targetCount) {
+    if (!worldManager) return;
+    auto* buildingManager = worldManager->getBuildingManager();
+    if (!buildingManager) return;
+
+    // Wait for GPU to finish using current buffers
+    renderer->waitIdle();
+
+    // Destroy existing buildings
+    buildingManager->destroyAllBuildings();
+    mockDataGen = std::make_unique<MockDataGenerator>();
+
+    // Calculate grid dimensions
+    int gridSize = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(targetCount))));
+    float spacing = std::max(15.0f, 30.0f * (16.0f / static_cast<float>(std::max(targetCount, 16))));
+    spacing = std::clamp(spacing, 8.0f, 30.0f);
+    float startX = -(gridSize - 1) * spacing / 2.0f;
+    float startZ = -(gridSize - 1) * spacing / 2.0f;
+
+    int created = 0;
+    for (int x = 0; x < gridSize && created < targetCount; x++) {
+        for (int z = 0; z < gridSize && created < targetCount; z++) {
+            float posX = startX + x * spacing;
+            float posZ = startZ + z * spacing;
+            float height = 10.0f + static_cast<float>(rand() % 50);
+
+            std::string ticker = "B_" + std::to_string(created);
+            buildingManager->createBuilding(ticker, "STRESS", glm::vec3(posX, 0.0f, posZ), height);
+            mockDataGen->registerTicker(ticker, 100.0f + static_cast<float>(rand() % 200));
+            created++;
+        }
+    }
+
+    buildingManager->markObjectBufferDirty();
+
+    // Auto-adjust camera to fit the new grid
+    float gridExtent = gridSize * spacing;
+    float cameraDistance = std::max(150.0f, gridExtent * 0.8f);
+    camera->setDistance(cameraDistance);
+
+    // Also adjust shadow scene radius for large scenes
+    float sceneRadius = std::max(200.0f, gridExtent * 0.6f);
+    renderer->setShadowSceneRadius(sceneRadius);
+
+    LOG_INFO("StressTest") << "Regenerated " << created << " buildings (grid " << gridSize << "x" << gridSize
+                           << ", spacing " << spacing << "m, camera dist " << cameraDistance << "m)";
 }
 
 void Application::keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {

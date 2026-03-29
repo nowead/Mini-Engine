@@ -45,6 +45,7 @@
 - **Multi-Backend RHI** — Vulkan 1.3 (Desktop) + WebGPU (Web/WASM), fully API-agnostic upper layers
 - **Shadow Mapping** — Directional PCF shadows with configurable bias/strength
 - **GPU Profiling** — Per-pass timestamp queries with EMA smoothing
+- **WASM Post-Process Pipeline** — HDR render target (RGBA16Float) → ACES Tonemap → FXAA → swapchain (WebGPU only)
 
 ---
 
@@ -123,6 +124,9 @@
 | **Vulkan Backend** | Completed | Full RHI implementation (Desktop) |
 | **WebGPU Backend** | Completed | Full RHI implementation (Web/WASM) |
 | **ImGui UI** | Completed | Real-time parameter adjustment + stress testing |
+| **HDR Tonemap (WASM)** | Completed | RGBA16Float HDR render target + ACES Filmic tonemapping |
+| **FXAA (WASM)** | Completed | Fast Approximate Anti-Aliasing post-process pass (WebGPU) |
+| **Deferred Resize (WASM)** | Completed | Asyncify-safe swapchain resize for browser viewport changes |
 
 ---
 
@@ -225,6 +229,9 @@ shaders/                    # GLSL + WGSL dual shaders
 ├── shadow.{vert,frag}.glsl     # Shadow pass
 ├── skybox.{vert,frag}.glsl     # Skybox
 ├── equirect_to_cubemap.comp.glsl / irradiance_map / prefilter_env / brdf_lut  # IBL compute
+├── tonemap.{vert,frag}.glsl    # Vulkan ACES tonemap (fullscreen triangle)
+├── tonemap.wgsl                # WASM ACES tonemap + gamma (fullscreen triangle)
+├── fxaa.wgsl                   # WASM FXAA 3.11 anti-aliasing
 └── particle.{vert,frag}.glsl   # Particle effects
 ```
 
@@ -295,10 +302,11 @@ make help               # Show all available targets
 
 - **Phase 1-8**: RHI architecture design, implementation, and legacy cleanup (100% RHI-native)
 - **Phase 9**: WebGPU backend — 15 RHI classes, Emscripten WASM, full web deployment
-- **phase 10**: PBR pipeline — Cook-Torrance BRDF, IBL (irradiance/prefilter/BRDF LUT), HDR environment maps
-- **phase 11**: GPU-Driven rendering — SSBO, compute shader frustum culling, indirect draw (100K+ objects)
-- **phase 12**: Memory aliasing (transient resources, lazy allocation), async compute (timeline semaphores)
-- **phase 13**: GPU profiling (`vkCmdWriteTimestamp`), stress test UI, documentation
+- **Phase 10**: PBR pipeline — Cook-Torrance BRDF, IBL (irradiance/prefilter/BRDF LUT), HDR environment maps
+- **Phase 11**: GPU-Driven rendering — SSBO, compute shader frustum culling, indirect draw (100K+ objects)
+- **Phase 12**: Memory aliasing (transient resources, lazy allocation), async compute (timeline semaphores)
+- **Phase 13**: GPU profiling (`vkCmdWriteTimestamp`), stress test UI, documentation
+- **Phase 14**: WASM post-process pipeline — HDR render target (RGBA16Float) → ACES Tonemap → FXAA → swapchain; deferred resize for Asyncify safety
 
 ---
 

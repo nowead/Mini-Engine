@@ -85,6 +85,15 @@ private:
     // Frame timing for main loop
     std::chrono::high_resolution_clock::time_point lastFrameTime;
 
+#ifdef __EMSCRIPTEN__
+    // Deferred resize: store pending resize event and apply at the start of the next frame.
+    // Direct swapchain recreation inside a browser event callback (emscripten_set_resize_callback)
+    // is unsafe because the callback fires outside the Asyncify main-loop coroutine.
+    bool m_pendingResize = false;
+    int  m_pendingWidth  = 0;
+    int  m_pendingHeight = 0;
+#endif
+
     // Initialization
     void initWindow();
     void initRenderer();

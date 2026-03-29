@@ -358,6 +358,25 @@ if(NOT EMSCRIPTEN)
         COMMENT "Compiling frustum_cull.comp.glsl -> SPIR-V"
     )
 
+    # Post-process: tonemap shader (ACES filmic HDR→LDR)
+    add_custom_command(
+        OUTPUT ${BUILDING_SHADER_DIR}/tonemap.vert.spv
+        COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=vertex
+                -o ${BUILDING_SHADER_DIR}/tonemap.vert.spv
+                ${BUILDING_SHADER_DIR}/tonemap.vert.glsl
+        DEPENDS ${BUILDING_SHADER_DIR}/tonemap.vert.glsl
+        COMMENT "Compiling tonemap.vert.glsl -> SPIR-V"
+    )
+
+    add_custom_command(
+        OUTPUT ${BUILDING_SHADER_DIR}/tonemap.frag.spv
+        COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=fragment
+                -o ${BUILDING_SHADER_DIR}/tonemap.frag.spv
+                ${BUILDING_SHADER_DIR}/tonemap.frag.glsl
+        DEPENDS ${BUILDING_SHADER_DIR}/tonemap.frag.glsl
+        COMMENT "Compiling tonemap.frag.glsl -> SPIR-V"
+    )
+
     add_custom_target(building_shaders DEPENDS
         ${BUILDING_SHADER_DIR}/building.vert.spv
         ${BUILDING_SHADER_DIR}/building.frag.spv
@@ -368,6 +387,8 @@ if(NOT EMSCRIPTEN)
         ${BUILDING_SHADER_DIR}/irradiance_map.comp.spv
         ${BUILDING_SHADER_DIR}/prefilter_env.comp.spv
         ${BUILDING_SHADER_DIR}/frustum_cull.comp.spv
+        ${BUILDING_SHADER_DIR}/tonemap.vert.spv
+        ${BUILDING_SHADER_DIR}/tonemap.frag.spv
     )
     
     add_dependencies(MiniEngine building_shaders)

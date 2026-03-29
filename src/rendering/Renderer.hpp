@@ -77,9 +77,16 @@ public:
     void waitIdle();
 
     /**
-     * @brief Handle framebuffer resize
+     * @brief Handle framebuffer resize (reads new size from GLFW)
      */
     void handleFramebufferResize();
+
+    /**
+     * @brief Handle framebuffer resize with explicit dimensions (bypasses GLFW query).
+     * Used on WASM/Emscripten where glfwGetFramebufferSize may lag behind the actual
+     * browser viewport size change.
+     */
+    void handleFramebufferResize(int width, int height);
 
     /**
      * @brief Update camera matrices and position
@@ -171,6 +178,17 @@ public:
      */
     bool loadEnvironmentMap(const std::string& hdrPath);
 
+    // Shadow scene radius (controls shadow orthographic projection extent)
+    void setShadowSceneRadius(float radius) { shadowSceneRadius = radius; }
+    float getShadowSceneRadius() const { return shadowSceneRadius; }
+
+#ifndef __EMSCRIPTEN__
+    /**
+     * @brief Get GPU profiler (for external timing readback)
+     */
+    class GpuProfiler* getGpuProfiler();
+#endif
+
 private:
     // Window reference
     GLFWwindow* window;
@@ -197,6 +215,33 @@ private:
     std::unique_ptr<rhi::RHIShader> rhiFragmentShader;
     std::unique_ptr<rhi::RHIPipelineLayout> rhiPipelineLayout;
     std::unique_ptr<rhi::RHIRenderPipeline> rhiPipeline;
+
+#ifdef __EMSCRIPTEN__
+    // HDR Render Target (RGBA16Float — geometry renders here)
+    std::unique_ptr<rhi::RHITexture> hdrColorTexture;
+    std::unique_ptr<rhi::RHITextureView> hdrColorView;
+    std::unique_ptr<rhi::RHISampler> hdrSampler;
+
+    // LDR Intermediate Target (RGBA8Unorm — tonemap writes here, FXAA reads from here)
+    std::unique_ptr<rhi::RHITexture> ldrColorTexture;
+    std::unique_ptr<rhi::RHITextureView> ldrColorView;
+
+    // Tonemap Pipeline (HDR → LDR intermediate: ACES + gamma)
+    std::unique_ptr<rhi::RHIShader> tonemapVertexShader;
+    std::unique_ptr<rhi::RHIShader> tonemapFragmentShader;
+    std::unique_ptr<rhi::RHIBindGroupLayout> tonemapBindGroupLayout;
+    std::unique_ptr<rhi::RHIBindGroup> tonemapBindGroup;
+    std::unique_ptr<rhi::RHIPipelineLayout> tonemapPipelineLayout;
+    std::unique_ptr<rhi::RHIRenderPipeline> tonemapPipeline;
+
+    // FXAA Pipeline (LDR intermediate → swapchain: anti-aliasing)
+    std::unique_ptr<rhi::RHIShader> fxaaVertexShader;
+    std::unique_ptr<rhi::RHIShader> fxaaFragmentShader;
+    std::unique_ptr<rhi::RHIBindGroupLayout> fxaaBindGroupLayout;
+    std::unique_ptr<rhi::RHIBindGroup> fxaaBindGroup;
+    std::unique_ptr<rhi::RHIPipelineLayout> fxaaPipelineLayout;
+    std::unique_ptr<rhi::RHIRenderPipeline> fxaaPipeline;
+#endif
 
     // Building Instancing Pipeline
     std::unique_ptr<rhi::RHIShader> buildingVertexShader;
@@ -276,6 +321,11 @@ private:
     float shadowBias = 0.008f;  // Constant bias to prevent shadow acne (uniform across all surfaces)
     float shadowStrength = 0.7f;  // Shadow darkness
     float exposure = 1.0f;  // PBR tone mapping exposure
+    float shadowSceneRadius = 200.0f;  // Orthographic projection half-extent for shadows
+
+#ifndef __EMSCRIPTEN__
+    std::unique_ptr<class GpuProfiler> gpuProfiler;
+#endif
 
     // RHI initialization methods (Phase 4)
     void createRHIDepthResources();
@@ -289,6 +339,11 @@ private:
     void createShadowRenderer();    // Phase 3.3: Shadow mapping
     void createIBL();               // Phase 1.2: IBL initialization
     void createCullingPipeline();   // Phase 2.2: GPU frustum culling
+#ifdef __EMSCRIPTEN__
+    void createHDRRenderTarget();   // HDR offscreen texture + LDR intermediate
+    void createTonemapPipeline();   // ACES tonemap post-process pass
+    void createFXAAPipeline();      // FXAA anti-aliasing pass
+#endif
     void performFrustumCulling(rhi::RHICommandEncoder* encoder, uint32_t frameIndex,
                                uint32_t objectCount, uint32_t indexCount);
     void performFrustumCullingAsync(uint32_t frameIndex, uint32_t objectCount, uint32_t indexCount);

@@ -28,6 +28,7 @@ Mini-Engine은 [vulkan-tutorial.com](https://vulkan-tutorial.com/)의 학습 코
 | **Stage 3** | WebGPU 백엔드 추가 | RHI 아키텍처의 실증 — 웹 배포 지원 |
 | **Stage 4** | GPU Instancing + 게임 로직 | 대량 오브젝트 렌더링 기반, 도메인 로직 분리 |
 | **Stage 5** | PBR, GPU-Driven, Profiling | 렌더링 품질과 대규모 씬 처리 능력 |
+| **Stage 6** | WASM 포스트프로세스 파이프라인 | WASM 렌더링 품질 — HDR, Tonemap, FXAA, 안정적 Resize |
 
 ---
 
@@ -497,6 +498,93 @@ RHI 아키텍처 위에 현대적인 렌더링 기법들을 순차적으로 구�
 
 ---
 
+## Stage 6: WASM 포스트프로세스 파이프라인
+
+`finance-city-engine` fork와의 비교 분석을 통해 도출된 WASM 전용 렌더링 품질 개선.
+
+### 배경
+
+Stage 5까지 WASM/WebGPU 빌드는 씬 지오메트리를 스왑체인에 직접 렌더링하고 있었다. 이는 네이티브(Vulkan) 빌드 대비 두 가지 품질 열위가 있었다:
+
+1. **HDR 부재**: 단순 LDR 렌더링 — 밝은 영역의 클리핑, 어두운 영역의 디테일 손실
+2. **Anti-Aliasing 부재**: 특히 건물 엣지에서 두드러지는 계단 현상(aliasing)
+
+또한 브라우저 뷰포트 크기 변경 시 스왑체인 재생성이 JS 이벤트 핸들러에서 직접 호출되어 Asyncify 코루틴과의 충돌로 불안정하게 동작했다.
+
+### Phase 14 — 멀티패스 포스트프로세스 파이프라인
+
+**렌더링 파이프라인 재설계 (WASM 전용)**:
+
+```
+[기존 WASM]
+  Geometry → Swapchain (LDR, aliasing)
+
+[개선 후 WASM]
+  Geometry → HDR Texture (RGBA16Float)
+           → Tonemap Pass (ACES + gamma → RGBA8Unorm LDR)
+           → FXAA Pass (anti-aliasing → Swapchain)
+```
+
+**HDR 렌더 타겟**:
+- `RGBA16Float` 포맷: 0.0~1.0 범위를 초과하는 밝기 정보 보존
+- Geometry pass가 HDR 텍스처에 렌더링
+- 스왑체인과 독립적으로 씬 해상도 유지
+
+**ACES Filmic Tonemap (`tonemap.wgsl`)**:
+- 알고리즘: `(x*(2.51x+0.03))/(x*(2.43x+0.59)+0.14)`
+- HDR → LDR RGBA8Unorm 변환 (bright area compression, dark area detail preservation)
+- WASM 빌드에서 명시적 gamma 2.2 적용 (Vulkan은 sRGB 스왑체인이 자동 처리)
+
+**FXAA 3.11 Anti-Aliasing (`fxaa.wgsl`)**:
+- Rec.601 luminance 기반 엣지 검출: `dot(color, vec3(0.299, 0.587, 0.114))`
+- 12-step 엣지 워크로 엣지 방향/길이 추정
+- 서브픽셀 블렌딩으로 계단 현상 완화
+- LDR 중간 타겟에서 스왑체인으로 출력
+
+**Fullscreen Triangle 기법**: 버텍스 버퍼 없이 3개 버텍스로 화면 전체를 덮음
+```wgsl
+var pos = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));
+```
+
+**바인드 그룹 구성**:
+- Tonemap: `set 0, binding 0` = HDR 텍스처, `binding 1` = 샘플러
+- FXAA: `set 0, binding 0` = LDR 텍스처, `binding 1` = 샘플러, `binding 2` = 해상도 uniform
+
+### Deferred Resize 메커니즘
+
+**문제**: `emscripten_set_resize_callback`이 JS 이벤트 핸들러에서 실행된다. Asyncify 코루틴 외부에서 `waitIdle()` + 스왑체인 재생성을 호출하면 deadlock/corruption 가능.
+
+**해결 패턴**:
+```cpp
+// 이벤트 핸들러 (안전)
+app->m_pendingResize = true;
+app->m_pendingWidth  = e->windowInnerWidth;
+app->m_pendingHeight = e->windowInnerHeight;
+
+// mainLoopFrame() 진입부 (Asyncify 코루틴 내 — 안전)
+if (m_pendingResize && m_pendingWidth > 0 && m_pendingHeight > 0) {
+    glfwSetWindowSize(window, m_pendingWidth, m_pendingHeight);
+    renderer->handleFramebufferResize(m_pendingWidth, m_pendingHeight);
+    camera->setAspectRatio(...);
+    m_pendingResize = false;
+}
+```
+
+`glfwSetWindowSize()` 먼저 호출 → GLFW 내부 상태와 캔버스 버퍼 크기 동기화 → 명시적 치수 전달 오버로드로 스왑체인 재생성 (GLFW 재쿼리 불필요, stale 데이터 방지).
+
+### Stage 6 성과
+
+| 지표 | Before (Stage 5) | After (Stage 6) |
+|------|-----------------|----------------|
+| WASM 색 정밀도 | LDR 직접 렌더 | RGBA16Float HDR 버퍼 |
+| Tonemapping | 없음 (클리핑) | ACES Filmic (전체 범위) |
+| Anti-Aliasing | 없음 | FXAA 3.11 (엣지 부드럽게) |
+| Resize 안정성 | JS 핸들러 직접 재생성 (불안전) | Asyncify 코루틴 내 안전 적용 |
+| 추가 드로우콜 | 0 | 2 (fullscreen tonemap + FXAA) |
+| 메모리 추가 | 0 | RGBA16Float + RGBA8Unorm 각 1개 |
+
+---
+
 ## 아키텍처 비교: Before vs After
 
 ### 시작점 (vulkan-tutorial.com)
@@ -622,9 +710,18 @@ vulkan-tutorial.com 학습
   │  Week 4: GPU Profiling + 100K Stress Test + 문서화           │
   └────────────────────────────────────────────────────────────┘
         │
+        ▼  "WASM 렌더링 품질을 네이티브 수준으로 끌어올리자"
+        │
+  ┌─ Stage 5: WASM 포스트프로세스 파이프라인 ─────────────────────┐
+  │  HDR Render Target (RGBA16Float) 도입                       │
+  │  ACES Filmic Tonemap Pass (HDR → LDR RGBA8Unorm)           │
+  │  FXAA 3.11 Anti-Aliasing Pass (LDR → Swapchain)            │
+  │  Deferred Resize (Asyncify-safe 브라우저 뷰포트 변경 처리)     │
+  └────────────────────────────────────────────────────────────┘
+        │
         ▼
    현재: PBR & GPU-Driven Rendering Engine
-         Vulkan 1.3 + WebGPU + Modern C++20
+         Vulkan 1.3 + WebGPU (HDR+Tonemap+FXAA) + Modern C++20
 ```
 
 ---

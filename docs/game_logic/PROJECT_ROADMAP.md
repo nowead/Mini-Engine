@@ -1,8 +1,8 @@
 # Project Roadmap: Stock/Crypto 3D Metaverse Platform
 
-**Document Version**: 3.5
-**Last Updated**: 2026-01-26
-**Project Status**: Phase 3 Complete (100%)
+**Document Version**: 3.6
+**Last Updated**: 2026-03-29
+**Project Status**: Phase 4 Complete (100%)
 **Target Platform**: Web-based 3D Visualization (WebGPU + WASM)
 
 **Quick Status**:
@@ -19,6 +19,8 @@
 - ✅ Phase 3.1: Particle System Complete (2026-01-21)
 - ✅ Phase 3.3: Advanced Rendering Complete (2026-01-21) - Skybox, Directional Lighting
 - ✅ **Phase 3.4: Shadow Mapping Complete** (2026-01-26) - Directional Light Shadow, PCF Soft Shadows
+- ✅ **Phase 4.1: WASM Post-Process Pipeline Complete** (2026-03-29) - HDR Render Target, ACES Tonemap, FXAA
+- ✅ **Phase 4.2: WASM Resize Stability Complete** (2026-03-29) - Deferred Resize (Asyncify-safe)
 
 ---
 
@@ -120,7 +122,8 @@ A web-based 3D metaverse platform that visualizes real-time stock and cryptocurr
 
 **Remaining Features**:
 
-- 🔲 Post-Processing (Bloom, etc.)
+- ✅ Post-Processing — ACES Tonemap + FXAA (WASM, 2026-03-29)
+- 🔲 Post-Processing — Bloom, DOF (future)
 - 🔲 WebSocket Integration (real-time market data)
 
 **Original Estimate**: 3-4 months (single full-time developer)
@@ -1180,6 +1183,7 @@ Week  | Phase                              | Status | Milestone
 | **M1.5: Game Logic** | Week 10 | ✅ | WorldManager, BuildingManager integrated |
 | **M2: Scene Management** | Week 16 | ✅ | Phase 2 COMPLETE (2026-01-19) |
 | **M3: Visual Effects** | Week 22 | ✅ | Phase 3 COMPLETE (2026-01-26) - Particles, Skybox, Lighting, Shadows |
+| **M3.5: WASM Rendering Quality** | 2026-03-29 | ✅ | Phase 4 COMPLETE - HDR Tonemap, FXAA, Deferred Resize |
 | **M4: Network Integration** | Week 26 | 🔲 | Real-time data connected |
 | **M5: MVP Release** | Week 30 | 🔲 | Production deployment |
 
