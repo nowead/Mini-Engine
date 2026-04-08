@@ -474,6 +474,158 @@ vk::Framebuffer VulkanRHISwapchain::getFramebuffer(uint32_t index) const {
     return VK_NULL_HANDLE;
 }
 
+#ifdef __linux__
+void VulkanRHISwapchain::createHDRRenderPass() {
+    if (*m_hdrRenderPass) return;
+
+    // Color: RGBA16Float, initialLayout=Undefined, finalLayout=ShaderReadOnlyOptimal
+    vk::AttachmentDescription colorAttachment;
+    colorAttachment.format         = vk::Format::eR16G16B16A16Sfloat;
+    colorAttachment.samples        = vk::SampleCountFlagBits::e1;
+    colorAttachment.loadOp         = vk::AttachmentLoadOp::eClear;
+    colorAttachment.storeOp        = vk::AttachmentStoreOp::eStore;
+    colorAttachment.stencilLoadOp  = vk::AttachmentLoadOp::eDontCare;
+    colorAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+    colorAttachment.initialLayout  = vk::ImageLayout::eUndefined;
+    colorAttachment.finalLayout    = vk::ImageLayout::eShaderReadOnlyOptimal;
+
+    // Depth: D32Sfloat
+    vk::AttachmentDescription depthAttachment;
+    depthAttachment.format         = vk::Format::eD32Sfloat;
+    depthAttachment.samples        = vk::SampleCountFlagBits::e1;
+    depthAttachment.loadOp         = vk::AttachmentLoadOp::eClear;
+    depthAttachment.storeOp        = vk::AttachmentStoreOp::eStore;  // Must preserve for SSAO
+    depthAttachment.stencilLoadOp  = vk::AttachmentLoadOp::eDontCare;
+    depthAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+    depthAttachment.initialLayout  = vk::ImageLayout::eUndefined;
+    depthAttachment.finalLayout    = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
+    vk::AttachmentReference colorRef;
+    colorRef.attachment = 0;
+    colorRef.layout     = vk::ImageLayout::eColorAttachmentOptimal;
+
+    vk::AttachmentReference depthRef;
+    depthRef.attachment = 1;
+    depthRef.layout     = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
+    vk::SubpassDescription subpass;
+    subpass.pipelineBindPoint       = vk::PipelineBindPoint::eGraphics;
+    subpass.colorAttachmentCount    = 1;
+    subpass.pColorAttachments       = &colorRef;
+    subpass.pDepthStencilAttachment = &depthRef;
+
+    // Geometry writes → shader reads in post-process
+    vk::SubpassDependency dep;
+    dep.srcSubpass    = VK_SUBPASS_EXTERNAL;
+    dep.dstSubpass    = 0;
+    dep.srcStageMask  = vk::PipelineStageFlagBits::eColorAttachmentOutput |
+                        vk::PipelineStageFlagBits::eEarlyFragmentTests;
+    dep.dstStageMask  = vk::PipelineStageFlagBits::eColorAttachmentOutput |
+                        vk::PipelineStageFlagBits::eEarlyFragmentTests;
+    dep.srcAccessMask = vk::AccessFlagBits::eNone;
+    dep.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite |
+                        vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+
+    std::array<vk::AttachmentDescription, 2> attachments = { colorAttachment, depthAttachment };
+
+    vk::RenderPassCreateInfo info;
+    info.attachmentCount = static_cast<uint32_t>(attachments.size());
+    info.pAttachments    = attachments.data();
+    info.subpassCount    = 1;
+    info.pSubpasses      = &subpass;
+    info.dependencyCount = 1;
+    info.pDependencies   = &dep;
+
+    m_hdrRenderPass = vk::raii::RenderPass(m_device->getVkDevice(), info);
+    std::cout << "[Swapchain] HDR render pass created" << std::endl;
+}
+
+void VulkanRHISwapchain::createHDRFramebuffer(vk::ImageView hdrColorView, vk::ImageView depthView) {
+    std::array<vk::ImageView, 2> attachments = { hdrColorView, depthView };
+
+    vk::FramebufferCreateInfo info;
+    info.renderPass      = *m_hdrRenderPass;
+    info.attachmentCount = static_cast<uint32_t>(attachments.size());
+    info.pAttachments    = attachments.data();
+    info.width           = m_extent.width;
+    info.height          = m_extent.height;
+    info.layers          = 1;
+
+    m_hdrFramebuffer = vk::raii::Framebuffer(m_device->getVkDevice(), info);
+    std::cout << "[Swapchain] HDR framebuffer created" << std::endl;
+}
+
+void VulkanRHISwapchain::createPostProcessRenderPass() {
+    if (*m_postProcessRenderPass) return;
+
+    // Color: swapchain format, no depth, finalLayout=PresentSrcKHR
+    vk::AttachmentDescription colorAttachment;
+    colorAttachment.format         = m_surfaceFormat.format;
+    colorAttachment.samples        = vk::SampleCountFlagBits::e1;
+    colorAttachment.loadOp         = vk::AttachmentLoadOp::eDontCare;
+    colorAttachment.storeOp        = vk::AttachmentStoreOp::eStore;
+    colorAttachment.stencilLoadOp  = vk::AttachmentLoadOp::eDontCare;
+    colorAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+    colorAttachment.initialLayout  = vk::ImageLayout::eUndefined;
+    colorAttachment.finalLayout    = vk::ImageLayout::ePresentSrcKHR;
+
+    vk::AttachmentReference colorRef;
+    colorRef.attachment = 0;
+    colorRef.layout     = vk::ImageLayout::eColorAttachmentOptimal;
+
+    vk::SubpassDescription subpass;
+    subpass.pipelineBindPoint    = vk::PipelineBindPoint::eGraphics;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments    = &colorRef;
+
+    vk::SubpassDependency dep;
+    dep.srcSubpass    = VK_SUBPASS_EXTERNAL;
+    dep.dstSubpass    = 0;
+    dep.srcStageMask  = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+    dep.dstStageMask  = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+    dep.srcAccessMask = vk::AccessFlagBits::eNone;
+    dep.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+
+    vk::RenderPassCreateInfo info;
+    info.attachmentCount = 1;
+    info.pAttachments    = &colorAttachment;
+    info.subpassCount    = 1;
+    info.pSubpasses      = &subpass;
+    info.dependencyCount = 1;
+    info.pDependencies   = &dep;
+
+    m_postProcessRenderPass = vk::raii::RenderPass(m_device->getVkDevice(), info);
+    std::cout << "[Swapchain] PostProcess render pass created" << std::endl;
+}
+
+void VulkanRHISwapchain::createPostProcessFramebuffers() {
+    m_postProcessFramebuffers.clear();
+
+    for (size_t i = 0; i < m_imageViews.size(); ++i) {
+        vk::ImageView swapView = m_imageViews[i]->getVkImageView();
+
+        vk::FramebufferCreateInfo info;
+        info.renderPass      = *m_postProcessRenderPass;
+        info.attachmentCount = 1;
+        info.pAttachments    = &swapView;
+        info.width           = m_extent.width;
+        info.height          = m_extent.height;
+        info.layers          = 1;
+
+        m_postProcessFramebuffers.emplace_back(m_device->getVkDevice(), info);
+    }
+    std::cout << "[Swapchain] Created " << m_postProcessFramebuffers.size()
+              << " post-process framebuffers" << std::endl;
+}
+
+vk::Framebuffer VulkanRHISwapchain::getPostProcessFramebuffer(uint32_t index) const {
+    if (index < m_postProcessFramebuffers.size()) {
+        return *m_postProcessFramebuffers[index];
+    }
+    return VK_NULL_HANDLE;
+}
+#endif  // __linux__
+
 void VulkanRHISwapchain::ensureRenderResourcesReady(rhi::RHITextureView* depthView) {
 #ifdef __linux__
     // Linux: Ensure traditional render pass and framebuffers are created

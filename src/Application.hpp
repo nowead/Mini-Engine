@@ -47,8 +47,8 @@ public:
 
 private:
     // Window configuration
-    static constexpr uint32_t WINDOW_WIDTH = 800;
-    static constexpr uint32_t WINDOW_HEIGHT = 600;
+    static constexpr uint32_t WINDOW_WIDTH = 1280;
+    static constexpr uint32_t WINDOW_HEIGHT = 720;
     static constexpr const char* WINDOW_TITLE = "Mini-Engine";
 
     // Validation layers

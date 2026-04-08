@@ -51,10 +51,8 @@ Renderer::Renderer(GLFWwindow* window,
     // Phase 1.2: Initialize IBL (must be before building pipeline for bind group layout)
     createIBL();
 
-#ifdef __EMSCRIPTEN__
-    // HDR render target must exist before building pipeline (color format differs from swapchain)
+    // HDR render target (all platforms — geometry renders here, post-process reads from here)
     createHDRRenderTarget();
-#endif
 
     // Always create building pipeline for game world rendering
     createBuildingPipeline();
@@ -90,6 +88,11 @@ Renderer::Renderer(GLFWwindow* window,
     // Post-process pipelines must be created after HDR render target (bind groups reference texture views)
     createTonemapPipeline();
     createFXAAPipeline();
+#else
+    // Vulkan: create compute resources first so postprocess bind group has all views
+    createBloomPipeline();   // creates bloomTextureView
+    createSSAOPipeline();    // creates ssaoBlurView
+    createPostProcessPipeline(); // bind group binds bloom + ssao (both now available)
 #endif
 
     // Phase 4.1: GPU Profiler
@@ -150,9 +153,9 @@ void Renderer::handleFramebufferResize(int width, int height) {
     rhiBridge->waitIdle();
     rhiBridge->createSwapchain(static_cast<uint32_t>(width), static_cast<uint32_t>(height), true);
     createRHIDepthResources();
+    createHDRRenderTarget();
 
 #ifdef __EMSCRIPTEN__
-    createHDRRenderTarget();
     if (tonemapBindGroupLayout && hdrColorView && hdrSampler) {
         rhi::BindGroupDesc bindGroupDesc;
         bindGroupDesc.layout = tonemapBindGroupLayout.get();
@@ -169,6 +172,8 @@ void Renderer::handleFramebufferResize(int width, int height) {
         bindGroupDesc.label = "FXAA Bind Group";
         fxaaBindGroup = rhiBridge->getDevice()->createBindGroup(bindGroupDesc);
     }
+#else
+    recreatePostProcessResources();
 #endif
 }
 
@@ -220,10 +225,9 @@ void Renderer::recreateSwapchain() {
     rhiBridge->createSwapchain(static_cast<uint32_t>(width), static_cast<uint32_t>(height), true);
     createRHIDepthResources();
     createRHIPipeline();  // Pipeline needs recreation with new render pass
+    createHDRRenderTarget();
 
 #ifdef __EMSCRIPTEN__
-    // Recreate HDR + LDR textures (size changed) and update post-process bind groups
-    createHDRRenderTarget();
     if (tonemapBindGroupLayout && hdrColorView && hdrSampler) {
         rhi::BindGroupDesc bindGroupDesc;
         bindGroupDesc.layout = tonemapBindGroupLayout.get();
@@ -240,6 +244,8 @@ void Renderer::recreateSwapchain() {
         bindGroupDesc.label = "FXAA Bind Group";
         fxaaBindGroup = rhiBridge->getDevice()->createBindGroup(bindGroupDesc);
     }
+#else
+    recreatePostProcessResources();
 #endif
 
     // Notify ImGui of resize
@@ -283,8 +289,8 @@ void Renderer::createRHIDepthResources() {
     rhi::TextureDesc depthDesc;
     depthDesc.size = rhi::Extent3D(rhiSwapchain->getWidth(), rhiSwapchain->getHeight(), 1);
     depthDesc.format = rhi::TextureFormat::Depth32Float;
-    depthDesc.usage = rhi::TextureUsage::DepthStencil;
-    depthDesc.transient = true;  // Phase 3.1: Depth buffer is frame-temporary, enable lazily allocated memory
+    depthDesc.usage = rhi::TextureUsage::DepthStencil | rhi::TextureUsage::Sampled;
+    depthDesc.transient = false;  // Must be readable by SSAO compute shader
     depthDesc.label = "RHI Depth Image";
 
     rhiDepthImage = rhiDevice->createTexture(depthDesc);
@@ -438,30 +444,23 @@ void Renderer::createRHIPipeline() {
     depthStencilState.format = rhi::TextureFormat::Depth32Float;
     pipelineDesc.depthStencil = &depthStencilState;
 
-    // Phase 7.5: Color target - use actual swapchain format to avoid validation errors
+    // Color target: RGBA16Float (geometry renders to HDR offscreen target on all platforms)
     rhi::ColorTargetState colorTarget;
     auto* swapchain = rhiBridge->getSwapchain();
-    if (swapchain) {
-        colorTarget.format = swapchain->getFormat();  // Match swapchain format (SRGB or UNORM)
-    } else {
-        colorTarget.format = rhi::TextureFormat::BGRA8UnormSrgb;  // Default to SRGB
-    }
+    colorTarget.format = rhi::TextureFormat::RGBA16Float;
     colorTarget.blend.blendEnabled = false;
     pipelineDesc.colorTargets.push_back(colorTarget);
 
     pipelineDesc.label = "RHI Main Pipeline";
 
-    // Phase 9: Ensure platform-specific render resources are ready (uses RHI abstraction)
-    // - On Linux: Creates traditional render pass and framebuffers
-    // - On macOS/Windows: No-op (uses dynamic rendering)
     if (swapchain) {
         swapchain->ensureRenderResourcesReady(rhiDepthImageView.get());
 
 #ifdef __linux__
-        // Linux still needs native render pass handle for pipeline creation
+        // Linux: use HDR render pass (RGBA16Float + depth), matching the geometry render pass
         auto* vulkanSwapchain = dynamic_cast<RHI::Vulkan::VulkanRHISwapchain*>(swapchain);
         if (vulkanSwapchain) {
-            VkRenderPass vkPass = static_cast<VkRenderPass>(vulkanSwapchain->getRenderPass());
+            VkRenderPass vkPass = static_cast<VkRenderPass>(vulkanSwapchain->getHDRRenderPass());
             pipelineDesc.nativeRenderPass = reinterpret_cast<void*>(vkPass);
         }
 #endif
@@ -782,20 +781,10 @@ void Renderer::createBuildingPipeline() {
     depthStencilState.format = rhi::TextureFormat::Depth32Float;
     pipelineDesc.depthStencil = &depthStencilState;
 
-    // Color target format:
-    //   WebGPU: RGBA16Float (geometry renders to HDR offscreen target)
-    //   Vulkan: swapchain format (geometry renders directly to swapchain)
+    // Color target format: RGBA16Float (geometry renders to HDR offscreen target on all platforms)
     auto* swapchain = rhiBridge->getSwapchain();
     rhi::ColorTargetState colorTarget;
-#ifdef __EMSCRIPTEN__
-    colorTarget.format = rhi::TextureFormat::RGBA16Float;
-#else
-    if (swapchain) {
-        colorTarget.format = swapchain->getFormat();
-    } else {
-        colorTarget.format = rhi::TextureFormat::BGRA8UnormSrgb;
-    }
-#endif
+    colorTarget.format         = rhi::TextureFormat::RGBA16Float;
     colorTarget.blend.blendEnabled = false;
     pipelineDesc.colorTargets.push_back(colorTarget);
 
@@ -806,10 +795,10 @@ void Renderer::createBuildingPipeline() {
         swapchain->ensureRenderResourcesReady(rhiDepthImageView.get());
 
 #ifdef __linux__
-        // Linux needs native render pass handle for pipeline creation
+        // Linux: use the HDR render pass (RGBA16Float + depth)
         auto* vulkanSwapchain = dynamic_cast<RHI::Vulkan::VulkanRHISwapchain*>(swapchain);
         if (vulkanSwapchain) {
-            VkRenderPass vkPass = static_cast<VkRenderPass>(vulkanSwapchain->getRenderPass());
+            VkRenderPass vkPass = static_cast<VkRenderPass>(vulkanSwapchain->getHDRRenderPass());
             pipelineDesc.nativeRenderPass = reinterpret_cast<void*>(vkPass);
         }
 #endif
@@ -846,20 +835,17 @@ void Renderer::createParticleRenderer() {
     particleRenderer = std::make_unique<effects::ParticleRenderer>(rhiDevice, rhiQueue);
 
     // Initialize with color format and depth format
-    // WASM: renders into HDR RGBA16Float offscreen target; native: renders to swapchain
-#ifdef __EMSCRIPTEN__
+    // All platforms: renders into HDR RGBA16Float offscreen target
     rhi::TextureFormat colorFormat = rhi::TextureFormat::RGBA16Float;
-#else
-    rhi::TextureFormat colorFormat = swapchain->getFormat();
-#endif
     rhi::TextureFormat depthFormat = rhi::TextureFormat::Depth32Float;
 
-    // Get native render pass for Linux
+    // Get native render pass for Linux (use HDR render pass)
     void* nativeRenderPass = nullptr;
 #ifdef __linux__
     auto* vulkanSwapchain = dynamic_cast<RHI::Vulkan::VulkanRHISwapchain*>(swapchain);
     if (vulkanSwapchain) {
-        nativeRenderPass = vulkanSwapchain->getRenderPass();
+        nativeRenderPass = reinterpret_cast<void*>(
+            static_cast<VkRenderPass>(vulkanSwapchain->getHDRRenderPass()));
     }
 #endif
 
@@ -891,21 +877,17 @@ void Renderer::createSkyboxRenderer() {
     // Create skybox renderer
     skyboxRenderer = std::make_unique<rendering::SkyboxRenderer>(rhiDevice, rhiQueue);
 
-    // Initialize with color format and depth format
-    // WASM: renders into HDR RGBA16Float offscreen target; native: renders to swapchain
-#ifdef __EMSCRIPTEN__
+    // All platforms: renders into HDR RGBA16Float offscreen target
     rhi::TextureFormat colorFormat = rhi::TextureFormat::RGBA16Float;
-#else
-    rhi::TextureFormat colorFormat = swapchain->getFormat();
-#endif
     rhi::TextureFormat depthFormat = rhi::TextureFormat::Depth32Float;
 
-    // Get native render pass for Linux
+    // Get native render pass for Linux (use HDR render pass)
     void* nativeRenderPass = nullptr;
 #ifdef __linux__
     auto* vulkanSwapchain = dynamic_cast<RHI::Vulkan::VulkanRHISwapchain*>(swapchain);
     if (vulkanSwapchain) {
-        nativeRenderPass = vulkanSwapchain->getRenderPass();
+        nativeRenderPass = reinterpret_cast<void*>(
+            static_cast<VkRenderPass>(vulkanSwapchain->getHDRRenderPass()));
     }
 #endif
 
@@ -1249,9 +1231,8 @@ void Renderer::extractFrustumPlanes(const glm::mat4& vp, glm::vec4 planes[6]) {
     }
 }
 
-#ifdef __EMSCRIPTEN__
 // ============================================================================
-// HDR Render Target Creation (WebGPU only)
+// HDR Render Target Creation (all platforms)
 // ============================================================================
 
 void Renderer::createHDRRenderTarget() {
@@ -1296,6 +1277,7 @@ void Renderer::createHDRRenderTarget() {
     samplerDesc.label = "Post-process Sampler";
     hdrSampler = rhiDevice->createSampler(samplerDesc);
 
+#ifdef __EMSCRIPTEN__
     // Create RGBA8Unorm LDR intermediate texture (tonemap writes here; FXAA reads from here)
     rhi::TextureDesc ldrDesc;
     ldrDesc.size = rhi::Extent3D(width, height, 1);
@@ -1312,11 +1294,29 @@ void Renderer::createHDRRenderTarget() {
     } else {
         LOG_ERROR("Renderer") << "Failed to create LDR intermediate texture";
     }
+#else
+    // Vulkan: create HDR + post-process render passes and framebuffers on Linux
+#ifdef __linux__
+    auto* vulkanSwapchain = dynamic_cast<RHI::Vulkan::VulkanRHISwapchain*>(swapchain);
+    if (vulkanSwapchain && hdrColorView && rhiDepthImageView) {
+        auto* hdrVkView   = dynamic_cast<RHI::Vulkan::VulkanRHITextureView*>(hdrColorView.get());
+        auto* depthVkView = dynamic_cast<RHI::Vulkan::VulkanRHITextureView*>(rhiDepthImageView.get());
+        if (hdrVkView && depthVkView) {
+            vulkanSwapchain->createHDRRenderPass();
+            vulkanSwapchain->createHDRFramebuffer(hdrVkView->getVkImageView(),
+                                                  depthVkView->getVkImageView());
+            vulkanSwapchain->createPostProcessRenderPass();
+            vulkanSwapchain->createPostProcessFramebuffers();
+        }
+    }
+#endif
+#endif
 }
 
 // ============================================================================
 // Tonemap Pipeline Creation (WebGPU only)
 // ============================================================================
+#ifdef __EMSCRIPTEN__
 
 void Renderer::createTonemapPipeline() {
     if (!rhiBridge || !rhiBridge->isReady() || !hdrColorView || !hdrSampler) {
@@ -1511,6 +1511,500 @@ void Renderer::createFXAAPipeline() {
     }
 }
 #endif  // __EMSCRIPTEN__
+
+// ============================================================================
+// Vulkan Post-Process Pipeline (combined Tonemap + FXAA)
+// ============================================================================
+#ifndef __EMSCRIPTEN__
+
+void Renderer::createPostProcessPipeline() {
+    if (!rhiBridge || !rhiBridge->isReady() || !hdrColorView || !hdrSampler) {
+        LOG_ERROR("Renderer") << "createPostProcessPipeline: prerequisites not ready";
+        return;
+    }
+
+    auto* rhiDevice = rhiBridge->getDevice();
+    auto* swapchain = rhiBridge->getSwapchain();
+
+    // Load SPIR-V shaders (fullscreen vertex + combined tonemap+FXAA fragment)
+    postprocessVertexShader = rhiBridge->createShaderFromFile(
+        "shaders/tonemap.vert.spv", rhi::ShaderStage::Vertex, "main");
+    postprocessFragmentShader = rhiBridge->createShaderFromFile(
+        "shaders/postprocess.frag.spv", rhi::ShaderStage::Fragment, "main");
+
+    if (!postprocessVertexShader || !postprocessFragmentShader) {
+        LOG_ERROR("Renderer") << "Failed to load postprocess shaders";
+        return;
+    }
+
+    // Bind group layout: 0=HDR, 1=bloom, 2=sampler, 3=SSAO
+    rhi::BindGroupLayoutDesc layoutDesc;
+    layoutDesc.label = "PostProcess Bind Group Layout";
+
+    rhi::BindGroupLayoutEntry hdrEntry;
+    hdrEntry.binding    = 0;
+    hdrEntry.visibility = rhi::ShaderStage::Fragment;
+    hdrEntry.type       = rhi::BindingType::SampledTexture;
+    layoutDesc.entries.push_back(hdrEntry);
+
+    rhi::BindGroupLayoutEntry bloomEntry;
+    bloomEntry.binding    = 1;
+    bloomEntry.visibility = rhi::ShaderStage::Fragment;
+    bloomEntry.type       = rhi::BindingType::SampledTexture;
+    layoutDesc.entries.push_back(bloomEntry);
+
+    rhi::BindGroupLayoutEntry samplerEntry;
+    samplerEntry.binding    = 2;
+    samplerEntry.visibility = rhi::ShaderStage::Fragment;
+    samplerEntry.type       = rhi::BindingType::Sampler;
+    layoutDesc.entries.push_back(samplerEntry);
+
+    rhi::BindGroupLayoutEntry ssaoEntry;
+    ssaoEntry.binding    = 3;
+    ssaoEntry.visibility = rhi::ShaderStage::Fragment;
+    ssaoEntry.type       = rhi::BindingType::SampledTexture;
+    layoutDesc.entries.push_back(ssaoEntry);
+
+    postprocessBindGroupLayout = rhiDevice->createBindGroupLayout(layoutDesc);
+    if (!postprocessBindGroupLayout) {
+        LOG_ERROR("Renderer") << "Failed to create postprocess bind group layout";
+        return;
+    }
+
+    // Build bind group (bloom/ssao may be null on first call — recreated in recreatePostProcessResources)
+    auto buildPostProcessBindGroup = [&]() {
+        rhi::BindGroupDesc bgDesc;
+        bgDesc.layout = postprocessBindGroupLayout.get();
+        bgDesc.label  = "PostProcess Bind Group";
+        bgDesc.entries.push_back(rhi::BindGroupEntry::TextureView(0, hdrColorView.get()));
+        // Use bloom texture if available, otherwise reuse HDR (bloom contribution will be 0)
+        auto* bloomView = bloomTextureView ? bloomTextureView.get() : hdrColorView.get();
+        bgDesc.entries.push_back(rhi::BindGroupEntry::TextureView(1, bloomView));
+        bgDesc.entries.push_back(rhi::BindGroupEntry::Sampler(2, hdrSampler.get()));
+        // SSAO texture — fall back to HDR (white = no occlusion) if not ready
+        auto* ssaoView = ssaoBlurView ? ssaoBlurView.get() : hdrColorView.get();
+        bgDesc.entries.push_back(rhi::BindGroupEntry::TextureView(3, ssaoView));
+        postprocessBindGroup = rhiDevice->createBindGroup(bgDesc);
+    };
+    buildPostProcessBindGroup();
+
+    // Pipeline layout (push constants: texelSize + bloomStrength + exposure + aoStrength)
+    rhi::PipelineLayoutDesc plDesc;
+    plDesc.bindGroupLayouts.push_back(postprocessBindGroupLayout.get());
+    rhi::PushConstantRange pcRange;
+    pcRange.stageFlags = rhi::ShaderStage::Fragment;
+    pcRange.offset     = 0;
+    pcRange.size       = sizeof(float) * 5;  // vec2 texelSize + bloomStrength + exposure + aoStrength
+    plDesc.pushConstantRanges.push_back(pcRange);
+    postprocessPipelineLayout = rhiBridge->createPipelineLayout(plDesc);
+
+    if (!postprocessPipelineLayout) {
+        LOG_ERROR("Renderer") << "Failed to create postprocess pipeline layout";
+        return;
+    }
+
+    // Render pipeline
+    rhi::RenderPipelineDesc pipelineDesc;
+    pipelineDesc.vertexShader   = postprocessVertexShader.get();
+    pipelineDesc.fragmentShader = postprocessFragmentShader.get();
+    pipelineDesc.layout         = postprocessPipelineLayout.get();
+    pipelineDesc.primitive.topology = rhi::PrimitiveTopology::TriangleList;
+    pipelineDesc.primitive.cullMode = rhi::CullMode::None;
+    pipelineDesc.primitive.frontFace = rhi::FrontFace::Clockwise;
+    pipelineDesc.label = "PostProcess Pipeline";
+
+    rhi::ColorTargetState colorTarget;
+    colorTarget.format         = swapchain ? swapchain->getFormat() : rhi::TextureFormat::BGRA8Unorm;
+    colorTarget.blend.blendEnabled = false;
+    pipelineDesc.colorTargets.push_back(colorTarget);
+
+#ifdef __linux__
+    auto* vulkanSwapchain = dynamic_cast<RHI::Vulkan::VulkanRHISwapchain*>(swapchain);
+    if (vulkanSwapchain) {
+        VkRenderPass vkPass = static_cast<VkRenderPass>(vulkanSwapchain->getPostProcessRenderPass());
+        pipelineDesc.nativeRenderPass = reinterpret_cast<void*>(vkPass);
+    }
+#endif
+
+    postprocessPipeline = rhiBridge->createRenderPipeline(pipelineDesc);
+    if (postprocessPipeline) {
+        LOG_INFO("Renderer") << "Post-process pipeline (Tonemap+FXAA) created successfully";
+    } else {
+        LOG_ERROR("Renderer") << "Failed to create post-process pipeline";
+    }
+}
+
+// ============================================================================
+// Bloom Compute Pipeline
+// ============================================================================
+
+void Renderer::createBloomPipeline() {
+    if (!rhiBridge || !rhiBridge->isReady() || !hdrColorView || !hdrSampler) return;
+
+    auto* rhiDevice = rhiBridge->getDevice();
+    auto* swapchain = rhiBridge->getSwapchain();
+    if (!swapchain) return;
+
+    uint32_t bloomW = std::max(1u, swapchain->getWidth()  / 2);
+    uint32_t bloomH = std::max(1u, swapchain->getHeight() / 2);
+
+    // Create half-resolution bloom textures (storage + sampled)
+    auto makeBloomTex = [&](const char* label) {
+        rhi::TextureDesc desc;
+        desc.size   = rhi::Extent3D(bloomW, bloomH, 1);
+        desc.format = rhi::TextureFormat::RGBA16Float;
+        desc.usage  = rhi::TextureUsage::Storage | rhi::TextureUsage::Sampled;
+        desc.label  = label;
+        return rhiDevice->createTexture(desc);
+    };
+
+    bloomTexture     = makeBloomTex("Bloom Texture");
+    bloomPingTexture = makeBloomTex("Bloom Ping Texture");
+
+    if (!bloomTexture || !bloomPingTexture) {
+        LOG_ERROR("Renderer") << "Failed to create bloom textures";
+        return;
+    }
+
+    rhi::TextureViewDesc vd;
+    vd.format    = rhi::TextureFormat::RGBA16Float;
+    vd.dimension = rhi::TextureViewDimension::View2D;
+    bloomTextureView = bloomTexture->createView(vd);
+    bloomPingView    = bloomPingTexture->createView(vd);
+
+    rhi::SamplerDesc sd;
+    sd.magFilter      = rhi::FilterMode::Linear;
+    sd.minFilter      = rhi::FilterMode::Linear;
+    sd.addressModeU   = rhi::AddressMode::ClampToEdge;
+    sd.addressModeV   = rhi::AddressMode::ClampToEdge;
+    sd.label          = "Bloom Sampler";
+    bloomSampler = rhiDevice->createSampler(sd);
+
+    // ---- Threshold pipeline ----
+    bloomThresholdShader = rhiBridge->createShaderFromFile(
+        "shaders/bloom_threshold.comp.spv", rhi::ShaderStage::Compute, "main");
+    if (!bloomThresholdShader) {
+        LOG_ERROR("Renderer") << "Failed to load bloom_threshold shader";
+        return;
+    }
+
+    rhi::BindGroupLayoutDesc tLayoutDesc;
+    tLayoutDesc.label = "Bloom Threshold Layout";
+
+    auto addEntry = [&](rhi::BindGroupLayoutDesc& desc, uint32_t binding,
+                        rhi::BindingType type, rhi::ShaderStage stage) {
+        rhi::BindGroupLayoutEntry e;
+        e.binding    = binding;
+        e.visibility = stage;
+        e.type       = type;
+        desc.entries.push_back(e);
+    };
+
+    addEntry(tLayoutDesc, 0, rhi::BindingType::SampledTexture, rhi::ShaderStage::Compute); // hdrInput
+    addEntry(tLayoutDesc, 1, rhi::BindingType::Sampler,        rhi::ShaderStage::Compute); // linearSampler
+    addEntry(tLayoutDesc, 2, rhi::BindingType::StorageTexture, rhi::ShaderStage::Compute); // bloomOutput
+
+    bloomThresholdLayout = rhiDevice->createBindGroupLayout(tLayoutDesc);
+
+    rhi::BindGroupDesc tBgDesc;
+    tBgDesc.layout = bloomThresholdLayout.get();
+    tBgDesc.label  = "Bloom Threshold Bind Group";
+    tBgDesc.entries.push_back(rhi::BindGroupEntry::TextureView(0, hdrColorView.get()));
+    tBgDesc.entries.push_back(rhi::BindGroupEntry::Sampler(1, bloomSampler.get()));
+    tBgDesc.entries.push_back(rhi::BindGroupEntry::TextureView(2, bloomTextureView.get()));
+    bloomThresholdBindGroup = rhiDevice->createBindGroup(tBgDesc);
+
+    rhi::PipelineLayoutDesc tPlDesc;
+    tPlDesc.bindGroupLayouts.push_back(bloomThresholdLayout.get());
+    rhi::PushConstantRange tPc;
+    tPc.stageFlags = rhi::ShaderStage::Compute;
+    tPc.offset     = 0;
+    tPc.size       = sizeof(float) * 4;  // invInputSize (vec2) + threshold + knee
+    tPlDesc.pushConstantRanges.push_back(tPc);
+    bloomThresholdPipelineLayout = rhiBridge->createPipelineLayout(tPlDesc);
+
+    rhi::ComputePipelineDesc tCpDesc;
+    tCpDesc.computeShader = bloomThresholdShader.get();
+    tCpDesc.layout        = bloomThresholdPipelineLayout.get();
+    tCpDesc.label         = "Bloom Threshold Pipeline";
+    bloomThresholdPipeline = rhiDevice->createComputePipeline(tCpDesc);
+
+    // ---- Blur pipeline ----
+    bloomBlurShader = rhiBridge->createShaderFromFile(
+        "shaders/bloom_blur.comp.spv", rhi::ShaderStage::Compute, "main");
+    if (!bloomBlurShader) {
+        LOG_ERROR("Renderer") << "Failed to load bloom_blur shader";
+        return;
+    }
+
+    rhi::BindGroupLayoutDesc bLayoutDesc;
+    bLayoutDesc.label = "Bloom Blur Layout";
+    addEntry(bLayoutDesc, 0, rhi::BindingType::SampledTexture, rhi::ShaderStage::Compute); // bloomInput
+    addEntry(bLayoutDesc, 1, rhi::BindingType::Sampler,        rhi::ShaderStage::Compute); // linearSampler
+    addEntry(bLayoutDesc, 2, rhi::BindingType::StorageTexture, rhi::ShaderStage::Compute); // bloomOutput
+
+    bloomBlurLayout = rhiDevice->createBindGroupLayout(bLayoutDesc);
+
+    // ping→pong bind group (blur iteration 0, 2)
+    {
+        rhi::BindGroupDesc bd;
+        bd.layout = bloomBlurLayout.get();
+        bd.label  = "Bloom Blur BG ping→pong";
+        bd.entries.push_back(rhi::BindGroupEntry::TextureView(0, bloomTextureView.get()));
+        bd.entries.push_back(rhi::BindGroupEntry::Sampler(1, bloomSampler.get()));
+        bd.entries.push_back(rhi::BindGroupEntry::TextureView(2, bloomPingView.get()));
+        bloomBlurBindGroups[0] = rhiDevice->createBindGroup(bd);
+    }
+    // pong→ping bind group (blur iteration 1)
+    {
+        rhi::BindGroupDesc bd;
+        bd.layout = bloomBlurLayout.get();
+        bd.label  = "Bloom Blur BG pong→ping";
+        bd.entries.push_back(rhi::BindGroupEntry::TextureView(0, bloomPingView.get()));
+        bd.entries.push_back(rhi::BindGroupEntry::Sampler(1, bloomSampler.get()));
+        bd.entries.push_back(rhi::BindGroupEntry::TextureView(2, bloomTextureView.get()));
+        bloomBlurBindGroups[1] = rhiDevice->createBindGroup(bd);
+    }
+
+    rhi::PipelineLayoutDesc bPlDesc;
+    bPlDesc.bindGroupLayouts.push_back(bloomBlurLayout.get());
+    rhi::PushConstantRange bPc;
+    bPc.stageFlags = rhi::ShaderStage::Compute;
+    bPc.offset     = 0;
+    bPc.size       = sizeof(float) * 4;  // invInputSize (vec2) + iteration (int) + pad
+    bPlDesc.pushConstantRanges.push_back(bPc);
+    bloomBlurPipelineLayout = rhiBridge->createPipelineLayout(bPlDesc);
+
+    rhi::ComputePipelineDesc bCpDesc;
+    bCpDesc.computeShader = bloomBlurShader.get();
+    bCpDesc.layout        = bloomBlurPipelineLayout.get();
+    bCpDesc.label         = "Bloom Blur Pipeline";
+    bloomBlurPipeline = rhiDevice->createComputePipeline(bCpDesc);
+
+    if (bloomThresholdPipeline && bloomBlurPipeline) {
+        LOG_INFO("Renderer") << "Bloom pipeline created (" << bloomW << "x" << bloomH << ")";
+    } else {
+        LOG_ERROR("Renderer") << "Failed to create bloom pipelines";
+    }
+}
+
+// ============================================================================
+// SSAO Compute Pipelines (screen-space ambient occlusion + bilateral blur)
+// ============================================================================
+
+void Renderer::createSSAOPipeline() {
+    if (!rhiBridge || !rhiBridge->isReady() || !rhiDepthImageView) return;
+
+    auto* rhiDevice = rhiBridge->getDevice();
+    auto* swapchain = rhiBridge->getSwapchain();
+    if (!swapchain) return;
+
+    uint32_t W = swapchain->getWidth();
+    uint32_t H = swapchain->getHeight();
+    // Run SSAO at half resolution (4× fewer pixels = 4× faster on lavapipe)
+    // Bilinear upsampling in postprocess.frag is transparent since sampler is Linear
+    uint32_t ssaoW = std::max(1u, W / 2);
+    uint32_t ssaoH = std::max(1u, H / 2);
+
+    // Create half-resolution R8Unorm SSAO textures (raw + blurred)
+    auto makeSSAOTex = [&](const char* label) {
+        rhi::TextureDesc desc;
+        desc.label  = label;
+        desc.format = rhi::TextureFormat::R8Unorm;
+        desc.size   = rhi::Extent3D(ssaoW, ssaoH, 1);
+        desc.usage  = rhi::TextureUsage::Storage | rhi::TextureUsage::Sampled;
+        return rhiDevice->createTexture(desc);
+    };
+
+    ssaoTexture     = makeSSAOTex("SSAO Texture");
+    ssaoBlurTexture = makeSSAOTex("SSAO Blur Texture");
+
+    if (!ssaoTexture || !ssaoBlurTexture) {
+        LOG_ERROR("Renderer") << "Failed to create SSAO textures";
+        return;
+    }
+
+    rhi::TextureViewDesc vd;
+    vd.format    = rhi::TextureFormat::R8Unorm;
+    vd.dimension = rhi::TextureViewDimension::View2D;
+    ssaoTextureView = ssaoTexture->createView(vd);
+    ssaoBlurView    = ssaoBlurTexture->createView(vd);
+
+    // Sampler for reading SSAO textures — use Nearest: R8Unorm on lavapipe
+    // does not support VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT
+    rhi::SamplerDesc sd;
+    sd.minFilter = sd.magFilter = rhi::FilterMode::Nearest;
+    sd.addressModeU = sd.addressModeV = sd.addressModeW = rhi::AddressMode::ClampToEdge;
+    ssaoSampler = rhiDevice->createSampler(sd);
+
+    // ---- SSAO compute pipeline ----
+    ssaoShader = rhiBridge->createShaderFromFile("shaders/ssao.comp.spv", rhi::ShaderStage::Compute, "main");
+    if (!ssaoShader) { LOG_ERROR("Renderer") << "Failed to load ssao.comp.spv"; return; }
+
+    // Layout: binding 0 = depth (sampled), binding 1 = AO output (storage)
+    rhi::BindGroupLayoutDesc ssaoLayoutDesc;
+    ssaoLayoutDesc.label = "SSAO Bind Group Layout";
+    {
+        rhi::BindGroupLayoutEntry e;
+        e.binding = 0; e.visibility = rhi::ShaderStage::Compute;
+        e.type = rhi::BindingType::SampledTexture;
+        ssaoLayoutDesc.entries.push_back(e);
+    }
+    {
+        rhi::BindGroupLayoutEntry e;
+        e.binding = 1; e.visibility = rhi::ShaderStage::Compute;
+        e.type = rhi::BindingType::StorageTexture;
+        ssaoLayoutDesc.entries.push_back(e);
+    }
+    {
+        rhi::BindGroupLayoutEntry e;
+        e.binding = 2; e.visibility = rhi::ShaderStage::Compute;
+        e.type = rhi::BindingType::Sampler;
+        ssaoLayoutDesc.entries.push_back(e);
+    }
+    ssaoLayout = rhiDevice->createBindGroupLayout(ssaoLayoutDesc);
+
+    {
+        rhi::BindGroupDesc bd;
+        bd.layout = ssaoLayout.get();
+        bd.label  = "SSAO Bind Group";
+        bd.entries.push_back(rhi::BindGroupEntry::TextureView(0, rhiDepthImageView.get()));
+        bd.entries.push_back(rhi::BindGroupEntry::TextureView(1, ssaoTextureView.get()));
+        bd.entries.push_back(rhi::BindGroupEntry::Sampler(2, ssaoSampler.get()));
+        ssaoBindGroup = rhiDevice->createBindGroup(bd);
+    }
+
+    rhi::PipelineLayoutDesc ssaoPLDesc;
+    ssaoPLDesc.bindGroupLayouts.push_back(ssaoLayout.get());
+    {
+        rhi::PushConstantRange pc;
+        pc.stageFlags = rhi::ShaderStage::Compute;
+        pc.offset = 0;
+        // mat4(64) + radius+bias+near+far+invW+invH(24) + pad(8) = 96
+        pc.size = 96;
+        ssaoPLDesc.pushConstantRanges.push_back(pc);
+    }
+    ssaoPipelineLayout = rhiBridge->createPipelineLayout(ssaoPLDesc);
+
+    {
+        rhi::ComputePipelineDesc cpDesc;
+        cpDesc.computeShader = ssaoShader.get();
+        cpDesc.layout        = ssaoPipelineLayout.get();
+        ssaoPipeline = rhiDevice->createComputePipeline(cpDesc);
+    }
+
+    // ---- SSAO blur compute pipeline ----
+    ssaoBlurShader = rhiBridge->createShaderFromFile("shaders/ssao_blur.comp.spv", rhi::ShaderStage::Compute, "main");
+    if (!ssaoBlurShader) { LOG_ERROR("Renderer") << "Failed to load ssao_blur.comp.spv"; return; }
+
+    // Layout: binding 0 = raw SSAO (sampled), binding 1 = depth (sampled), binding 2 = blurred (storage)
+    rhi::BindGroupLayoutDesc ssaoBlurLayoutDesc;
+    ssaoBlurLayoutDesc.label = "SSAO Blur Bind Group Layout";
+    {
+        rhi::BindGroupLayoutEntry e;
+        e.binding = 0; e.visibility = rhi::ShaderStage::Compute;
+        e.type = rhi::BindingType::SampledTexture;
+        ssaoBlurLayoutDesc.entries.push_back(e);
+    }
+    {
+        rhi::BindGroupLayoutEntry e;
+        e.binding = 1; e.visibility = rhi::ShaderStage::Compute;
+        e.type = rhi::BindingType::SampledTexture;
+        ssaoBlurLayoutDesc.entries.push_back(e);
+    }
+    {
+        rhi::BindGroupLayoutEntry e;
+        e.binding = 2; e.visibility = rhi::ShaderStage::Compute;
+        e.type = rhi::BindingType::StorageTexture;
+        ssaoBlurLayoutDesc.entries.push_back(e);
+    }
+    {
+        rhi::BindGroupLayoutEntry e;
+        e.binding = 3; e.visibility = rhi::ShaderStage::Compute;
+        e.type = rhi::BindingType::Sampler;
+        ssaoBlurLayoutDesc.entries.push_back(e);
+    }
+    ssaoBlurLayout = rhiDevice->createBindGroupLayout(ssaoBlurLayoutDesc);
+
+    {
+        rhi::BindGroupDesc bd;
+        bd.layout = ssaoBlurLayout.get();
+        bd.label  = "SSAO Blur Bind Group";
+        bd.entries.push_back(rhi::BindGroupEntry::TextureView(0, ssaoTextureView.get()));
+        bd.entries.push_back(rhi::BindGroupEntry::TextureView(1, rhiDepthImageView.get()));
+        bd.entries.push_back(rhi::BindGroupEntry::TextureView(2, ssaoBlurView.get()));
+        bd.entries.push_back(rhi::BindGroupEntry::Sampler(3, ssaoSampler.get()));
+        ssaoBlurBindGroup = rhiDevice->createBindGroup(bd);
+    }
+
+    rhi::PipelineLayoutDesc blurPLDesc;
+    blurPLDesc.bindGroupLayouts.push_back(ssaoBlurLayout.get());
+    {
+        rhi::PushConstantRange pc;
+        pc.stageFlags = rhi::ShaderStage::Compute;
+        pc.offset = 0;
+        pc.size = 24;  // invW+invH+near+far+depthThreshold+pad
+        blurPLDesc.pushConstantRanges.push_back(pc);
+    }
+    ssaoBlurPipelineLayout = rhiBridge->createPipelineLayout(blurPLDesc);
+
+    {
+        rhi::ComputePipelineDesc cpDesc;
+        cpDesc.computeShader = ssaoBlurShader.get();
+        cpDesc.layout        = ssaoBlurPipelineLayout.get();
+        ssaoBlurPipeline = rhiDevice->createComputePipeline(cpDesc);
+    }
+
+    if (ssaoPipeline && ssaoBlurPipeline) {
+        LOG_INFO("Renderer") << "SSAO pipeline created (" << ssaoW << "x" << ssaoH << ")";
+    } else {
+        LOG_ERROR("Renderer") << "Failed to create SSAO pipelines";
+    }
+}
+
+void Renderer::recreatePostProcessResources() {
+    auto* swapchain = rhiBridge->getSwapchain();
+    if (!swapchain || !hdrColorView) return;
+
+    auto* rhiDevice = rhiBridge->getDevice();
+
+#ifdef __linux__
+    auto* vulkanSwapchain = dynamic_cast<RHI::Vulkan::VulkanRHISwapchain*>(swapchain);
+    if (vulkanSwapchain && rhiDepthImageView) {
+        auto* hdrVkView   = dynamic_cast<RHI::Vulkan::VulkanRHITextureView*>(hdrColorView.get());
+        auto* depthVkView = dynamic_cast<RHI::Vulkan::VulkanRHITextureView*>(rhiDepthImageView.get());
+        if (hdrVkView && depthVkView) {
+            vulkanSwapchain->createHDRRenderPass();
+            vulkanSwapchain->createHDRFramebuffer(hdrVkView->getVkImageView(),
+                                                  depthVkView->getVkImageView());
+            vulkanSwapchain->createPostProcessRenderPass();
+            vulkanSwapchain->createPostProcessFramebuffers();
+        }
+    }
+#endif
+
+    // Recreate bloom textures at new size
+    createBloomPipeline();
+
+    // Recreate SSAO textures at new size
+    createSSAOPipeline();
+
+    // Rebuild post-process bind group with updated bloom + SSAO texture views
+    if (postprocessBindGroupLayout && hdrColorView && hdrSampler) {
+        rhi::BindGroupDesc bgDesc;
+        bgDesc.layout = postprocessBindGroupLayout.get();
+        bgDesc.label  = "PostProcess Bind Group";
+        bgDesc.entries.push_back(rhi::BindGroupEntry::TextureView(0, hdrColorView.get()));
+        auto* bloomView = bloomTextureView ? bloomTextureView.get() : hdrColorView.get();
+        bgDesc.entries.push_back(rhi::BindGroupEntry::TextureView(1, bloomView));
+        bgDesc.entries.push_back(rhi::BindGroupEntry::Sampler(2, hdrSampler.get()));
+        auto* ssaoView = ssaoBlurView ? ssaoBlurView.get() : hdrColorView.get();
+        bgDesc.entries.push_back(rhi::BindGroupEntry::TextureView(3, ssaoView));
+        postprocessBindGroup = rhiDevice->createBindGroup(bgDesc);
+    }
+}
+
+#endif  // !__EMSCRIPTEN__
 
 void Renderer::performFrustumCulling(rhi::RHICommandEncoder* encoder, uint32_t frameIndex,
                                      uint32_t objectCount, uint32_t indexCount) {
@@ -2081,14 +2575,12 @@ void Renderer::drawFrame() {
     renderPassDesc.height = rhiBridge->getSwapchain()->getHeight();
     renderPassDesc.label = "RHI Main Render Pass";
 
-    // Color attachment:
-    //   WebGPU: geometry renders to HDR offscreen texture → tonemap → LDR intermediate → FXAA → swapchain
-    //   Vulkan: geometry renders directly to swapchain
+    // Color attachment: all platforms render geometry to HDR offscreen texture
     rhi::RenderPassColorAttachment colorAttachment;
 #ifdef __EMSCRIPTEN__
     colorAttachment.view = (hdrColorView && tonemapPipeline) ? hdrColorView.get() : swapchainView;
 #else
-    colorAttachment.view = swapchainView;
+    colorAttachment.view = hdrColorView ? hdrColorView.get() : swapchainView;
 #endif
     colorAttachment.loadOp = rhi::LoadOp::Clear;
     colorAttachment.storeOp = rhi::StoreOp::Store;
@@ -2105,15 +2597,14 @@ void Renderer::drawFrame() {
         renderPassDesc.depthStencilAttachment = &depthAttachment;
     }
 
-    // Phase 8: Linux requires traditional render pass (no dynamic rendering)
+    // Linux: use HDR render pass + HDR framebuffer for the geometry pass
 #ifdef __linux__
     auto* rhiVulkanSwapchain = dynamic_cast<RHI::Vulkan::VulkanRHISwapchain*>(rhiBridge->getSwapchain());
     if (rhiVulkanSwapchain) {
-        uint32_t currentImageIndex = rhiBridge->getCurrentImageIndex();
-        VkRenderPass vkPass = static_cast<VkRenderPass>(rhiVulkanSwapchain->getRenderPass());
-        VkFramebuffer vkFramebuffer = static_cast<VkFramebuffer>(rhiVulkanSwapchain->getFramebuffer(currentImageIndex));
-        renderPassDesc.nativeRenderPass = reinterpret_cast<void*>(vkPass);
-        renderPassDesc.nativeFramebuffer = reinterpret_cast<void*>(vkFramebuffer);
+        VkRenderPass vkPass         = static_cast<VkRenderPass>(rhiVulkanSwapchain->getHDRRenderPass());
+        VkFramebuffer vkFramebuffer = static_cast<VkFramebuffer>(rhiVulkanSwapchain->getHDRFramebuffer());
+        renderPassDesc.nativeRenderPass   = reinterpret_cast<void*>(vkPass);
+        renderPassDesc.nativeFramebuffer  = reinterpret_cast<void*>(vkFramebuffer);
     }
 #endif
 
@@ -2211,14 +2702,6 @@ void Renderer::drawFrame() {
             pendingParticleSystem = nullptr;
         }
 
-        // Phase 7: Render ImGui UI (if initialized)
-#ifndef __EMSCRIPTEN__
-        if (imguiManager) {
-            uint32_t imageIndex = rhiBridge->getCurrentImageIndex();
-            imguiManager->render(encoder.get(), imageIndex);
-        }
-#endif
-
         renderPass->end();
     }
 
@@ -2287,7 +2770,209 @@ void Renderer::drawFrame() {
             fxaaPass->end();
         }
     }
+#endif  // __EMSCRIPTEN__
+
+#ifndef __EMSCRIPTEN__
+    // -----------------------------------------------------------------------
+    // SSAO compute pass (Vulkan) — depth → AO → bilateral blur
+    // -----------------------------------------------------------------------
+    if (ssaoPipeline && ssaoBlurPipeline && ssaoBindGroup && ssaoBlurBindGroup) {
+        uint32_t W = rhiBridge->getSwapchain()->getWidth();
+        uint32_t H = rhiBridge->getSwapchain()->getHeight();
+        // SSAO runs at half resolution
+        uint32_t sW = std::max(1u, W / 2);
+        uint32_t sH = std::max(1u, H / 2);
+
+        // Depth: DepthStencilAttachment → ShaderReadOnly for SSAO sampling
+        encoder->transitionTextureLayout(rhiDepthImage.get(),
+            rhi::TextureLayout::DepthStencilAttachment, rhi::TextureLayout::ShaderReadOnly);
+
+        // SSAO textures: Undefined → General for compute writes
+        encoder->transitionTextureLayout(ssaoTexture.get(),
+            rhi::TextureLayout::Undefined, rhi::TextureLayout::General);
+        encoder->transitionTextureLayout(ssaoBlurTexture.get(),
+            rhi::TextureLayout::Undefined, rhi::TextureLayout::General);
+
+        // SSAO compute pass (half-res)
+        {
+            auto ce = encoder->beginComputePass("SSAO");
+            ce->setPipeline(ssaoPipeline.get());
+            ce->setBindGroup(0, ssaoBindGroup.get());
+
+            struct SSAOPC {
+                glm::mat4 projection;
+                float radius;
+                float bias;
+                float near;
+                float far;
+                float invW;  // 1/ssaoW — converts half-res pixel to [0,1] UV
+                float invH;  // (depth texture is sampled at same normalized UV)
+                float pad[2];
+            };
+            SSAOPC pc;
+            pc.projection = projectionMatrix;
+            pc.radius = 0.5f;
+            pc.bias   = 0.025f;
+            pc.near   = 0.1f;
+            pc.far    = 1000.0f;
+            pc.invW   = 1.0f / static_cast<float>(sW);  // half-res inverse
+            pc.invH   = 1.0f / static_cast<float>(sH);
+            pc.pad[0] = pc.pad[1] = 0.0f;
+            ce->setPushConstants(ssaoPipelineLayout.get(), rhi::ShaderStage::Compute, 0, sizeof(pc), &pc);
+            ce->dispatch((sW + 7) / 8, (sH + 7) / 8, 1);
+            ce->end();
+        }
+
+        // SSAO raw → ShaderReadOnly for blur sampling
+        encoder->transitionTextureLayout(ssaoTexture.get(),
+            rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
+
+        // SSAO blur pass (half-res)
+        {
+            auto ce = encoder->beginComputePass("SSAO Blur");
+            ce->setPipeline(ssaoBlurPipeline.get());
+            ce->setBindGroup(0, ssaoBlurBindGroup.get());
+
+            struct SSAOBlurPC { float invW; float invH; float near; float far; float depthThreshold; float pad; };
+            SSAOBlurPC pc{ 1.0f / sW, 1.0f / sH, 0.1f, 1000.0f, 0.05f, 0.0f };
+            ce->setPushConstants(ssaoBlurPipelineLayout.get(), rhi::ShaderStage::Compute, 0, sizeof(pc), &pc);
+            ce->dispatch((sW + 7) / 8, (sH + 7) / 8, 1);
+            ce->end();
+        }
+
+        // Blurred SSAO → ShaderReadOnly for postprocess sampling
+        encoder->transitionTextureLayout(ssaoBlurTexture.get(),
+            rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
+        // Note: depth stays in ShaderReadOnly; next frame's HDR renderpass
+        // uses initialLayout=Undefined so no transition back is needed.
+    }
+
+    // -----------------------------------------------------------------------
+    // Bloom compute pass (Vulkan) — HDR → half-res bright-pass + 3× blur
+    // -----------------------------------------------------------------------
+    if (bloomThresholdPipeline && bloomBlurPipeline && hdrColorView && bloomTextureView) {
+        uint32_t W = rhiBridge->getSwapchain()->getWidth();
+        uint32_t H = rhiBridge->getSwapchain()->getHeight();
+        uint32_t bW = std::max(1u, W / 2);
+        uint32_t bH = std::max(1u, H / 2);
+
+        // Transition bloom textures to GENERAL for storage writes.
+        // Using Undefined as old layout discards previous content (valid since we overwrite fully).
+        encoder->transitionTextureLayout(bloomTexture.get(),
+            rhi::TextureLayout::Undefined, rhi::TextureLayout::General);
+        encoder->transitionTextureLayout(bloomPingTexture.get(),
+            rhi::TextureLayout::Undefined, rhi::TextureLayout::General);
+
+        // --- Threshold pass: HDR → bloomTexture ---
+        {
+            auto computeEncoder = encoder->beginComputePass("Bloom Threshold");
+            computeEncoder->setPipeline(bloomThresholdPipeline.get());
+            computeEncoder->setBindGroup(0, bloomThresholdBindGroup.get());
+
+            struct BloomThresholdPC { float invW; float invH; float threshold; float knee; };
+            BloomThresholdPC thPC{ 1.0f / static_cast<float>(bW), 1.0f / static_cast<float>(bH), 1.0f, 0.5f };
+            computeEncoder->setPushConstants(bloomThresholdPipelineLayout.get(), rhi::ShaderStage::Compute, 0, sizeof(thPC), &thPC);
+            computeEncoder->dispatch((bW + 7) / 8, (bH + 7) / 8, 1);
+            computeEncoder->end();
+        }
+
+        // bloomTexture has been written (GENERAL) → transition to ShaderReadOnly for blur sampling
+        encoder->transitionTextureLayout(bloomTexture.get(),
+            rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
+
+        // --- 4× Dual Kawase blur passes (even count → final result in bloomTexture) ---
+        // pingPong[0]: reads bloomTexture (ShaderReadOnly), writes bloomPing (General)
+        // pingPong[1]: reads bloomPing (ShaderReadOnly), writes bloomTexture (General)
+        struct BloomBlurPC { float invW; float invH; int iter; float pad; };
+        for (int iter = 0; iter < 4; ++iter) {
+            int pingPongIdx = iter % 2;
+            {
+                auto computeEncoder = encoder->beginComputePass("Bloom Blur");
+                computeEncoder->setPipeline(bloomBlurPipeline.get());
+                computeEncoder->setBindGroup(0, bloomBlurBindGroups[pingPongIdx].get());
+                BloomBlurPC bPC{ 1.0f / static_cast<float>(bW), 1.0f / static_cast<float>(bH), iter, 0.0f };
+                computeEncoder->setPushConstants(bloomBlurPipelineLayout.get(), rhi::ShaderStage::Compute, 0, sizeof(bPC), &bPC);
+                computeEncoder->dispatch((bW + 7) / 8, (bH + 7) / 8, 1);
+                computeEncoder->end();
+            }
+
+            if (iter < 3) {
+                // Transition written texture to ShaderReadOnly for next read,
+                // and the other texture to General for next write.
+                if (pingPongIdx == 0) {
+                    // Wrote bloomPing → make readable; bloomTexture → writable
+                    encoder->transitionTextureLayout(bloomPingTexture.get(),
+                        rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
+                    encoder->transitionTextureLayout(bloomTexture.get(),
+                        rhi::TextureLayout::ShaderReadOnly, rhi::TextureLayout::General);
+                } else {
+                    // Wrote bloomTexture → make readable; bloomPing → writable
+                    encoder->transitionTextureLayout(bloomTexture.get(),
+                        rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
+                    encoder->transitionTextureLayout(bloomPingTexture.get(),
+                        rhi::TextureLayout::ShaderReadOnly, rhi::TextureLayout::General);
+                }
+            } else {
+                // Final iteration (iter=3, pingPong=1): wrote bloomTexture
+                // Transition to ShaderReadOnly for postprocess sampling
+                encoder->transitionTextureLayout(bloomTexture.get(),
+                    rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Post-process pass (Vulkan) — Tonemap + FXAA → swapchain
+    // -----------------------------------------------------------------------
+    if (postprocessPipeline && postprocessBindGroup) {
+        uint32_t W = rhiBridge->getSwapchain()->getWidth();
+        uint32_t H = rhiBridge->getSwapchain()->getHeight();
+
+        rhi::RenderPassDesc ppDesc;
+        ppDesc.width  = W;
+        ppDesc.height = H;
+        ppDesc.label  = "PostProcess Pass";
+
+        rhi::RenderPassColorAttachment ppColor;
+        ppColor.view      = swapchainView;
+        ppColor.loadOp    = rhi::LoadOp::DontCare;
+        ppColor.storeOp   = rhi::StoreOp::Store;
+        ppColor.clearValue = rhi::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
+        ppDesc.colorAttachments.push_back(ppColor);
+
+#ifdef __linux__
+        if (rhiVulkanSwapchain) {
+            uint32_t currentImageIndex = rhiBridge->getCurrentImageIndex();
+            VkRenderPass vkPP  = static_cast<VkRenderPass>(rhiVulkanSwapchain->getPostProcessRenderPass());
+            VkFramebuffer vkFB = static_cast<VkFramebuffer>(rhiVulkanSwapchain->getPostProcessFramebuffer(currentImageIndex));
+            ppDesc.nativeRenderPass   = reinterpret_cast<void*>(vkPP);
+            ppDesc.nativeFramebuffer  = reinterpret_cast<void*>(vkFB);
+        }
 #endif
+
+        auto ppPass = encoder->beginRenderPass(ppDesc);
+        if (ppPass) {
+            ppPass->setViewport(0.0f, 0.0f, static_cast<float>(W), static_cast<float>(H), 0.0f, 1.0f);
+            ppPass->setScissorRect(0, 0, W, H);
+            ppPass->setPipeline(postprocessPipeline.get());
+            ppPass->setBindGroup(0, postprocessBindGroup.get());
+
+            struct PostProcessPC { float texelW; float texelH; float bloomStr; float exposure; float aoStr; };
+            float effectiveAO = ssaoPipeline ? aoStrength : 0.0f;
+            PostProcessPC pc{ 1.0f / W, 1.0f / H, bloomStrength, exposure, effectiveAO };
+            ppPass->setPushConstants(postprocessPipelineLayout.get(), rhi::ShaderStage::Fragment, 0, sizeof(pc), &pc);
+            ppPass->draw(3);
+
+            // Render ImGui inside the postprocess pass (swapchain format — compatible with ImGui's render pass)
+            if (imguiManager) {
+                uint32_t imageIndex = rhiBridge->getCurrentImageIndex();
+                imguiManager->render(encoder.get(), imageIndex);
+            }
+
+            ppPass->end();
+        }
+    }
+#endif  // !__EMSCRIPTEN__
 
 #if !defined(__EMSCRIPTEN__) && !defined(__linux__)
     // Phase 9: Transition swapchain image from COLOR_ATTACHMENT_OPTIMAL to PRESENT_SRC

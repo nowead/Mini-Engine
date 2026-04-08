@@ -22,11 +22,30 @@ VulkanRHIPipelineLayout::VulkanRHIPipelineLayout(VulkanRHIDevice* device, const 
         setLayouts.push_back(vulkanLayout->getVkDescriptorSetLayout());
     }
 
+    // Map rhi::PushConstantRange -> vk::PushConstantRange
+    auto toVkStage = [](rhi::ShaderStage s) -> vk::ShaderStageFlags {
+        vk::ShaderStageFlags f{};
+        if (rhi::hasFlag(s, rhi::ShaderStage::Vertex))   f |= vk::ShaderStageFlagBits::eVertex;
+        if (rhi::hasFlag(s, rhi::ShaderStage::Fragment))  f |= vk::ShaderStageFlagBits::eFragment;
+        if (rhi::hasFlag(s, rhi::ShaderStage::Compute))   f |= vk::ShaderStageFlagBits::eCompute;
+        return f;
+    };
+
+    std::vector<vk::PushConstantRange> vkPcRanges;
+    vkPcRanges.reserve(desc.pushConstantRanges.size());
+    for (const auto& pc : desc.pushConstantRanges) {
+        vk::PushConstantRange r;
+        r.stageFlags = toVkStage(pc.stageFlags);
+        r.offset     = pc.offset;
+        r.size       = pc.size;
+        vkPcRanges.push_back(r);
+    }
+
     vk::PipelineLayoutCreateInfo layoutInfo;
     layoutInfo.setLayoutCount = static_cast<uint32_t>(setLayouts.size());
     layoutInfo.pSetLayouts = setLayouts.data();
-    layoutInfo.pushConstantRangeCount = 0;  // TODO: Support push constants
-    layoutInfo.pPushConstantRanges = nullptr;
+    layoutInfo.pushConstantRangeCount = static_cast<uint32_t>(vkPcRanges.size());
+    layoutInfo.pPushConstantRanges = vkPcRanges.empty() ? nullptr : vkPcRanges.data();
 
     m_layout = vk::raii::PipelineLayout(m_device->getVkDevice(), layoutInfo);
 }

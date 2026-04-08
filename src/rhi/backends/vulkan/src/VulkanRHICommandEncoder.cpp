@@ -227,6 +227,17 @@ void VulkanRHIRenderPassEncoder::drawIndexedIndirect(rhi::RHIBuffer* indirectBuf
     m_commandBuffer.drawIndexedIndirect(vulkanBuffer->getVkBuffer(), indirectOffset, 1, 0);
 }
 
+void VulkanRHIRenderPassEncoder::setPushConstants(rhi::RHIPipelineLayout* layout, rhi::ShaderStage stages,
+                                                   uint32_t offset, uint32_t size, const void* data) {
+    auto* vulkanLayout = static_cast<VulkanRHIPipelineLayout*>(layout);
+    vk::ShaderStageFlags vkStages{};
+    if (rhi::hasFlag(stages, rhi::ShaderStage::Vertex))   vkStages |= vk::ShaderStageFlagBits::eVertex;
+    if (rhi::hasFlag(stages, rhi::ShaderStage::Fragment))  vkStages |= vk::ShaderStageFlagBits::eFragment;
+    if (rhi::hasFlag(stages, rhi::ShaderStage::Compute))   vkStages |= vk::ShaderStageFlagBits::eCompute;
+    m_commandBuffer.pushConstants<uint8_t>(vulkanLayout->getVkPipelineLayout(), vkStages, offset,
+                                           vk::ArrayProxy<const uint8_t>(size, static_cast<const uint8_t*>(data)));
+}
+
 void VulkanRHIRenderPassEncoder::end() {
     if (!m_ended) {
         if (m_usesTraditionalRenderPass) {
@@ -289,6 +300,17 @@ void VulkanRHIComputePassEncoder::dispatch(uint32_t workgroupCountX, uint32_t wo
 void VulkanRHIComputePassEncoder::dispatchIndirect(rhi::RHIBuffer* indirectBuffer, uint64_t indirectOffset) {
     auto* vulkanBuffer = static_cast<VulkanRHIBuffer*>(indirectBuffer);
     m_commandBuffer.dispatchIndirect(vulkanBuffer->getVkBuffer(), indirectOffset);
+}
+
+void VulkanRHIComputePassEncoder::setPushConstants(rhi::RHIPipelineLayout* layout, rhi::ShaderStage stages,
+                                                    uint32_t offset, uint32_t size, const void* data) {
+    auto* vulkanLayout = static_cast<VulkanRHIPipelineLayout*>(layout);
+    vk::ShaderStageFlags vkStages{};
+    if (rhi::hasFlag(stages, rhi::ShaderStage::Vertex))   vkStages |= vk::ShaderStageFlagBits::eVertex;
+    if (rhi::hasFlag(stages, rhi::ShaderStage::Fragment))  vkStages |= vk::ShaderStageFlagBits::eFragment;
+    if (rhi::hasFlag(stages, rhi::ShaderStage::Compute))   vkStages |= vk::ShaderStageFlagBits::eCompute;
+    m_commandBuffer.pushConstants<uint8_t>(vulkanLayout->getVkPipelineLayout(), vkStages, offset,
+                                           vk::ArrayProxy<const uint8_t>(size, static_cast<const uint8_t*>(data)));
 }
 
 void VulkanRHIComputePassEncoder::end() {
@@ -472,7 +494,17 @@ void VulkanRHICommandEncoder::transitionTextureLayout(rhi::RHITexture* texture,
     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.image = vulkanTexture->getVkImage();
-    barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;  // TODO: Handle depth/stencil
+    // Select correct aspect mask based on format
+    {
+        auto fmt = texture->getFormat();
+        bool isDepth = (fmt == rhi::TextureFormat::Depth32Float ||
+                        fmt == rhi::TextureFormat::Depth16Unorm ||
+                        fmt == rhi::TextureFormat::Depth24Plus ||
+                        fmt == rhi::TextureFormat::Depth24PlusStencil8);
+        barrier.subresourceRange.aspectMask = isDepth
+            ? vk::ImageAspectFlagBits::eDepth
+            : vk::ImageAspectFlagBits::eColor;
+    }
     barrier.subresourceRange.baseMipLevel = 0;
     barrier.subresourceRange.levelCount = vulkanTexture->getMipLevelCount();
     barrier.subresourceRange.baseArrayLayer = 0;
@@ -482,23 +514,62 @@ void VulkanRHICommandEncoder::transitionTextureLayout(rhi::RHITexture* texture,
     vk::PipelineStageFlags srcStage, dstStage;
     vk::AccessFlags srcAccess, dstAccess;
 
-    if (oldLayout == rhi::TextureLayout::Undefined) {
-        srcStage = vk::PipelineStageFlagBits::eTopOfPipe;
-        srcAccess = vk::AccessFlagBits::eNone;
-    } else {
-        srcStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-        srcAccess = vk::AccessFlagBits::eColorAttachmentWrite;
+    switch (oldLayout) {
+        case rhi::TextureLayout::Undefined:
+            srcStage  = vk::PipelineStageFlagBits::eTopOfPipe;
+            srcAccess = vk::AccessFlagBits::eNone;
+            break;
+        case rhi::TextureLayout::General:
+            // Could be compute storage write or general use
+            srcStage  = vk::PipelineStageFlagBits::eComputeShader;
+            srcAccess = vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eShaderRead;
+            break;
+        case rhi::TextureLayout::ShaderReadOnly:
+            srcStage  = vk::PipelineStageFlagBits::eComputeShader | vk::PipelineStageFlagBits::eFragmentShader;
+            srcAccess = vk::AccessFlagBits::eShaderRead;
+            break;
+        case rhi::TextureLayout::ColorAttachment:
+            srcStage  = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+            srcAccess = vk::AccessFlagBits::eColorAttachmentWrite;
+            break;
+        case rhi::TextureLayout::DepthStencilAttachment:
+            srcStage  = vk::PipelineStageFlagBits::eLateFragmentTests;
+            srcAccess = vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+            break;
+        default:
+            srcStage  = vk::PipelineStageFlagBits::eAllCommands;
+            srcAccess = vk::AccessFlagBits::eMemoryWrite;
+            break;
     }
 
-    if (newLayout == rhi::TextureLayout::ColorAttachment) {
-        dstStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-        dstAccess = vk::AccessFlagBits::eColorAttachmentWrite;
-    } else if (newLayout == rhi::TextureLayout::Present) {
-        dstStage = vk::PipelineStageFlagBits::eBottomOfPipe;
-        dstAccess = vk::AccessFlagBits::eNone;
-    } else {
-        dstStage = vk::PipelineStageFlagBits::eFragmentShader;
-        dstAccess = vk::AccessFlagBits::eShaderRead;
+    switch (newLayout) {
+        case rhi::TextureLayout::General:
+            // Compute shader will write as storage image
+            dstStage  = vk::PipelineStageFlagBits::eComputeShader;
+            dstAccess = vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eShaderRead;
+            break;
+        case rhi::TextureLayout::ShaderReadOnly:
+            // Compute or fragment shader will read as sampled image
+            dstStage  = vk::PipelineStageFlagBits::eComputeShader | vk::PipelineStageFlagBits::eFragmentShader;
+            dstAccess = vk::AccessFlagBits::eShaderRead;
+            break;
+        case rhi::TextureLayout::ColorAttachment:
+            dstStage  = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+            dstAccess = vk::AccessFlagBits::eColorAttachmentWrite;
+            break;
+        case rhi::TextureLayout::DepthStencilAttachment:
+            dstStage  = vk::PipelineStageFlagBits::eEarlyFragmentTests;
+            dstAccess = vk::AccessFlagBits::eDepthStencilAttachmentRead |
+                        vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+            break;
+        case rhi::TextureLayout::Present:
+            dstStage  = vk::PipelineStageFlagBits::eBottomOfPipe;
+            dstAccess = vk::AccessFlagBits::eNone;
+            break;
+        default:
+            dstStage  = vk::PipelineStageFlagBits::eAllCommands;
+            dstAccess = vk::AccessFlagBits::eMemoryRead;
+            break;
     }
 
     barrier.srcAccessMask = srcAccess;

@@ -87,7 +87,7 @@ vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
     return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
-// ACES Filmic Tone Mapping
+// ACES Filmic Tone Mapping (kept for reference but not applied here — post-process pass handles this)
 vec3 ACESFilm(vec3 x) {
     float a = 2.51;
     float b = 0.03;
@@ -196,9 +196,6 @@ void main() {
     // Final color: ambient (not shadowed) + direct light (shadowed)
     vec3 color = ambient + (1.0 - shadow) * Lo;
 
-    // Tone mapping (ACES)
-    float exp = ubo.exposure > 0.0 ? ubo.exposure : 1.0;
-    color = ACESFilm(color * exp);
-
+    // Output linear HDR — ACES tonemap is applied in the post-process pass (postprocess.frag.glsl)
     outColor = vec4(color, 1.0);
 }

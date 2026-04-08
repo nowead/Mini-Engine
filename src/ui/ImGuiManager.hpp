@@ -67,6 +67,9 @@ public:
         float shadowStrength = 0.7f;    // Shadow darkness (0-1)
         // PBR tone mapping
         float exposure = 1.0f;          // Tone mapping exposure (0.1-5.0)
+        // Post-process
+        float bloomStrength = 0.04f;    // Bloom intensity (0-0.5)
+        float aoStrength = 0.6f;        // SSAO darkening strength (0-1)
     };
 
     LightingSettings& getLightingSettings() { return m_lightingSettings; }

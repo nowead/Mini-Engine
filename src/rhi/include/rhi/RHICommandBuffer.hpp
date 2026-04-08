@@ -135,6 +135,17 @@ public:
     virtual void drawIndexedIndirect(RHIBuffer* indirectBuffer, uint64_t indirectOffset) = 0;
 
     /**
+     * @brief Set push constants
+     * @param layout Pipeline layout
+     * @param stages Shader stage flags
+     * @param offset Offset in bytes
+     * @param size Size in bytes
+     * @param data Pointer to push constant data
+     */
+    virtual void setPushConstants(RHIPipelineLayout* layout, ShaderStage stages,
+                                  uint32_t offset, uint32_t size, const void* data) = 0;
+
+    /**
      * @brief End the render pass
      *
      * Must be called when done recording rendering commands.
@@ -181,6 +192,12 @@ public:
      * @param indirectOffset Offset into the indirect buffer
      */
     virtual void dispatchIndirect(RHIBuffer* indirectBuffer, uint64_t indirectOffset) = 0;
+
+    /**
+     * @brief Set push constants
+     */
+    virtual void setPushConstants(RHIPipelineLayout* layout, ShaderStage stages,
+                                  uint32_t offset, uint32_t size, const void* data) = 0;
 
     /**
      * @brief End the compute pass

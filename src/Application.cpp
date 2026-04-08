@@ -280,6 +280,8 @@ void Application::mainLoopFrame() {
             renderer->setShadowBias(lighting.shadowBias);
             renderer->setShadowStrength(lighting.shadowStrength);
             renderer->setExposure(lighting.exposure);
+            renderer->setBloomStrength(lighting.bloomStrength);
+            renderer->setAOStrength(lighting.aoStrength);
 
             // Phase 4.1: Pass GPU timing data to ImGui
             if (auto* profiler = renderer->getGpuProfiler()) {

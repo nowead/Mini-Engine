@@ -60,13 +60,27 @@ public:
         return VK_NULL_HANDLE;
     }
 
-    // Linux compatibility: Render pass for ImGui (Vulkan 1.1)
+    // Linux compatibility: Render pass for main geometry (Vulkan 1.1)
     vk::RenderPass getRenderPass() const { return *m_renderPass ? *m_renderPass : VK_NULL_HANDLE; }
     void createRenderPass();
 
     // Linux compatibility: Framebuffers (Vulkan 1.1 traditional rendering)
     vk::Framebuffer getFramebuffer(uint32_t index) const;
     void createFramebuffers(vk::ImageView depthImageView = VK_NULL_HANDLE);
+
+#ifdef __linux__
+    // HDR offscreen pass: RGBA16Float color + depth — geometry renders here
+    void createHDRRenderPass();
+    void createHDRFramebuffer(vk::ImageView hdrColorView, vk::ImageView depthView);
+    vk::RenderPass getHDRRenderPass() const { return *m_hdrRenderPass ? *m_hdrRenderPass : VK_NULL_HANDLE; }
+    vk::Framebuffer getHDRFramebuffer() const { return *m_hdrFramebuffer ? *m_hdrFramebuffer : VK_NULL_HANDLE; }
+
+    // Post-process pass: swapchain format, no depth — tonemap+FXAA writes here
+    void createPostProcessRenderPass();
+    void createPostProcessFramebuffers();
+    vk::RenderPass getPostProcessRenderPass() const { return *m_postProcessRenderPass ? *m_postProcessRenderPass : VK_NULL_HANDLE; }
+    vk::Framebuffer getPostProcessFramebuffer(uint32_t index) const;
+#endif
 
 private:
     VulkanRHIDevice* m_device;
@@ -84,11 +98,21 @@ private:
     uint32_t m_currentImageIndex = 0;
     uint32_t m_bufferCount;
 
-    // Linux compatibility: Render pass for ImGui (Vulkan 1.1)
+    // Linux compatibility: Render pass for main geometry (Vulkan 1.1, swapchain format + depth)
     vk::raii::RenderPass m_renderPass = nullptr;
 
     // Linux compatibility: Framebuffers (Vulkan 1.1)
     std::vector<vk::raii::Framebuffer> m_framebuffers;
+
+#ifdef __linux__
+    // HDR offscreen render pass (RGBA16Float + depth) — geometry renders here
+    vk::raii::RenderPass m_hdrRenderPass = nullptr;
+    vk::raii::Framebuffer m_hdrFramebuffer = nullptr;  // single FB (one HDR texture)
+
+    // Post-process render pass (swapchain format, no depth) — tonemap+FXAA writes here
+    vk::raii::RenderPass m_postProcessRenderPass = nullptr;
+    std::vector<vk::raii::Framebuffer> m_postProcessFramebuffers;
+#endif
 
     // Initialization methods
     void createSwapchain();

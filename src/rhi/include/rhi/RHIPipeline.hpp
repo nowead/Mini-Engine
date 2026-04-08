@@ -118,10 +118,20 @@ struct MultisampleState {
 };
 
 /**
+ * @brief Push constant range descriptor
+ */
+struct PushConstantRange {
+    ShaderStage stageFlags = ShaderStage::Vertex;
+    uint32_t offset = 0;
+    uint32_t size = 0;
+};
+
+/**
  * @brief Pipeline layout creation descriptor
  */
 struct PipelineLayoutDesc {
     std::vector<RHIBindGroupLayout*> bindGroupLayouts;
+    std::vector<PushConstantRange> pushConstantRanges;
     const char* label = nullptr;
 
     PipelineLayoutDesc() = default;

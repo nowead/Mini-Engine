@@ -171,6 +171,12 @@ public:
     void setExposure(float exp) { exposure = exp; }
     float getExposure() const { return exposure; }
 
+    // Post-processing
+    void setBloomStrength(float s) { bloomStrength = s; }
+    float getBloomStrength() const { return bloomStrength; }
+    void setAOStrength(float s) { aoStrength = s; }
+    float getAOStrength() const { return aoStrength; }
+
     /**
      * @brief Load HDR environment map and initialize full IBL pipeline
      * @param hdrPath Path to .hdr equirectangular environment map
@@ -216,17 +222,17 @@ private:
     std::unique_ptr<rhi::RHIPipelineLayout> rhiPipelineLayout;
     std::unique_ptr<rhi::RHIRenderPipeline> rhiPipeline;
 
-#ifdef __EMSCRIPTEN__
-    // HDR Render Target (RGBA16Float — geometry renders here)
+    // HDR Render Target (RGBA16Float — geometry renders here on all platforms)
     std::unique_ptr<rhi::RHITexture> hdrColorTexture;
     std::unique_ptr<rhi::RHITextureView> hdrColorView;
     std::unique_ptr<rhi::RHISampler> hdrSampler;
 
+#ifdef __EMSCRIPTEN__
     // LDR Intermediate Target (RGBA8Unorm — tonemap writes here, FXAA reads from here)
     std::unique_ptr<rhi::RHITexture> ldrColorTexture;
     std::unique_ptr<rhi::RHITextureView> ldrColorView;
 
-    // Tonemap Pipeline (HDR → LDR intermediate: ACES + gamma)
+    // Tonemap Pipeline (HDR → LDR intermediate: ACES + gamma) — WebGPU path
     std::unique_ptr<rhi::RHIShader> tonemapVertexShader;
     std::unique_ptr<rhi::RHIShader> tonemapFragmentShader;
     std::unique_ptr<rhi::RHIBindGroupLayout> tonemapBindGroupLayout;
@@ -234,13 +240,65 @@ private:
     std::unique_ptr<rhi::RHIPipelineLayout> tonemapPipelineLayout;
     std::unique_ptr<rhi::RHIRenderPipeline> tonemapPipeline;
 
-    // FXAA Pipeline (LDR intermediate → swapchain: anti-aliasing)
+    // FXAA Pipeline (LDR intermediate → swapchain: anti-aliasing) — WebGPU path
     std::unique_ptr<rhi::RHIShader> fxaaVertexShader;
     std::unique_ptr<rhi::RHIShader> fxaaFragmentShader;
     std::unique_ptr<rhi::RHIBindGroupLayout> fxaaBindGroupLayout;
     std::unique_ptr<rhi::RHIBindGroup> fxaaBindGroup;
     std::unique_ptr<rhi::RHIPipelineLayout> fxaaPipelineLayout;
     std::unique_ptr<rhi::RHIRenderPipeline> fxaaPipeline;
+#else
+    // Combined Tonemap+FXAA Post-Process Pipeline — Vulkan path (SPIR-V)
+    // Reads: hdrColorTexture + bloomTexture → writes: swapchain
+    std::unique_ptr<rhi::RHIShader> postprocessVertexShader;
+    std::unique_ptr<rhi::RHIShader> postprocessFragmentShader;
+    std::unique_ptr<rhi::RHIBindGroupLayout> postprocessBindGroupLayout;
+    std::unique_ptr<rhi::RHIBindGroup> postprocessBindGroup;
+    std::unique_ptr<rhi::RHIPipelineLayout> postprocessPipelineLayout;
+    std::unique_ptr<rhi::RHIRenderPipeline> postprocessPipeline;
+
+    // Bloom Resources — Vulkan path
+    std::unique_ptr<rhi::RHITexture> bloomTexture;       // half-res RGBA16Float (storage)
+    std::unique_ptr<rhi::RHITextureView> bloomTextureView;
+    std::unique_ptr<rhi::RHITexture> bloomPingTexture;   // second buffer for ping-pong blur
+    std::unique_ptr<rhi::RHITextureView> bloomPingView;
+    std::unique_ptr<rhi::RHISampler> bloomSampler;
+
+    // Bloom threshold compute pipeline
+    std::unique_ptr<rhi::RHIShader> bloomThresholdShader;
+    std::unique_ptr<rhi::RHIBindGroupLayout> bloomThresholdLayout;
+    std::unique_ptr<rhi::RHIBindGroup> bloomThresholdBindGroup;
+    std::unique_ptr<rhi::RHIPipelineLayout> bloomThresholdPipelineLayout;
+    std::unique_ptr<rhi::RHIComputePipeline> bloomThresholdPipeline;
+
+    // Bloom blur compute pipeline (dual Kawase, 3 passes)
+    std::unique_ptr<rhi::RHIShader> bloomBlurShader;
+    std::unique_ptr<rhi::RHIBindGroupLayout> bloomBlurLayout;
+    std::unique_ptr<rhi::RHIPipelineLayout> bloomBlurPipelineLayout;
+    std::unique_ptr<rhi::RHIComputePipeline> bloomBlurPipeline;
+    // Bind groups: [ping→pong, pong→ping] for alternating passes
+    std::array<std::unique_ptr<rhi::RHIBindGroup>, 2> bloomBlurBindGroups;
+
+    // SSAO Resources — Vulkan path
+    std::unique_ptr<rhi::RHITexture> ssaoTexture;       // R8Unorm, full-res
+    std::unique_ptr<rhi::RHITextureView> ssaoTextureView;
+    std::unique_ptr<rhi::RHITexture> ssaoBlurTexture;   // R8Unorm, full-res (blurred)
+    std::unique_ptr<rhi::RHITextureView> ssaoBlurView;
+    std::unique_ptr<rhi::RHISampler> ssaoSampler;
+
+    // SSAO compute pipeline
+    std::unique_ptr<rhi::RHIShader> ssaoShader;
+    std::unique_ptr<rhi::RHIBindGroupLayout> ssaoLayout;
+    std::unique_ptr<rhi::RHIBindGroup> ssaoBindGroup;
+    std::unique_ptr<rhi::RHIPipelineLayout> ssaoPipelineLayout;
+    std::unique_ptr<rhi::RHIComputePipeline> ssaoPipeline;
+
+    // SSAO blur compute pipeline
+    std::unique_ptr<rhi::RHIShader> ssaoBlurShader;
+    std::unique_ptr<rhi::RHIBindGroupLayout> ssaoBlurLayout;
+    std::unique_ptr<rhi::RHIBindGroup> ssaoBlurBindGroup;
+    std::unique_ptr<rhi::RHIPipelineLayout> ssaoBlurPipelineLayout;
+    std::unique_ptr<rhi::RHIComputePipeline> ssaoBlurPipeline;
 #endif
 
     // Building Instancing Pipeline
@@ -320,7 +378,9 @@ private:
     std::unique_ptr<rendering::IBLManager> iblManager;
     float shadowBias = 0.008f;  // Constant bias to prevent shadow acne (uniform across all surfaces)
     float shadowStrength = 0.7f;  // Shadow darkness
-    float exposure = 1.0f;  // PBR tone mapping exposure
+    float exposure = 1.0f;      // PBR tone mapping exposure
+    float bloomStrength = 0.04f; // Bloom intensity
+    float aoStrength = 0.6f;     // SSAO darkening strength
     float shadowSceneRadius = 200.0f;  // Orthographic projection half-extent for shadows
 
 #ifndef __EMSCRIPTEN__
@@ -339,10 +399,15 @@ private:
     void createShadowRenderer();    // Phase 3.3: Shadow mapping
     void createIBL();               // Phase 1.2: IBL initialization
     void createCullingPipeline();   // Phase 2.2: GPU frustum culling
+    void createHDRRenderTarget();   // HDR offscreen texture (all platforms)
 #ifdef __EMSCRIPTEN__
-    void createHDRRenderTarget();   // HDR offscreen texture + LDR intermediate
-    void createTonemapPipeline();   // ACES tonemap post-process pass
-    void createFXAAPipeline();      // FXAA anti-aliasing pass
+    void createTonemapPipeline();   // ACES tonemap post-process pass (WebGPU)
+    void createFXAAPipeline();      // FXAA anti-aliasing pass (WebGPU)
+#else
+    void createPostProcessPipeline();       // Combined tonemap+FXAA (Vulkan)
+    void createBloomPipeline();             // Bloom compute (Vulkan)
+    void createSSAOPipeline();              // SSAO + bilateral blur (Vulkan)
+    void recreatePostProcessResources();    // Rebuild after swapchain resize (Vulkan)
 #endif
     void performFrustumCulling(rhi::RHICommandEncoder* encoder, uint32_t frameIndex,
                                uint32_t objectCount, uint32_t indexCount);

@@ -377,6 +377,56 @@ if(NOT EMSCRIPTEN)
         COMMENT "Compiling tonemap.frag.glsl -> SPIR-V"
     )
 
+    # Post-process: combined tonemap+FXAA+bloom composite pass
+    add_custom_command(
+        OUTPUT ${BUILDING_SHADER_DIR}/postprocess.frag.spv
+        COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=fragment
+                -o ${BUILDING_SHADER_DIR}/postprocess.frag.spv
+                ${BUILDING_SHADER_DIR}/postprocess.frag.glsl
+        DEPENDS ${BUILDING_SHADER_DIR}/postprocess.frag.glsl
+        COMMENT "Compiling postprocess.frag.glsl -> SPIR-V"
+    )
+
+    # Bloom: threshold extraction (half-res bright-pass)
+    add_custom_command(
+        OUTPUT ${BUILDING_SHADER_DIR}/bloom_threshold.comp.spv
+        COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=compute
+                -o ${BUILDING_SHADER_DIR}/bloom_threshold.comp.spv
+                ${BUILDING_SHADER_DIR}/bloom_threshold.comp.glsl
+        DEPENDS ${BUILDING_SHADER_DIR}/bloom_threshold.comp.glsl
+        COMMENT "Compiling bloom_threshold.comp.glsl -> SPIR-V"
+    )
+
+    # Bloom: dual Kawase blur
+    add_custom_command(
+        OUTPUT ${BUILDING_SHADER_DIR}/bloom_blur.comp.spv
+        COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=compute
+                -o ${BUILDING_SHADER_DIR}/bloom_blur.comp.spv
+                ${BUILDING_SHADER_DIR}/bloom_blur.comp.glsl
+        DEPENDS ${BUILDING_SHADER_DIR}/bloom_blur.comp.glsl
+        COMMENT "Compiling bloom_blur.comp.glsl -> SPIR-V"
+    )
+
+    # SSAO: screen-space ambient occlusion
+    add_custom_command(
+        OUTPUT ${BUILDING_SHADER_DIR}/ssao.comp.spv
+        COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=compute
+                -o ${BUILDING_SHADER_DIR}/ssao.comp.spv
+                ${BUILDING_SHADER_DIR}/ssao.comp.glsl
+        DEPENDS ${BUILDING_SHADER_DIR}/ssao.comp.glsl
+        COMMENT "Compiling ssao.comp.glsl -> SPIR-V"
+    )
+
+    # SSAO blur: bilateral 4×4 edge-preserving blur
+    add_custom_command(
+        OUTPUT ${BUILDING_SHADER_DIR}/ssao_blur.comp.spv
+        COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=compute
+                -o ${BUILDING_SHADER_DIR}/ssao_blur.comp.spv
+                ${BUILDING_SHADER_DIR}/ssao_blur.comp.glsl
+        DEPENDS ${BUILDING_SHADER_DIR}/ssao_blur.comp.glsl
+        COMMENT "Compiling ssao_blur.comp.glsl -> SPIR-V"
+    )
+
     add_custom_target(building_shaders DEPENDS
         ${BUILDING_SHADER_DIR}/building.vert.spv
         ${BUILDING_SHADER_DIR}/building.frag.spv
@@ -389,6 +439,11 @@ if(NOT EMSCRIPTEN)
         ${BUILDING_SHADER_DIR}/frustum_cull.comp.spv
         ${BUILDING_SHADER_DIR}/tonemap.vert.spv
         ${BUILDING_SHADER_DIR}/tonemap.frag.spv
+        ${BUILDING_SHADER_DIR}/postprocess.frag.spv
+        ${BUILDING_SHADER_DIR}/bloom_threshold.comp.spv
+        ${BUILDING_SHADER_DIR}/bloom_blur.comp.spv
+        ${BUILDING_SHADER_DIR}/ssao.comp.spv
+        ${BUILDING_SHADER_DIR}/ssao_blur.comp.spv
     )
     
     add_dependencies(MiniEngine building_shaders)

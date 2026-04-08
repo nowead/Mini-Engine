@@ -52,12 +52,23 @@ void ImGuiVulkanBackend::init(GLFWwindow* window,
     initInfo.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
 
 #ifdef __linux__
-    // Linux: Use render pass (Vulkan 1.1 compatibility)
-    // Create render pass if not already created
-    if (vulkanSwapchain->getRenderPass() == VK_NULL_HANDLE) {
-        vulkanSwapchain->createRenderPass();
+    // Linux: Use the postprocess render pass (swapchain format, no depth) so ImGui can render
+    // inside the postprocess pass without format/depth incompatibility.
+    // Fall back to creating a minimal color-only render pass if not yet available.
+    VkRenderPass imguiRenderPass = static_cast<VkRenderPass>(vulkanSwapchain->getPostProcessRenderPass());
+    if (imguiRenderPass == VK_NULL_HANDLE) {
+        // Postprocess render pass not yet created — create it now
+        vulkanSwapchain->createPostProcessRenderPass();
+        imguiRenderPass = static_cast<VkRenderPass>(vulkanSwapchain->getPostProcessRenderPass());
     }
-    initInfo.RenderPass = static_cast<VkRenderPass>(vulkanSwapchain->getRenderPass());
+    if (imguiRenderPass == VK_NULL_HANDLE) {
+        // Last resort: use the swapchain render pass
+        if (vulkanSwapchain->getRenderPass() == VK_NULL_HANDLE) {
+            vulkanSwapchain->createRenderPass();
+        }
+        imguiRenderPass = static_cast<VkRenderPass>(vulkanSwapchain->getRenderPass());
+    }
+    initInfo.RenderPass = imguiRenderPass;
     initInfo.UseDynamicRendering = false;
 #else
     // macOS/Windows: Use dynamic rendering (Vulkan 1.3)

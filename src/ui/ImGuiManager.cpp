@@ -179,6 +179,12 @@ void ImGuiManager::renderUI(Camera& camera, uint32_t buildingCount,
         ImGui::Separator();
         ImGui::Text("Tone Mapping:");
         ImGui::SliderFloat("Exposure", &m_lightingSettings.exposure, 0.1f, 5.0f, "%.2f");
+
+        // Post-Processing
+        ImGui::Separator();
+        ImGui::Text("Post-Processing:");
+        ImGui::SliderFloat("Bloom Strength", &m_lightingSettings.bloomStrength, 0.0f, 0.5f, "%.3f");
+        ImGui::SliderFloat("AO Strength",    &m_lightingSettings.aoStrength,    0.0f, 1.0f, "%.2f");
     }
 
     ImGui::Separator();
