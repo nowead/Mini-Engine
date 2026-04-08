@@ -1,5 +1,9 @@
 #pragma once
 
+#ifndef __EMSCRIPTEN__
+#include "src/rendering/graph/RenderGraph.hpp"
+#endif
+
 #include "src/resources/ResourceManager.hpp"
 #include "src/scene/SceneManager.hpp"
 #include "src/utils/Vertex.hpp"
@@ -385,6 +389,7 @@ private:
 
 #ifndef __EMSCRIPTEN__
     std::unique_ptr<class GpuProfiler> gpuProfiler;
+    rendergraph::RenderGraph m_renderGraph;
 #endif
 
     // RHI initialization methods (Phase 4)

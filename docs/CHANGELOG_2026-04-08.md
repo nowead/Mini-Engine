@@ -1,6 +1,6 @@
 # 변경 이력 — 2026-04-08
 
-> 작업 범위: Phase 1 완성 (SSAO + 버그 수정) / 창 크기 조정 / ImGui UI 확장
+> 작업 범위: Phase 1 완성 (SSAO + 버그 수정) / Phase 2 Render Graph 아키텍처 / 창 크기 조정 / ImGui UI 확장
 
 ---
 
@@ -295,7 +295,112 @@ renderer->setAOStrength(lighting.aoStrength);
 
 ---
 
-## 7. 빌드 및 실행
+## 7. Phase 2 — Render Graph 아키텍처
+
+### 7.1 개요
+
+`drawFrame()` 내 하드코딩된 패스 순서와 수동 `vkCmdPipelineBarrier` / `transitionTextureLayout` 호출을 선언적 Render Graph로 대체.
+
+**제거된 수동 배리어 코드 (~230줄):**
+
+| 기존 코드 | 제거 방법 |
+|---|---|
+| Swapchain UNDEFINED → ColorAttachment (50줄) | `importSwapchainImage` + `addWriteDep(ColorWrite)` |
+| Swapchain ColorAttachment → PresentSrc (50줄) | `addReadDep(PresentSrc)` Present 패스 |
+| Shadow DepthStencil ↔ ShaderReadOnly (40줄) | `addWriteDep(DepthWrite)` / `addReadDep(SampleFragment)` |
+| Depth DepthStencil → ShaderReadOnly (6줄) | `addReadDep(SampleCompute)` SSAO 패스 |
+| SSAO Undefined → General → ShaderReadOnly (6줄) | `addWriteDep(StorageWrite)` + `addReadDep(SampleCompute)` |
+| Bloom ping-pong 8+ 전환 (~80줄) | BloomBlur 패스별 `addReadDep`/`addWriteDep` |
+
+### 7.2 신규 파일
+
+```
+src/rendering/graph/
+├── RenderGraphResource.hpp   — 리소스 핸들, RGAccess enum, RGTexState/RGBufState
+├── RenderPass.hpp            — RGPassNode, RGPassType, RGDep
+├── BarrierBatch.hpp          — vkCmdPipelineBarrier2 배치 방출 (sync2)
+├── RenderGraph.hpp           — 선언적 API 인터페이스
+└── RenderGraph.cpp           — Kahn's 위상 정렬 + 배리어 자동 추론 구현
+```
+
+### 7.3 RenderGraph 핵심 API
+
+```cpp
+// 매 프레임 drawFrame() 내에서
+m_renderGraph.reset();
+
+// 리소스 등록 (초기 상태와 함께)
+auto rgHDR      = m_renderGraph.importTexture("HDR",   hdrColorTexture.get(), hdrInitial);
+auto rgBloom    = m_renderGraph.importTexture("Bloom", bloomTexture.get(),    undefinedSt);
+auto rgSwapchain = m_renderGraph.importSwapchainImage("Swapchain", vkImage, ...);
+
+// 패스 선언 (실행 콜백 + 읽기/쓰기 의존성)
+auto ssaoPass = m_renderGraph.addPass("SSAO", RGPassType::Compute,
+    [this, sW, sH](rhi::RHICommandEncoder* enc) { /* compute dispatch */ });
+m_renderGraph.addReadDep(ssaoPass, rgDepth, RGAccess::SampleCompute);   // depth → ShaderReadOnly
+m_renderGraph.addWriteDep(ssaoPass, rgSSAO, RGAccess::StorageWrite);    // ssao → General
+
+m_renderGraph.compile();           // 위상 정렬 (Kahn's algorithm)
+m_renderGraph.execute(encoder.get()); // sync2 배리어 자동 방출 + 패스 실행
+```
+
+### 7.4 배리어 추론 방식
+
+`inferTexState(RGAccess)` — 액세스 타입에서 `(VkPipelineStageFlags2, VkAccessFlags2, VkImageLayout)` 자동 계산:
+
+| RGAccess | Stage | Access | Layout |
+|---|---|---|---|
+| ColorWrite | COLOR_ATTACHMENT_OUTPUT | COLOR_ATTACHMENT_WRITE | COLOR_ATTACHMENT_OPTIMAL |
+| DepthWrite | EARLY/LATE_FRAGMENT_TESTS | DEPTH_STENCIL_ATTACHMENT_RW | DEPTH_STENCIL_ATTACHMENT_OPTIMAL |
+| SampleFragment | FRAGMENT_SHADER | SHADER_SAMPLED_READ | SHADER_READ_ONLY_OPTIMAL |
+| SampleCompute | COMPUTE_SHADER | SHADER_SAMPLED_READ | SHADER_READ_ONLY_OPTIMAL |
+| StorageWrite | COMPUTE_SHADER | SHADER_STORAGE_WRITE | GENERAL |
+| PresentSrc | NONE | NONE | PRESENT_SRC_KHR |
+
+배리어는 현재 상태와 필요 상태가 다를 때만 생성 → `BarrierBatch`에 누적 후 패스 직전 `vkCmdPipelineBarrier2` 단일 호출.
+
+### 7.5 위상 정렬 (compile)
+
+Kahn's algorithm: 리소스 쓰기 패스 → 읽기 패스 간 방향성 간선 구성 후 in-degree 0인 패스부터 처리. 사이클 감지 시 선언 순서(fallback) 유지.
+
+### 7.6 플랫폼별 처리
+
+| 플랫폼 | Shadow 배리어 | Swapchain 배리어 | SSAO/Bloom 배리어 |
+|---|---|---|---|
+| macOS/Windows | render graph | render graph | render graph |
+| Linux | native render pass 자동 처리 | native render pass 자동 처리 | render graph |
+
+Linux는 `rgSwapchain`을 import하지 않음 (`#if !defined(__linux__)` 조건).
+
+### 7.7 수정된 기존 파일
+
+- **`src/rendering/Renderer.hpp`** — `rendergraph::RenderGraph m_renderGraph` 멤버 추가, `RenderGraph.hpp` include
+- **`src/rendering/Renderer.cpp`** — `drawFrame()` 내 SSAO·Bloom·PostProcess·Present 섹션을 render graph 선언으로 교체
+- **`CMakeLists.txt`** — `src/rendering/graph/` 소스 파일 native 빌드 타겟에 추가
+- **`src/rhi/include/rhi/RHICommandBuffer.hpp`** — `class RHIPipelineLayout` forward declaration 추가
+
+### 7.8 최종 drawFrame 구조
+
+```
+[Frustum Cull] — 기존 코드 (자체 배리어 포함)
+[Shadow Pass]  — 기존 코드 (기존 플랫폼별 배리어 포함)
+[Main HDR Pass] — 기존 코드
+────────────────────────────────────────
+m_renderGraph.reset();
+  importTexture(HDR, depth, ssao, bloom, swapchain)
+  addPass(SSAO)        → addReadDep(depth), addWriteDep(ssao)
+  addPass(SSAOBlur)    → addReadDep(ssao), addWriteDep(ssaoBlur)
+  addPass(BloomThreshold) → addReadDep(HDR), addWriteDep(bloom)
+  addPass(BloomBlur×4) → ping-pong readDep/writeDep
+  addPass(PostProcess) → addReadDep(HDR, bloom, ssaoBlur), addWriteDep(swapchain)
+  addPass(Present)     → addReadDep(swapchain, PresentSrc)  [!linux]
+m_renderGraph.compile();   // 위상 정렬
+m_renderGraph.execute();   // sync2 배리어 자동 방출 + 실행
+```
+
+---
+
+## 8. 빌드 및 실행
 
 ```bash
 make build     # 빌드 + 셰이더 컴파일

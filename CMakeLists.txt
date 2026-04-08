@@ -186,6 +186,12 @@ if(NOT EMSCRIPTEN)
         # Phase 4.1: GPU Profiling
         src/utils/GpuProfiler.cpp
         src/utils/GpuProfiler.hpp
+        # Phase 2: Render Graph
+        src/rendering/graph/RenderGraph.cpp
+        src/rendering/graph/RenderGraph.hpp
+        src/rendering/graph/RenderGraphResource.hpp
+        src/rendering/graph/RenderPass.hpp
+        src/rendering/graph/BarrierBatch.hpp
     )
 
     target_include_directories(MiniEngine BEFORE PRIVATE

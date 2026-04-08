@@ -2531,43 +2531,8 @@ void Renderer::drawFrame() {
         return;
     }
 
-#if !defined(__EMSCRIPTEN__) && !defined(__linux__)
-    // Phase 9: Transition swapchain image from UNDEFINED to COLOR_ATTACHMENT_OPTIMAL
-    // Only needed for dynamic rendering on macOS/Windows
-    // Linux uses traditional render pass which handles layout transitions automatically
-    if (swapchain) {
-        // Use Vulkan-specific method to get current image for layout transition
-        auto* vulkanSwapchain = dynamic_cast<RHI::Vulkan::VulkanRHISwapchain*>(swapchain);
-        auto* vulkanEncoder = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
-        if (vulkanSwapchain && vulkanEncoder) {
-            vk::Image swapchainImage = vulkanSwapchain->getCurrentVkImage();
-            // Transition from UNDEFINED to COLOR_ATTACHMENT_OPTIMAL
-            vulkanEncoder->getCommandBuffer().pipelineBarrier(
-                vk::PipelineStageFlagBits::eTopOfPipe,
-                vk::PipelineStageFlagBits::eColorAttachmentOutput,
-                {},
-                {},
-                {},
-                vk::ImageMemoryBarrier{
-                    .srcAccessMask = {},
-                    .dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
-                    .oldLayout = vk::ImageLayout::eUndefined,
-                    .newLayout = vk::ImageLayout::eColorAttachmentOptimal,
-                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                    .image = swapchainImage,
-                    .subresourceRange = vk::ImageSubresourceRange{
-                        .aspectMask = vk::ImageAspectFlagBits::eColor,
-                        .baseMipLevel = 0,
-                        .levelCount = 1,
-                        .baseArrayLayer = 0,
-                        .layerCount = 1
-                    }
-                }
-            );
-        }
-    }
-#endif
+    // [Phase 2 RenderGraph] Swapchain UNDEFINED→ColorAttachment transition is now
+    // handled automatically by the render graph before the post-process pass.
 
     // Setup render pass
     rhi::RenderPassDesc renderPassDesc;
@@ -2773,244 +2738,219 @@ void Renderer::drawFrame() {
 #endif  // __EMSCRIPTEN__
 
 #ifndef __EMSCRIPTEN__
-    // -----------------------------------------------------------------------
-    // SSAO compute pass (Vulkan) — depth → AO → bilateral blur
-    // -----------------------------------------------------------------------
-    if (ssaoPipeline && ssaoBlurPipeline && ssaoBindGroup && ssaoBlurBindGroup) {
+    // =========================================================================
+    // Phase 2: Render Graph — SSAO, Bloom, PostProcess, Present transitions
+    // Barriers between passes are inferred automatically from read/write deps.
+    // =========================================================================
+    {
+        using RA = rendergraph::RGAccess;
+        using PT = rendergraph::RGPassType;
+        constexpr auto INVALID = rendergraph::RG_INVALID_RESOURCE;
+
         uint32_t W = rhiBridge->getSwapchain()->getWidth();
         uint32_t H = rhiBridge->getSwapchain()->getHeight();
-        // SSAO runs at half resolution
         uint32_t sW = std::max(1u, W / 2);
         uint32_t sH = std::max(1u, H / 2);
-
-        // Depth: DepthStencilAttachment → ShaderReadOnly for SSAO sampling
-        encoder->transitionTextureLayout(rhiDepthImage.get(),
-            rhi::TextureLayout::DepthStencilAttachment, rhi::TextureLayout::ShaderReadOnly);
-
-        // SSAO textures: Undefined → General for compute writes
-        encoder->transitionTextureLayout(ssaoTexture.get(),
-            rhi::TextureLayout::Undefined, rhi::TextureLayout::General);
-        encoder->transitionTextureLayout(ssaoBlurTexture.get(),
-            rhi::TextureLayout::Undefined, rhi::TextureLayout::General);
-
-        // SSAO compute pass (half-res)
-        {
-            auto ce = encoder->beginComputePass("SSAO");
-            ce->setPipeline(ssaoPipeline.get());
-            ce->setBindGroup(0, ssaoBindGroup.get());
-
-            struct SSAOPC {
-                glm::mat4 projection;
-                float radius;
-                float bias;
-                float near;
-                float far;
-                float invW;  // 1/ssaoW — converts half-res pixel to [0,1] UV
-                float invH;  // (depth texture is sampled at same normalized UV)
-                float pad[2];
-            };
-            SSAOPC pc;
-            pc.projection = projectionMatrix;
-            pc.radius = 0.5f;
-            pc.bias   = 0.025f;
-            pc.near   = 0.1f;
-            pc.far    = 1000.0f;
-            pc.invW   = 1.0f / static_cast<float>(sW);  // half-res inverse
-            pc.invH   = 1.0f / static_cast<float>(sH);
-            pc.pad[0] = pc.pad[1] = 0.0f;
-            ce->setPushConstants(ssaoPipelineLayout.get(), rhi::ShaderStage::Compute, 0, sizeof(pc), &pc);
-            ce->dispatch((sW + 7) / 8, (sH + 7) / 8, 1);
-            ce->end();
-        }
-
-        // SSAO raw → ShaderReadOnly for blur sampling
-        encoder->transitionTextureLayout(ssaoTexture.get(),
-            rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
-
-        // SSAO blur pass (half-res)
-        {
-            auto ce = encoder->beginComputePass("SSAO Blur");
-            ce->setPipeline(ssaoBlurPipeline.get());
-            ce->setBindGroup(0, ssaoBlurBindGroup.get());
-
-            struct SSAOBlurPC { float invW; float invH; float near; float far; float depthThreshold; float pad; };
-            SSAOBlurPC pc{ 1.0f / sW, 1.0f / sH, 0.1f, 1000.0f, 0.05f, 0.0f };
-            ce->setPushConstants(ssaoBlurPipelineLayout.get(), rhi::ShaderStage::Compute, 0, sizeof(pc), &pc);
-            ce->dispatch((sW + 7) / 8, (sH + 7) / 8, 1);
-            ce->end();
-        }
-
-        // Blurred SSAO → ShaderReadOnly for postprocess sampling
-        encoder->transitionTextureLayout(ssaoBlurTexture.get(),
-            rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
-        // Note: depth stays in ShaderReadOnly; next frame's HDR renderpass
-        // uses initialLayout=Undefined so no transition back is needed.
-    }
-
-    // -----------------------------------------------------------------------
-    // Bloom compute pass (Vulkan) — HDR → half-res bright-pass + 3× blur
-    // -----------------------------------------------------------------------
-    if (bloomThresholdPipeline && bloomBlurPipeline && hdrColorView && bloomTextureView) {
-        uint32_t W = rhiBridge->getSwapchain()->getWidth();
-        uint32_t H = rhiBridge->getSwapchain()->getHeight();
         uint32_t bW = std::max(1u, W / 2);
         uint32_t bH = std::max(1u, H / 2);
 
-        // Transition bloom textures to GENERAL for storage writes.
-        // Using Undefined as old layout discards previous content (valid since we overwrite fully).
-        encoder->transitionTextureLayout(bloomTexture.get(),
-            rhi::TextureLayout::Undefined, rhi::TextureLayout::General);
-        encoder->transitionTextureLayout(bloomPingTexture.get(),
-            rhi::TextureLayout::Undefined, rhi::TextureLayout::General);
+        m_renderGraph.reset();
 
-        // --- Threshold pass: HDR → bloomTexture ---
+        // Import states reflect what each texture is in AFTER the main render pass.
+        // depth → DepthStencilAttachment, HDR → ColorAttachment, others → Undefined.
+        rendergraph::RGTexState depthInitial = rendergraph::RenderGraph::inferTexState(RA::DepthWrite);
+        rendergraph::RGTexState hdrInitial   = rendergraph::RenderGraph::inferTexState(RA::ColorWrite);
+        rendergraph::RGTexState undefinedSt{};
+
+        auto rgHDR   = m_renderGraph.importTexture("HDR",   hdrColorTexture.get(), hdrInitial);
+        auto rgDepth = m_renderGraph.importTexture("Depth", rhiDepthImage.get(),   depthInitial);
+
+        // SSAO resources (optional)
+        rendergraph::RGResourceHandle rgSSAO    = INVALID;
+        rendergraph::RGResourceHandle rgSSAOBlur = INVALID;
+        if (ssaoPipeline && ssaoTexture && ssaoBlurTexture) {
+            rgSSAO     = m_renderGraph.importTexture("SSAO",    ssaoTexture.get(),    undefinedSt);
+            rgSSAOBlur = m_renderGraph.importTexture("SSAOBlur", ssaoBlurTexture.get(), undefinedSt);
+        }
+
+        // Bloom resources (optional)
+        rendergraph::RGResourceHandle rgBloom    = INVALID;
+        rendergraph::RGResourceHandle rgBloomPing = INVALID;
+        if (bloomThresholdPipeline && bloomTexture && bloomPingTexture) {
+            rgBloom    = m_renderGraph.importTexture("Bloom",    bloomTexture.get(),    undefinedSt);
+            rgBloomPing = m_renderGraph.importTexture("BloomPing", bloomPingTexture.get(), undefinedSt);
+        }
+
+        // Swapchain image (macOS/Windows only — Linux render pass handles transitions)
+        rendergraph::RGResourceHandle rgSwapchain = INVALID;
+#if !defined(__linux__)
+        if (auto* vulkanSC = dynamic_cast<RHI::Vulkan::VulkanRHISwapchain*>(swapchain)) {
+            vk::Image scImage = vulkanSC->getCurrentVkImage();
+            if (scImage) {
+                rgSwapchain = m_renderGraph.importSwapchainImage(
+                    "Swapchain", scImage, false, 1, 1, undefinedSt);
+            }
+        }
+#endif
+
+        // ---- SSAO passes ----
+        if (ssaoPipeline && ssaoBlurPipeline && ssaoBindGroup && ssaoBlurBindGroup
+            && rgSSAO != INVALID)
         {
-            auto computeEncoder = encoder->beginComputePass("Bloom Threshold");
-            computeEncoder->setPipeline(bloomThresholdPipeline.get());
-            computeEncoder->setBindGroup(0, bloomThresholdBindGroup.get());
-
-            struct BloomThresholdPC { float invW; float invH; float threshold; float knee; };
-            BloomThresholdPC thPC{ 1.0f / static_cast<float>(bW), 1.0f / static_cast<float>(bH), 1.0f, 0.5f };
-            computeEncoder->setPushConstants(bloomThresholdPipelineLayout.get(), rhi::ShaderStage::Compute, 0, sizeof(thPC), &thPC);
-            computeEncoder->dispatch((bW + 7) / 8, (bH + 7) / 8, 1);
-            computeEncoder->end();
-        }
-
-        // bloomTexture has been written (GENERAL) → transition to ShaderReadOnly for blur sampling
-        encoder->transitionTextureLayout(bloomTexture.get(),
-            rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
-
-        // --- 4× Dual Kawase blur passes (even count → final result in bloomTexture) ---
-        // pingPong[0]: reads bloomTexture (ShaderReadOnly), writes bloomPing (General)
-        // pingPong[1]: reads bloomPing (ShaderReadOnly), writes bloomTexture (General)
-        struct BloomBlurPC { float invW; float invH; int iter; float pad; };
-        for (int iter = 0; iter < 4; ++iter) {
-            int pingPongIdx = iter % 2;
-            {
-                auto computeEncoder = encoder->beginComputePass("Bloom Blur");
-                computeEncoder->setPipeline(bloomBlurPipeline.get());
-                computeEncoder->setBindGroup(0, bloomBlurBindGroups[pingPongIdx].get());
-                BloomBlurPC bPC{ 1.0f / static_cast<float>(bW), 1.0f / static_cast<float>(bH), iter, 0.0f };
-                computeEncoder->setPushConstants(bloomBlurPipelineLayout.get(), rhi::ShaderStage::Compute, 0, sizeof(bPC), &bPC);
-                computeEncoder->dispatch((bW + 7) / 8, (bH + 7) / 8, 1);
-                computeEncoder->end();
+            {   // SSAO pass
+                auto pass = m_renderGraph.addPass("SSAO", PT::Compute,
+                    [this, sW, sH](rhi::RHICommandEncoder* enc) {
+                        auto ce = enc->beginComputePass("SSAO");
+                        ce->setPipeline(ssaoPipeline.get());
+                        ce->setBindGroup(0, ssaoBindGroup.get());
+                        struct SSAOPC {
+                            glm::mat4 projection;
+                            float radius; float bias; float near; float far;
+                            float invW; float invH; float pad[2];
+                        };
+                        SSAOPC pc{};
+                        pc.projection = projectionMatrix;
+                        pc.radius = 0.5f; pc.bias = 0.025f;
+                        pc.near = 0.1f;   pc.far  = 1000.0f;
+                        pc.invW = 1.0f / static_cast<float>(sW);
+                        pc.invH = 1.0f / static_cast<float>(sH);
+                        ce->setPushConstants(ssaoPipelineLayout.get(),
+                            rhi::ShaderStage::Compute, 0, sizeof(pc), &pc);
+                        ce->dispatch((sW + 7) / 8, (sH + 7) / 8, 1);
+                        ce->end();
+                    });
+                m_renderGraph.addReadDep(pass, rgDepth, RA::SampleCompute);
+                m_renderGraph.addWriteDep(pass, rgSSAO,  RA::StorageWrite);
             }
-
-            if (iter < 3) {
-                // Transition written texture to ShaderReadOnly for next read,
-                // and the other texture to General for next write.
-                if (pingPongIdx == 0) {
-                    // Wrote bloomPing → make readable; bloomTexture → writable
-                    encoder->transitionTextureLayout(bloomPingTexture.get(),
-                        rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
-                    encoder->transitionTextureLayout(bloomTexture.get(),
-                        rhi::TextureLayout::ShaderReadOnly, rhi::TextureLayout::General);
-                } else {
-                    // Wrote bloomTexture → make readable; bloomPing → writable
-                    encoder->transitionTextureLayout(bloomTexture.get(),
-                        rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
-                    encoder->transitionTextureLayout(bloomPingTexture.get(),
-                        rhi::TextureLayout::ShaderReadOnly, rhi::TextureLayout::General);
-                }
-            } else {
-                // Final iteration (iter=3, pingPong=1): wrote bloomTexture
-                // Transition to ShaderReadOnly for postprocess sampling
-                encoder->transitionTextureLayout(bloomTexture.get(),
-                    rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
+            {   // SSAO blur pass
+                auto pass = m_renderGraph.addPass("SSAOBlur", PT::Compute,
+                    [this, sW, sH](rhi::RHICommandEncoder* enc) {
+                        auto ce = enc->beginComputePass("SSAO Blur");
+                        ce->setPipeline(ssaoBlurPipeline.get());
+                        ce->setBindGroup(0, ssaoBlurBindGroup.get());
+                        struct SSAOBlurPC { float invW; float invH; float near; float far; float depthThreshold; float pad; };
+                        SSAOBlurPC pc{ 1.0f / sW, 1.0f / sH, 0.1f, 1000.0f, 0.05f, 0.0f };
+                        ce->setPushConstants(ssaoBlurPipelineLayout.get(),
+                            rhi::ShaderStage::Compute, 0, sizeof(pc), &pc);
+                        ce->dispatch((sW + 7) / 8, (sH + 7) / 8, 1);
+                        ce->end();
+                    });
+                m_renderGraph.addReadDep(pass,  rgSSAO,    RA::SampleCompute);
+                m_renderGraph.addWriteDep(pass, rgSSAOBlur, RA::StorageWrite);
             }
         }
-    }
 
-    // -----------------------------------------------------------------------
-    // Post-process pass (Vulkan) — Tonemap + FXAA → swapchain
-    // -----------------------------------------------------------------------
-    if (postprocessPipeline && postprocessBindGroup) {
-        uint32_t W = rhiBridge->getSwapchain()->getWidth();
-        uint32_t H = rhiBridge->getSwapchain()->getHeight();
+        // ---- Bloom passes ----
+        if (bloomThresholdPipeline && bloomBlurPipeline && rgBloom != INVALID) {
+            {   // Bloom threshold pass (HDR → half-res bright-pass)
+                auto pass = m_renderGraph.addPass("BloomThreshold", PT::Compute,
+                    [this, bW, bH](rhi::RHICommandEncoder* enc) {
+                        auto ce = enc->beginComputePass("Bloom Threshold");
+                        ce->setPipeline(bloomThresholdPipeline.get());
+                        ce->setBindGroup(0, bloomThresholdBindGroup.get());
+                        struct BloomThresholdPC { float invW; float invH; float threshold; float knee; };
+                        BloomThresholdPC pc{ 1.0f / bW, 1.0f / bH, 1.0f, 0.5f };
+                        ce->setPushConstants(bloomThresholdPipelineLayout.get(),
+                            rhi::ShaderStage::Compute, 0, sizeof(pc), &pc);
+                        ce->dispatch((bW + 7) / 8, (bH + 7) / 8, 1);
+                        ce->end();
+                    });
+                m_renderGraph.addReadDep(pass, rgHDR,  RA::SampleCompute);
+                m_renderGraph.addWriteDep(pass, rgBloom, RA::StorageWrite);
+            }
 
-        rhi::RenderPassDesc ppDesc;
-        ppDesc.width  = W;
-        ppDesc.height = H;
-        ppDesc.label  = "PostProcess Pass";
+            // 4× Dual Kawase blur passes
+            // iter=0: reads rgBloom,    writes rgBloomPing
+            // iter=1: reads rgBloomPing, writes rgBloom
+            // iter=2: reads rgBloom,    writes rgBloomPing
+            // iter=3: reads rgBloomPing, writes rgBloom  ← final result in rgBloom
+            for (int iter = 0; iter < 4; ++iter) {
+                int pingPong = iter % 2;
+                rendergraph::RGResourceHandle readTex  = (pingPong == 0) ? rgBloom     : rgBloomPing;
+                rendergraph::RGResourceHandle writeTex = (pingPong == 0) ? rgBloomPing : rgBloom;
 
-        rhi::RenderPassColorAttachment ppColor;
-        ppColor.view      = swapchainView;
-        ppColor.loadOp    = rhi::LoadOp::DontCare;
-        ppColor.storeOp   = rhi::StoreOp::Store;
-        ppColor.clearValue = rhi::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
-        ppDesc.colorAttachments.push_back(ppColor);
+                auto pass = m_renderGraph.addPass("BloomBlur", PT::Compute,
+                    [this, bW, bH, iter, pingPong](rhi::RHICommandEncoder* enc) {
+                        auto ce = enc->beginComputePass("Bloom Blur");
+                        ce->setPipeline(bloomBlurPipeline.get());
+                        ce->setBindGroup(0, bloomBlurBindGroups[pingPong].get());
+                        struct BloomBlurPC { float invW; float invH; int blurIter; float pad; };
+                        BloomBlurPC pc{ 1.0f / bW, 1.0f / bH, iter, 0.0f };
+                        ce->setPushConstants(bloomBlurPipelineLayout.get(),
+                            rhi::ShaderStage::Compute, 0, sizeof(pc), &pc);
+                        ce->dispatch((bW + 7) / 8, (bH + 7) / 8, 1);
+                        ce->end();
+                    });
+                m_renderGraph.addReadDep(pass, readTex,  RA::SampleCompute);
+                m_renderGraph.addWriteDep(pass, writeTex, RA::StorageWrite);
+            }
+        }
 
+        // ---- Post-process pass (Tonemap + FXAA → swapchain) ----
+        if (postprocessPipeline && postprocessBindGroup) {
+            // Build ppDesc outside lambda so it can be captured by value
+            rhi::RenderPassDesc ppDesc;
+            ppDesc.width  = W;
+            ppDesc.height = H;
+            ppDesc.label  = "PostProcess Pass";
+            rhi::RenderPassColorAttachment ppColor;
+            ppColor.view       = swapchainView;
+            ppColor.loadOp     = rhi::LoadOp::DontCare;
+            ppColor.storeOp    = rhi::StoreOp::Store;
+            ppColor.clearValue = rhi::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
+            ppDesc.colorAttachments.push_back(ppColor);
 #ifdef __linux__
-        if (rhiVulkanSwapchain) {
-            uint32_t currentImageIndex = rhiBridge->getCurrentImageIndex();
-            VkRenderPass vkPP  = static_cast<VkRenderPass>(rhiVulkanSwapchain->getPostProcessRenderPass());
-            VkFramebuffer vkFB = static_cast<VkFramebuffer>(rhiVulkanSwapchain->getPostProcessFramebuffer(currentImageIndex));
-            ppDesc.nativeRenderPass   = reinterpret_cast<void*>(vkPP);
-            ppDesc.nativeFramebuffer  = reinterpret_cast<void*>(vkFB);
-        }
-#endif
-
-        auto ppPass = encoder->beginRenderPass(ppDesc);
-        if (ppPass) {
-            ppPass->setViewport(0.0f, 0.0f, static_cast<float>(W), static_cast<float>(H), 0.0f, 1.0f);
-            ppPass->setScissorRect(0, 0, W, H);
-            ppPass->setPipeline(postprocessPipeline.get());
-            ppPass->setBindGroup(0, postprocessBindGroup.get());
-
-            struct PostProcessPC { float texelW; float texelH; float bloomStr; float exposure; float aoStr; };
-            float effectiveAO = ssaoPipeline ? aoStrength : 0.0f;
-            PostProcessPC pc{ 1.0f / W, 1.0f / H, bloomStrength, exposure, effectiveAO };
-            ppPass->setPushConstants(postprocessPipelineLayout.get(), rhi::ShaderStage::Fragment, 0, sizeof(pc), &pc);
-            ppPass->draw(3);
-
-            // Render ImGui inside the postprocess pass (swapchain format — compatible with ImGui's render pass)
-            if (imguiManager) {
-                uint32_t imageIndex = rhiBridge->getCurrentImageIndex();
-                imguiManager->render(encoder.get(), imageIndex);
+            if (auto* rhiVulkanSC = dynamic_cast<RHI::Vulkan::VulkanRHISwapchain*>(swapchain)) {
+                uint32_t idx = rhiBridge->getCurrentImageIndex();
+                ppDesc.nativeRenderPass  = reinterpret_cast<void*>(
+                    static_cast<VkRenderPass>(rhiVulkanSC->getPostProcessRenderPass()));
+                ppDesc.nativeFramebuffer = reinterpret_cast<void*>(
+                    static_cast<VkFramebuffer>(rhiVulkanSC->getPostProcessFramebuffer(idx)));
             }
-
-            ppPass->end();
-        }
-    }
-#endif  // !__EMSCRIPTEN__
-
-#if !defined(__EMSCRIPTEN__) && !defined(__linux__)
-    // Phase 9: Transition swapchain image from COLOR_ATTACHMENT_OPTIMAL to PRESENT_SRC
-    // Only needed for dynamic rendering on macOS/Windows
-    // Linux uses traditional render pass which handles layout transitions automatically
-    if (swapchain) {
-        // Use Vulkan-specific method to get current image for layout transition
-        auto* vulkanSwapchain = dynamic_cast<RHI::Vulkan::VulkanRHISwapchain*>(swapchain);
-        auto* vulkanEncoder = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
-        if (vulkanSwapchain && vulkanEncoder) {
-            vk::Image swapchainImage = vulkanSwapchain->getCurrentVkImage();
-            // Transition from COLOR_ATTACHMENT_OPTIMAL to PRESENT_SRC
-            vulkanEncoder->getCommandBuffer().pipelineBarrier(
-                vk::PipelineStageFlagBits::eColorAttachmentOutput,
-                vk::PipelineStageFlagBits::eBottomOfPipe,
-                {},
-                {},
-                {},
-                vk::ImageMemoryBarrier{
-                    .srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
-                    .dstAccessMask = {},
-                    .oldLayout = vk::ImageLayout::eColorAttachmentOptimal,
-                    .newLayout = vk::ImageLayout::ePresentSrcKHR,
-                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                    .image = swapchainImage,
-                    .subresourceRange = vk::ImageSubresourceRange{
-                        .aspectMask = vk::ImageAspectFlagBits::eColor,
-                        .baseMipLevel = 0,
-                        .levelCount = 1,
-                        .baseArrayLayer = 0,
-                        .layerCount = 1
-                    }
-                }
-            );
-        }
-    }
 #endif
+            uint32_t imgIdx = rhiBridge->getCurrentImageIndex();
+
+            auto pass = m_renderGraph.addPass("PostProcess", PT::Render,
+                [this, ppDesc, W, H, frameIndex, imgIdx](rhi::RHICommandEncoder* enc) {
+                    auto ppPass = enc->beginRenderPass(ppDesc);
+                    if (ppPass) {
+                        ppPass->setViewport(0.0f, 0.0f, static_cast<float>(W),
+                            static_cast<float>(H), 0.0f, 1.0f);
+                        ppPass->setScissorRect(0, 0, W, H);
+                        ppPass->setPipeline(postprocessPipeline.get());
+                        ppPass->setBindGroup(0, postprocessBindGroup.get());
+                        struct PostProcessPC { float texelW; float texelH; float bloomStr; float exposure; float aoStr; };
+                        float effectiveAO = ssaoPipeline ? aoStrength : 0.0f;
+                        PostProcessPC pc{ 1.0f / W, 1.0f / H, bloomStrength, exposure, effectiveAO };
+                        ppPass->setPushConstants(postprocessPipelineLayout.get(),
+                            rhi::ShaderStage::Fragment, 0, sizeof(pc), &pc);
+                        ppPass->draw(3);
+                        if (imguiManager)
+                            imguiManager->render(enc, imgIdx);
+                        ppPass->end();
+                    }
+                });
+            m_renderGraph.addReadDep(pass, rgHDR, RA::SampleFragment);
+            if (rgBloom    != INVALID) m_renderGraph.addReadDep(pass, rgBloom,    RA::SampleFragment);
+            if (rgSSAOBlur != INVALID) m_renderGraph.addReadDep(pass, rgSSAOBlur, RA::SampleFragment);
+            if (rgSwapchain != INVALID) m_renderGraph.addWriteDep(pass, rgSwapchain, RA::ColorWrite);
+        }
+
+        // ---- Present transition (macOS/Windows — Linux render pass handles it) ----
+#if !defined(__linux__)
+        if (rgSwapchain != INVALID) {
+            auto pass = m_renderGraph.addPass("Present", PT::Render,
+                [](rhi::RHICommandEncoder*) { /* no-op: only triggers PresentSrc barrier */ });
+            m_renderGraph.addReadDep(pass, rgSwapchain, RA::PresentSrc);
+        }
+#endif
+
+        m_renderGraph.compile();
+        m_renderGraph.execute(encoder.get());
+    }
+    // =========================================================================
+
+#endif  // !__EMSCRIPTEN__ — render graph block
 
     // Finish command buffer
     auto commandBuffer = encoder->finish();

@@ -15,6 +15,7 @@ class RHIRenderPipeline;
 class RHIComputePipeline;
 class RHIBindGroup;
 class RHICommandBuffer;
+class RHIPipelineLayout;
 
 /**
  * @brief Buffer-to-texture copy info
