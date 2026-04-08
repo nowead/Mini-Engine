@@ -25,16 +25,19 @@ struct UniformBufferObject {
 	alignas(16) glm::mat4 model;
 	alignas(16) glm::mat4 view;
 	alignas(16) glm::mat4 proj;
-	// Phase 3.3: Lighting parameters
+	alignas(16) glm::mat4 invView;         // Inverse view matrix (for world-pos reconstruction)
+	alignas(16) glm::mat4 invProj;         // Inverse projection matrix
+	// Lighting parameters
 	alignas(16) glm::vec3 sunDirection;    // Normalized direction TO the sun
 	float sunIntensity;                     // Sun light intensity (default: 1.0)
 	alignas(16) glm::vec3 sunColor;        // Sun light color (default: warm white)
 	float ambientIntensity;                 // Ambient light intensity (default: 0.2)
 	alignas(16) glm::vec3 cameraPos;       // Camera position for specular
 	float exposure;                         // Tone mapping exposure (default: 1.0)
-	// Shadow mapping parameters
-	alignas(16) glm::mat4 lightSpaceMatrix; // Light view-projection matrix
+	// Phase 3 CSM: 4-cascade shadow map parameters
+	alignas(16) glm::mat4 lightSpaceMatrices[4]; // Per-cascade light view-projection matrices
+	alignas(16) glm::vec4 cascadeSplits;    // View-space far depths for cascade selection
 	alignas(16) glm::vec2 shadowMapSize;    // Shadow map dimensions (2048x2048)
-	float shadowBias;                        // Depth bias to prevent shadow acne (default: 0.005)
+	float shadowBias;                        // Depth bias to prevent shadow acne
 	float shadowStrength;                    // Shadow darkness (0.0-1.0, default: 0.5)
 };

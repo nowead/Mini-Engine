@@ -192,6 +192,11 @@ if(NOT EMSCRIPTEN)
         src/rendering/graph/RenderGraphResource.hpp
         src/rendering/graph/RenderPass.hpp
         src/rendering/graph/BarrierBatch.hpp
+        # Phase 3: Deferred Rendering
+        src/rendering/GBufferPass.cpp
+        src/rendering/GBufferPass.hpp
+        src/rendering/DeferredLightingPass.cpp
+        src/rendering/DeferredLightingPass.hpp
     )
 
     target_include_directories(MiniEngine BEFORE PRIVATE
@@ -433,6 +438,41 @@ if(NOT EMSCRIPTEN)
         COMMENT "Compiling ssao_blur.comp.glsl -> SPIR-V"
     )
 
+    # Phase 3: G-Buffer shaders
+    add_custom_command(
+        OUTPUT ${BUILDING_SHADER_DIR}/gbuffer.vert.spv
+        COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=vertex
+                -o ${BUILDING_SHADER_DIR}/gbuffer.vert.spv
+                ${BUILDING_SHADER_DIR}/gbuffer.vert.glsl
+        DEPENDS ${BUILDING_SHADER_DIR}/gbuffer.vert.glsl
+        COMMENT "Compiling gbuffer.vert.glsl -> SPIR-V"
+    )
+    add_custom_command(
+        OUTPUT ${BUILDING_SHADER_DIR}/gbuffer.frag.spv
+        COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=fragment
+                -o ${BUILDING_SHADER_DIR}/gbuffer.frag.spv
+                ${BUILDING_SHADER_DIR}/gbuffer.frag.glsl
+        DEPENDS ${BUILDING_SHADER_DIR}/gbuffer.frag.glsl
+        COMMENT "Compiling gbuffer.frag.glsl -> SPIR-V"
+    )
+    # Phase 3: Deferred lighting shaders
+    add_custom_command(
+        OUTPUT ${BUILDING_SHADER_DIR}/deferred_lighting.vert.spv
+        COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=vertex
+                -o ${BUILDING_SHADER_DIR}/deferred_lighting.vert.spv
+                ${BUILDING_SHADER_DIR}/deferred_lighting.vert.glsl
+        DEPENDS ${BUILDING_SHADER_DIR}/deferred_lighting.vert.glsl
+        COMMENT "Compiling deferred_lighting.vert.glsl -> SPIR-V"
+    )
+    add_custom_command(
+        OUTPUT ${BUILDING_SHADER_DIR}/deferred_lighting.frag.spv
+        COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=fragment
+                -o ${BUILDING_SHADER_DIR}/deferred_lighting.frag.spv
+                ${BUILDING_SHADER_DIR}/deferred_lighting.frag.glsl
+        DEPENDS ${BUILDING_SHADER_DIR}/deferred_lighting.frag.glsl
+        COMMENT "Compiling deferred_lighting.frag.glsl -> SPIR-V"
+    )
+
     add_custom_target(building_shaders DEPENDS
         ${BUILDING_SHADER_DIR}/building.vert.spv
         ${BUILDING_SHADER_DIR}/building.frag.spv
@@ -450,6 +490,10 @@ if(NOT EMSCRIPTEN)
         ${BUILDING_SHADER_DIR}/bloom_blur.comp.spv
         ${BUILDING_SHADER_DIR}/ssao.comp.spv
         ${BUILDING_SHADER_DIR}/ssao_blur.comp.spv
+        ${BUILDING_SHADER_DIR}/gbuffer.vert.spv
+        ${BUILDING_SHADER_DIR}/gbuffer.frag.spv
+        ${BUILDING_SHADER_DIR}/deferred_lighting.vert.spv
+        ${BUILDING_SHADER_DIR}/deferred_lighting.frag.spv
     )
     
     add_dependencies(MiniEngine building_shaders)

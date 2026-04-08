@@ -5,19 +5,22 @@ layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec2 inTexCoord;
 
-// Uniform buffer (camera matrices + lighting + shadow)
+// Uniform buffer (camera matrices + lighting + CSM shadow)
 layout(set = 0, binding = 0) uniform UniformBufferObject {
     mat4 model;
     mat4 view;
     mat4 proj;
+    mat4 invView;
+    mat4 invProj;
     vec3 sunDirection;
     float sunIntensity;
     vec3 sunColor;
     float ambientIntensity;
     vec3 cameraPos;
     float exposure;
-    // Shadow mapping
-    mat4 lightSpaceMatrix;
+    // Phase 3 CSM
+    mat4 lightSpaceMatrices[4];
+    vec4 cascadeSplits;
     vec2 shadowMapSize;
     float shadowBias;
     float shadowStrength;
@@ -63,7 +66,8 @@ void main() {
     fragColor = obj.colorAndMetallic.rgb;
     fragNormal = inNormal;
     fragWorldPos = worldPos;
-    fragPosLightSpace = ubo.lightSpaceMatrix * worldPos4;
+    // Use cascade 0 for vertex-stage light space (deferred path ignores this)
+    fragPosLightSpace = ubo.lightSpaceMatrices[0] * worldPos4;
     fragMetallic = obj.colorAndMetallic.a;
     fragRoughness = obj.roughnessAOPad.r;
     fragAO = obj.roughnessAOPad.g;

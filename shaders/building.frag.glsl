@@ -16,14 +16,17 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
     mat4 model;
     mat4 view;
     mat4 proj;
+    mat4 invView;
+    mat4 invProj;
     vec3 sunDirection;
     float sunIntensity;
     vec3 sunColor;
     float ambientIntensity;
     vec3 cameraPos;
     float exposure;
-    // Shadow mapping
-    mat4 lightSpaceMatrix;
+    // Phase 3 CSM
+    mat4 lightSpaceMatrices[4];
+    vec4 cascadeSplits;
     vec2 shadowMapSize;
     float shadowBias;
     float shadowStrength;

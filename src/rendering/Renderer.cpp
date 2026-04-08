@@ -81,7 +81,7 @@ Renderer::Renderer(GLFWwindow* window,
     // Phase 3.3: Create skybox renderer
     createSkyboxRenderer();
 
-    // Phase 3.3: Create shadow renderer
+    // Phase 3.3: Create shadow renderer (CSM)
     createShadowRenderer();
 
 #ifdef __EMSCRIPTEN__
@@ -97,6 +97,10 @@ Renderer::Renderer(GLFWwindow* window,
 
     // Phase 4.1: GPU Profiler
 #ifndef __EMSCRIPTEN__
+    // Phase 3: G-Buffer + Deferred Lighting (created after shadow + IBL are ready)
+    createGBufferPass();
+    createDeferredLightingPass();
+
     {
         auto* vulkanDevice = dynamic_cast<RHI::Vulkan::VulkanRHIDevice*>(rhiBridge->getDevice());
         if (vulkanDevice) {
@@ -1054,6 +1058,75 @@ bool Renderer::loadEnvironmentMap(const std::string& hdrPath) {
 
 // ============================================================================
 // Phase 2.2: GPU Frustum Culling Pipeline
+// ============================================================================
+// Phase 3: G-Buffer + Deferred Lighting
+// ============================================================================
+
+#ifndef __EMSCRIPTEN__
+void Renderer::createGBufferPass() {
+    if (!rhiBridge || !rhiBridge->isReady()) return;
+    auto* device = rhiBridge->getDevice();
+    if (!device) return;
+
+    uint32_t W = rhiBridge->getSwapchain()->getWidth();
+    uint32_t H = rhiBridge->getSwapchain()->getHeight();
+
+    gBufferPass = std::make_unique<rendering::GBufferPass>(device);
+    if (!gBufferPass->initialize(W, H,
+                                  buildingBindGroupLayout.get(),
+                                  ssboBindGroupLayout.get(),
+                                  rhiDepthImageView.get())) {
+        LOG_ERROR("Renderer") << "GBufferPass initialization failed";
+        gBufferPass.reset();
+    } else {
+        LOG_INFO("Renderer") << "GBufferPass initialized";
+    }
+}
+
+void Renderer::createDeferredLightingPass() {
+    if (!rhiBridge || !rhiBridge->isReady()) return;
+    if (!gBufferPass || !gBufferPass->isInitialized()) return;
+    if (!shadowRenderer || !shadowRenderer->isInitialized()) return;
+    if (!iblManager || !iblManager->isInitialized()) return;
+
+    auto* device = rhiBridge->getDevice();
+    if (!device) return;
+
+    // Collect per-frame UBO pointers
+    std::array<rhi::RHIBuffer*, rendering::DeferredLightingPass::MAX_FRAMES_IN_FLIGHT> ubos{};
+    for (size_t i = 0; i < rendering::DeferredLightingPass::MAX_FRAMES_IN_FLIGHT && i < rhiUniformBuffers.size(); ++i)
+        ubos[i] = rhiUniformBuffers[i].get();
+
+    void* nativeRenderPass = nullptr;
+#ifdef __linux__
+    auto* rhiVulkanSC = dynamic_cast<RHI::Vulkan::VulkanRHISwapchain*>(rhiBridge->getSwapchain());
+    if (rhiVulkanSC)
+        nativeRenderPass = reinterpret_cast<void*>(static_cast<VkRenderPass>(rhiVulkanSC->getHDRRenderPass()));
+#endif
+
+    deferredLightingPass = std::make_unique<rendering::DeferredLightingPass>(device);
+    if (!deferredLightingPass->initialize(
+            ubos, sizeof(UniformBufferObject),
+            gBufferPass->getGBuffer0View(),
+            gBufferPass->getGBuffer1View(),
+            gBufferPass->getGBuffer2View(),
+            rhiDepthImageView.get(),
+            gBufferPass->getSampler(),
+            shadowRenderer->getShadowMapView(),
+            shadowRenderer->getShadowSampler(),
+            iblManager->getIrradianceView(),
+            iblManager->getPrefilteredView(),
+            iblManager->getBRDFLutView(),
+            iblManager->getSampler(),
+            nativeRenderPass)) {
+        LOG_ERROR("Renderer") << "DeferredLightingPass initialization failed";
+        deferredLightingPass.reset();
+    } else {
+        LOG_INFO("Renderer") << "DeferredLightingPass initialized";
+    }
+}
+#endif // !__EMSCRIPTEN__
+
 // ============================================================================
 
 void Renderer::createCullingPipeline() {
@@ -2286,26 +2359,30 @@ void Renderer::updateRHIUniformBuffer(uint32_t currentImage) {
     }
 
     UniformBufferObject ubo{};
-    ubo.model = glm::mat4(1.0f);  // Identity matrix (no model transform)
-    ubo.view = viewMatrix;
-    ubo.proj = projectionMatrix;
+    ubo.model   = glm::mat4(1.0f);
+    ubo.view    = viewMatrix;
+    ubo.proj    = projectionMatrix;
+    ubo.invView = glm::inverse(viewMatrix);
+    ubo.invProj = glm::inverse(projectionMatrix);
 
-    // Phase 3.3: Lighting parameters
-    ubo.sunDirection = sunDirection;
-    ubo.sunIntensity = sunIntensity;
-    ubo.sunColor = sunColor;
+    ubo.sunDirection     = sunDirection;
+    ubo.sunIntensity     = sunIntensity;
+    ubo.sunColor         = sunColor;
     ubo.ambientIntensity = ambientIntensity;
-    ubo.cameraPos = cameraPosition;
-    ubo.exposure = exposure;
+    ubo.cameraPos        = cameraPosition;
+    ubo.exposure         = exposure;
 
-    // Phase 3.3: Shadow mapping parameters
+    // Phase 3: CSM shadow parameters
     if (shadowRenderer && shadowRenderer->isInitialized()) {
-        ubo.lightSpaceMatrix = shadowRenderer->getLightSpaceMatrix();
+        for (uint32_t i = 0; i < rendering::ShadowRenderer::NUM_CASCADES; ++i)
+            ubo.lightSpaceMatrices[i] = shadowRenderer->getLightSpaceMatrix(i);
+        ubo.cascadeSplits = shadowRenderer->getCascadeSplits();
     } else {
-        ubo.lightSpaceMatrix = glm::mat4(1.0f);
+        for (auto& m : ubo.lightSpaceMatrices) m = glm::mat4(1.0f);
+        ubo.cascadeSplits = glm::vec4(10.f, 50.f, 200.f, 1000.f);
     }
-    ubo.shadowMapSize = glm::vec2(rendering::ShadowRenderer::SHADOW_MAP_SIZE);
-    ubo.shadowBias = shadowBias;
+    ubo.shadowMapSize  = glm::vec2(rendering::ShadowRenderer::SHADOW_MAP_SIZE);
+    ubo.shadowBias     = shadowBias;
     ubo.shadowStrength = shadowStrength;
 
     // Copy to RHI uniform buffer - always use write() to ensure proper flush to GPU
@@ -2348,12 +2425,11 @@ void Renderer::drawFrame() {
 
     uint32_t frameIndex = rhiBridge->getCurrentFrameIndex();
 
-    // Step 2: Update shadow light matrix (before uniform buffer update)
+    // Step 2: Update CSM light matrices (before uniform buffer update)
     if (shadowRenderer && shadowRenderer->isInitialized()) {
-        // Use fixed scene center at origin - shadows should only depend on sun direction
-        // not on camera position. This prevents shadows from shifting when camera moves.
-        glm::vec3 sceneCenter = glm::vec3(0.0f, 0.0f, 0.0f);
-        shadowRenderer->updateLightMatrix(sunDirection, sceneCenter, shadowSceneRadius);
+        shadowRenderer->updateLightMatrices(sunDirection, cameraPosition,
+                                            viewMatrix, projectionMatrix,
+                                            0.1f, shadowSceneRadius);
     }
 
     // Step 3: Update uniform buffer with RHI (includes shadow matrix)
@@ -2433,87 +2509,72 @@ void Renderer::drawFrame() {
                     GpuProfiler::TimerId::ShadowPass);
             }
 #endif
+            // Phase 3: CSM — 4 cascade shadow passes
             if (shadowRenderer && shadowRenderer->isInitialized() && instanceCount > 1) {
 #if !defined(__EMSCRIPTEN__) && !defined(__linux__)
-                // macOS/Windows: Transition shadow map to depth attachment for writing
-                // Linux: Shadow render pass handles layout transitions automatically
+                // macOS/Windows: Transition shadow array to depth attachment (all 4 layers)
                 auto* vulkanEncoder = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
                 auto* shadowTexture = dynamic_cast<RHI::Vulkan::VulkanRHITexture*>(shadowRenderer->getShadowMapTexture());
                 if (vulkanEncoder && shadowTexture) {
                     vulkanEncoder->getCommandBuffer().pipelineBarrier(
                         vk::PipelineStageFlagBits::eFragmentShader | vk::PipelineStageFlagBits::eEarlyFragmentTests,
                         vk::PipelineStageFlagBits::eEarlyFragmentTests,
-                        {},
-                        {},
-                        {},
+                        {}, {}, {},
                         vk::ImageMemoryBarrier{
-                            .srcAccessMask = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eDepthStencilAttachmentRead,
-                            .dstAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite,
-                            .oldLayout = vk::ImageLayout::eUndefined,
-                            .newLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
+                            .srcAccessMask       = vk::AccessFlagBits::eShaderRead,
+                            .dstAccessMask       = vk::AccessFlagBits::eDepthStencilAttachmentWrite,
+                            .oldLayout           = vk::ImageLayout::eUndefined,
+                            .newLayout           = vk::ImageLayout::eDepthStencilAttachmentOptimal,
                             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                            .image = shadowTexture->getVkImage(),
-                            .subresourceRange = vk::ImageSubresourceRange{
-                                .aspectMask = vk::ImageAspectFlagBits::eDepth,
-                                .baseMipLevel = 0,
-                                .levelCount = 1,
-                                .baseArrayLayer = 0,
-                                .layerCount = 1
+                            .image               = shadowTexture->getVkImage(),
+                            .subresourceRange    = vk::ImageSubresourceRange{
+                                vk::ImageAspectFlagBits::eDepth, 0, 1, 0,
+                                rendering::ShadowRenderer::NUM_CASCADES
                             }
                         }
                     );
                 }
-#endif  // !__EMSCRIPTEN__ && !__linux__
+#endif
 
-                auto* shadowPass = shadowRenderer->beginShadowPass(encoder.get(), frameIndex);
-                if (shadowPass) {
-                    // Bind SSBO (set 1) for per-object data
-                    if (ssboBindGroups[frameIndex]) {
-                        shadowPass->setBindGroup(1, ssboBindGroups[frameIndex].get());
+                uint32_t buildingCount = instanceCount - 1;
+                for (uint32_t cascade = 0; cascade < rendering::ShadowRenderer::NUM_CASCADES; ++cascade) {
+                    auto* shadowPass = shadowRenderer->beginShadowPass(encoder.get(), frameIndex, cascade);
+                    if (shadowPass) {
+                        if (ssboBindGroups[frameIndex])
+                            shadowPass->setBindGroup(1, ssboBindGroups[frameIndex].get());
+                        shadowPass->setVertexBuffer(0, mesh->getVertexBuffer(), 0);
+                        shadowPass->setIndexBuffer(mesh->getIndexBuffer(), rhi::IndexFormat::Uint32, 0);
+                        shadowPass->drawIndexed(meshIndexCount, buildingCount, 0, 0, 1);
+                        shadowRenderer->endShadowPass();
                     }
-
-                    shadowPass->setVertexBuffer(0, mesh->getVertexBuffer(), 0);
-                    shadowPass->setIndexBuffer(mesh->getIndexBuffer(), rhi::IndexFormat::Uint32, 0);
-
-                    // Draw buildings only (skip first instance which is the ground plane)
-                    uint32_t buildingCount = instanceCount - 1;
-                    shadowPass->drawIndexed(meshIndexCount, buildingCount, 0, 0, 1);
-
-                    shadowRenderer->endShadowPass();
+                }
 
 #if !defined(__EMSCRIPTEN__) && !defined(__linux__)
-                    // macOS/Windows: Transition shadow map from depth attachment to shader read
-                    // Linux: Shadow render pass finalLayout handles this transition automatically
-                    auto* vulkanEncoderPost = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
-                    auto* shadowTexturePost = dynamic_cast<RHI::Vulkan::VulkanRHITexture*>(shadowRenderer->getShadowMapTexture());
-                    if (vulkanEncoderPost && shadowTexturePost) {
-                        vulkanEncoderPost->getCommandBuffer().pipelineBarrier(
-                            vk::PipelineStageFlagBits::eLateFragmentTests,
-                            vk::PipelineStageFlagBits::eFragmentShader,
-                            {},
-                            {},
-                            {},
-                            vk::ImageMemoryBarrier{
-                                .srcAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite,
-                                .dstAccessMask = vk::AccessFlagBits::eShaderRead,
-                                .oldLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
-                                .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-                                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                                .image = shadowTexturePost->getVkImage(),
-                                .subresourceRange = vk::ImageSubresourceRange{
-                                    .aspectMask = vk::ImageAspectFlagBits::eDepth,
-                                    .baseMipLevel = 0,
-                                    .levelCount = 1,
-                                    .baseArrayLayer = 0,
-                                    .layerCount = 1
-                                }
+                // macOS/Windows: Transition shadow array to shader read
+                auto* vulkanEncoderPost = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
+                auto* shadowTexturePost = dynamic_cast<RHI::Vulkan::VulkanRHITexture*>(shadowRenderer->getShadowMapTexture());
+                if (vulkanEncoderPost && shadowTexturePost) {
+                    vulkanEncoderPost->getCommandBuffer().pipelineBarrier(
+                        vk::PipelineStageFlagBits::eLateFragmentTests,
+                        vk::PipelineStageFlagBits::eFragmentShader,
+                        {}, {}, {},
+                        vk::ImageMemoryBarrier{
+                            .srcAccessMask       = vk::AccessFlagBits::eDepthStencilAttachmentWrite,
+                            .dstAccessMask       = vk::AccessFlagBits::eShaderRead,
+                            .oldLayout           = vk::ImageLayout::eDepthStencilAttachmentOptimal,
+                            .newLayout           = vk::ImageLayout::eShaderReadOnlyOptimal,
+                            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                            .image               = shadowTexturePost->getVkImage(),
+                            .subresourceRange    = vk::ImageSubresourceRange{
+                                vk::ImageAspectFlagBits::eDepth, 0, 1, 0,
+                                rendering::ShadowRenderer::NUM_CASCADES
                             }
-                        );
-                    }
-#endif
+                        }
+                    );
                 }
+#endif
             }
 #ifndef __EMSCRIPTEN__
             if (gpuProfiler) {
@@ -2624,51 +2685,65 @@ void Renderer::drawFrame() {
             }
         }
 
-        // Phase 2.1: Render instanced data using SSBO-based pipeline
-        if (pendingInstancedData && pendingInstancedData->instanceCount > 0 && buildingPipeline) {
-            auto* mesh = pendingInstancedData->mesh;
-            auto* objectBuffer = pendingInstancedData->objectBuffer;
-
-            if (mesh && mesh->hasData() && objectBuffer) {
-                // Switch to building pipeline
-                renderPass->setPipeline(buildingPipeline.get());
-
-                // Bind set 0: UBO + textures
-                if (frameIndex < buildingBindGroups.size() && buildingBindGroups[frameIndex]) {
-                    renderPass->setBindGroup(0, buildingBindGroups[frameIndex].get());
-                }
-
-                // Bind set 1: SSBO with per-object data
-                if (ssboBindGroups[frameIndex]) {
-                    renderPass->setBindGroup(1, ssboBindGroups[frameIndex].get());
-                }
-
-                // Bind vertex buffer only (no instance buffer — data comes from SSBO)
-                renderPass->setVertexBuffer(0, mesh->getVertexBuffer(), 0);
-                renderPass->setIndexBuffer(mesh->getIndexBuffer(), rhi::IndexFormat::Uint32, 0);
-
-                // Phase 2.2: Draw via indirect buffer (GPU frustum culling sets instanceCount)
-                renderPass->drawIndexedIndirect(indirectDrawBuffers[frameIndex].get(), 0);
-            }
-
-            // Clear pending data after rendering
-            pendingInstancedData.reset();
-        }
-
-        // Phase 3.1: Render particles (after opaque geometry, before ImGui)
-        if (particleRenderer && pendingParticleSystem) {
-            // Update particle renderer camera
-            particleRenderer->updateCamera(viewMatrix, projectionMatrix);
-
-            // Render particles
-            particleRenderer->render(renderPass.get(), *pendingParticleSystem, frameIndex);
-
-            // Clear pending particle system
-            pendingParticleSystem = nullptr;
-        }
+        // Phase 3: In deferred path, geometry is in GBufferPass — skip here.
+        // Keep skybox only in this pass (it writes to HDR as background).
+        // Particles still go here (forward, after deferred lighting — handled below).
 
         renderPass->end();
     }
+
+    // Phase 3: G-Buffer pass (geometry → G-Buffers + depth, before render graph)
+#ifndef __EMSCRIPTEN__
+    if (gBufferPass && gBufferPass->isInitialized()
+        && pendingInstancedData && pendingInstancedData->instanceCount > 0) {
+        auto* mesh         = pendingInstancedData->mesh;
+        auto* objectBuffer = pendingInstancedData->objectBuffer;
+        uint32_t W = rhiBridge->getSwapchain()->getWidth();
+        uint32_t H = rhiBridge->getSwapchain()->getHeight();
+
+        if (mesh && mesh->hasData() && objectBuffer) {
+#if !defined(__linux__)
+            // macOS/Windows: transition G-Buffers Undefined → ColorAttachment
+            auto* ve = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
+            if (ve) {
+                auto barrierUndef = [&](rhi::RHITexture* tex) {
+                    auto* vt = dynamic_cast<RHI::Vulkan::VulkanRHITexture*>(tex);
+                    if (!vt) return;
+                    ve->getCommandBuffer().pipelineBarrier(
+                        vk::PipelineStageFlagBits::eTopOfPipe,
+                        vk::PipelineStageFlagBits::eColorAttachmentOutput,
+                        {}, {}, {},
+                        vk::ImageMemoryBarrier{
+                            .srcAccessMask = {}, .dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
+                            .oldLayout = vk::ImageLayout::eUndefined,
+                            .newLayout = vk::ImageLayout::eColorAttachmentOptimal,
+                            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                            .image = vt->getVkImage(),
+                            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}
+                        });
+                };
+                barrierUndef(gBufferPass->getGBuffer0());
+                barrierUndef(gBufferPass->getGBuffer1());
+                barrierUndef(gBufferPass->getGBuffer2());
+            }
+#endif
+            rhi::RHIBindGroup* bg0 = (frameIndex < buildingBindGroups.size())
+                                     ? buildingBindGroups[frameIndex].get() : nullptr;
+            gBufferPass->execute(encoder.get(),
+                                 bg0,
+                                 ssboBindGroups[frameIndex].get(),
+                                 mesh->getVertexBuffer(),
+                                 mesh->getIndexBuffer(),
+                                 indirectDrawBuffers[frameIndex].get(),
+                                 W, H);
+        }
+        pendingInstancedData.reset();
+    }
+#else
+    // EMSCRIPTEN: forward rendering path (G-Buffer not used on WebGPU)
+    if (pendingInstancedData) pendingInstancedData.reset();
+#endif
 
     // Phase 4.1: GPU Profiling — end main render pass timer
 #ifndef __EMSCRIPTEN__
@@ -2756,14 +2831,26 @@ void Renderer::drawFrame() {
 
         m_renderGraph.reset();
 
-        // Import states reflect what each texture is in AFTER the main render pass.
-        // depth → DepthStencilAttachment, HDR → ColorAttachment, others → Undefined.
+        // Import states reflect what each texture is in after the manual passes.
+        // Phase 3: HDR → ColorAttachment (skybox pass), Depth → DepthStencilAttachment (G-Buffer)
+        // G-Buffers → ColorAttachment (G-Buffer pass), others → Undefined.
         rendergraph::RGTexState depthInitial = rendergraph::RenderGraph::inferTexState(RA::DepthWrite);
         rendergraph::RGTexState hdrInitial   = rendergraph::RenderGraph::inferTexState(RA::ColorWrite);
+        rendergraph::RGTexState gbufInitial  = rendergraph::RenderGraph::inferTexState(RA::ColorWrite);
         rendergraph::RGTexState undefinedSt{};
 
         auto rgHDR   = m_renderGraph.importTexture("HDR",   hdrColorTexture.get(), hdrInitial);
         auto rgDepth = m_renderGraph.importTexture("Depth", rhiDepthImage.get(),   depthInitial);
+
+        // Phase 3: G-Buffer resources (optional, Vulkan deferred path only)
+        rendergraph::RGResourceHandle rgGBuffer0 = INVALID;
+        rendergraph::RGResourceHandle rgGBuffer1 = INVALID;
+        rendergraph::RGResourceHandle rgGBuffer2 = INVALID;
+        if (gBufferPass && gBufferPass->isInitialized()) {
+            rgGBuffer0 = m_renderGraph.importTexture("GBuffer0", gBufferPass->getGBuffer0(), gbufInitial);
+            rgGBuffer1 = m_renderGraph.importTexture("GBuffer1", gBufferPass->getGBuffer1(), gbufInitial);
+            rgGBuffer2 = m_renderGraph.importTexture("GBuffer2", gBufferPass->getGBuffer2(), gbufInitial);
+        }
 
         // SSAO resources (optional)
         rendergraph::RGResourceHandle rgSSAO    = INVALID;
@@ -2838,6 +2925,53 @@ void Renderer::drawFrame() {
                 m_renderGraph.addReadDep(pass,  rgSSAO,    RA::SampleCompute);
                 m_renderGraph.addWriteDep(pass, rgSSAOBlur, RA::StorageWrite);
             }
+        }
+
+        // ---- Phase 3: Deferred Lighting pass (G-Buffers → HDR, after SSAO) ----
+        if (deferredLightingPass && deferredLightingPass->isInitialized()
+            && rgGBuffer0 != INVALID) {
+            rhi::RenderPassDesc dlDesc;
+            dlDesc.width  = W;
+            dlDesc.height = H;
+            dlDesc.label  = "DeferredLighting";
+
+            rhi::RenderPassColorAttachment dlColor;
+            dlColor.view       = hdrColorView.get();
+            dlColor.loadOp     = rhi::LoadOp::Load;   // preserve skybox already in HDR
+            dlColor.storeOp    = rhi::StoreOp::Store;
+            dlColor.clearValue = rhi::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
+            dlDesc.colorAttachments.push_back(dlColor);
+
+#ifdef __linux__
+            if (auto* rhiVulkanSC = dynamic_cast<RHI::Vulkan::VulkanRHISwapchain*>(swapchain)) {
+                dlDesc.nativeRenderPass  = reinterpret_cast<void*>(
+                    static_cast<VkRenderPass>(rhiVulkanSC->getHDRRenderPass()));
+                dlDesc.nativeFramebuffer = reinterpret_cast<void*>(
+                    static_cast<VkFramebuffer>(rhiVulkanSC->getHDRFramebuffer()));
+            }
+#endif
+
+            uint32_t dlFI = frameIndex;
+            auto pass = m_renderGraph.addPass("DeferredLighting", PT::Render,
+                [this, dlDesc, W, H, dlFI](rhi::RHICommandEncoder* enc) {
+                    auto dlPass = enc->beginRenderPass(dlDesc);
+                    if (dlPass) {
+                        dlPass->setViewport(0.0f, 0.0f, float(W), float(H), 0.0f, 1.0f);
+                        dlPass->setScissorRect(0, 0, W, H);
+                        dlPass->setPipeline(deferredLightingPass->getPipeline());
+                        dlPass->setBindGroup(0, deferredLightingPass->getBindGroup(dlFI));
+                        dlPass->draw(3);  // Fullscreen triangle
+                        dlPass->end();
+                    }
+                });
+            // Reads
+            m_renderGraph.addReadDep(pass, rgGBuffer0, RA::SampleFragment);
+            m_renderGraph.addReadDep(pass, rgGBuffer1, RA::SampleFragment);
+            m_renderGraph.addReadDep(pass, rgGBuffer2, RA::SampleFragment);
+            m_renderGraph.addReadDep(pass, rgDepth,    RA::SampleFragment);
+            if (rgSSAOBlur != INVALID) m_renderGraph.addReadDep(pass, rgSSAOBlur, RA::SampleFragment);
+            // Write HDR
+            m_renderGraph.addWriteDep(pass, rgHDR, RA::ColorWrite);
         }
 
         // ---- Bloom passes ----

@@ -13,6 +13,10 @@
 #include "src/rendering/SkyboxRenderer.hpp"
 #include "src/rendering/ShadowRenderer.hpp"
 #include "src/rendering/IBLManager.hpp"
+#ifndef __EMSCRIPTEN__
+#include "src/rendering/GBufferPass.hpp"
+#include "src/rendering/DeferredLightingPass.hpp"
+#endif
 
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
@@ -376,7 +380,7 @@ private:
     // Phase 3.3: Skybox rendering
     std::unique_ptr<rendering::SkyboxRenderer> skyboxRenderer;
 
-    // Phase 3.3: Shadow mapping
+    // Phase 3.3: Shadow mapping (CSM)
     std::unique_ptr<rendering::ShadowRenderer> shadowRenderer;
     // Phase 1.2: IBL
     std::unique_ptr<rendering::IBLManager> iblManager;
@@ -390,6 +394,10 @@ private:
 #ifndef __EMSCRIPTEN__
     std::unique_ptr<class GpuProfiler> gpuProfiler;
     rendergraph::RenderGraph m_renderGraph;
+
+    // Phase 3: Deferred Rendering
+    std::unique_ptr<rendering::GBufferPass>          gBufferPass;
+    std::unique_ptr<rendering::DeferredLightingPass> deferredLightingPass;
 #endif
 
     // RHI initialization methods (Phase 4)
@@ -401,8 +409,12 @@ private:
     void createBuildingPipeline();  // Building instancing pipeline
     void createParticleRenderer();  // Particle rendering pipeline
     void createSkyboxRenderer();    // Phase 3.3: Skybox rendering
-    void createShadowRenderer();    // Phase 3.3: Shadow mapping
+    void createShadowRenderer();    // Phase 3.3: Shadow mapping (CSM)
     void createIBL();               // Phase 1.2: IBL initialization
+#ifndef __EMSCRIPTEN__
+    void createGBufferPass();       // Phase 3: G-Buffer geometry pass
+    void createDeferredLightingPass(); // Phase 3: Deferred lighting
+#endif
     void createCullingPipeline();   // Phase 2.2: GPU frustum culling
     void createHDRRenderTarget();   // HDR offscreen texture (all platforms)
 #ifdef __EMSCRIPTEN__
