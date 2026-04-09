@@ -49,6 +49,7 @@ layout(location = 3) out float fragMetallic;
 layout(location = 4) out float fragRoughness;
 layout(location = 5) out float fragAO;
 layout(location = 6) out vec3 fragAlbedo;
+layout(location = 7) out flat uint fragAlbedoIndex;  // Phase 4: bindless texture slot
 
 void main() {
     uint actualIndex = visibleIndices.indices[gl_InstanceIndex];
@@ -66,6 +67,10 @@ void main() {
     fragMetallic  = obj.colorAndMetallic.a;
     fragRoughness = obj.roughnessAOPad.r;
     fragAO        = obj.roughnessAOPad.g;
+
+    // Phase 4: roughnessAOPad.b holds the bindless texture index as a float-encoded uint.
+    // 0xFFFFFFFF (cast as float: ~3.4e38) indicates "no texture → use procedural albedo".
+    fragAlbedoIndex = floatBitsToUint(obj.roughnessAOPad.b);
 
     gl_Position = ubo.proj * ubo.view * ubo.model * worldPos4;
 }

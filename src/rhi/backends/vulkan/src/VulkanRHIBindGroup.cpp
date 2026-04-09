@@ -26,7 +26,10 @@ VulkanRHIBindGroupLayout::VulkanRHIBindGroupLayout(VulkanRHIDevice* device, cons
     for (const auto& entry : desc.entries) {
         vk::DescriptorSetLayoutBinding binding;
         binding.binding = entry.binding;
-        binding.descriptorCount = 1;  // Single descriptor per binding
+        // Phase 4: BindlessTextures uses a runtime-size array; all others are single descriptors
+        binding.descriptorCount = (entry.type == rhi::BindingType::BindlessTextures)
+            ? entry.descriptorCount
+            : 1;
 
         // Convert binding type to Vulkan descriptor type
         switch (entry.type) {
@@ -54,6 +57,13 @@ VulkanRHIBindGroupLayout::VulkanRHIBindGroupLayout(VulkanRHIDevice* device, cons
                 break;
             case rhi::BindingType::StorageTexture:
                 binding.descriptorType = vk::DescriptorType::eStorageImage;
+                break;
+            case rhi::BindingType::BindlessTextures:
+                // Phase 4: Bindless texture array — combined image+sampler for nonuniformEXT indexing.
+                // The layout itself is created here; the actual descriptor set with
+                // PARTIALLY_BOUND + UPDATE_AFTER_BIND is managed by BindlessTextureManager
+                // using its own UPDATE_AFTER_BIND pool.
+                binding.descriptorType = vk::DescriptorType::eCombinedImageSampler;
                 break;
             default:
                 throw std::runtime_error("Unsupported binding type");

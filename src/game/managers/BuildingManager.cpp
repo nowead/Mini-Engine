@@ -3,6 +3,7 @@
 #include "src/utils/Vertex.hpp"
 #include "src/utils/Logger.hpp"
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/packing.hpp>   // glm::uintBitsToFloat
 #include <chrono>
 #include <algorithm>
 
@@ -417,7 +418,9 @@ void BuildingManager::updateObjectBuffer() {
         ground.boundingBoxMax.y = pos.y + scale.y;
         // Material: dark asphalt
         ground.colorAndMetallic = glm::vec4(0.35f, 0.35f, 0.38f, 0.0f);
-        ground.roughnessAOPad = glm::vec4(0.92f, 1.0f, 0.0f, 0.0f);
+        // Phase 4: .b = bindless texture index 0 (concrete/asphalt material), or INVALID if disabled
+        ground.roughnessAOPad = glm::vec4(0.92f, 1.0f,
+            m_useBindlessTextures ? glm::uintBitsToFloat(0u) : glm::uintBitsToFloat(0xFFFFFFFFu), 0.0f);
         objectData.push_back(ground);
     }
 
@@ -438,7 +441,10 @@ void BuildingManager::updateObjectBuffer() {
         // Material
         glm::vec4 colorVec4 = building.getColor();
         obj.colorAndMetallic = glm::vec4(colorVec4.r, colorVec4.g, colorVec4.b, 0.3f);  // metallic=0.3
-        obj.roughnessAOPad = glm::vec4(0.4f, 1.0f, 0.0f, 0.0f);  // roughness=0.4, ao=1.0
+        // Phase 4: .b = bindless texture index 1 (metal) or 2 (glass), or INVALID if disabled
+        uint32_t matIdx = (scale.y > 60.0f) ? 2u : 1u;
+        obj.roughnessAOPad = glm::vec4(0.4f, 1.0f,
+            m_useBindlessTextures ? glm::uintBitsToFloat(matIdx) : glm::uintBitsToFloat(0xFFFFFFFFu), 0.0f);
 
         objectData.push_back(obj);
     }

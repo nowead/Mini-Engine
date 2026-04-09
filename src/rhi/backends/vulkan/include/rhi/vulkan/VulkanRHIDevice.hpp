@@ -102,6 +102,24 @@ public:
     bool hasDedicatedComputeQueue() const { return m_hasDedicatedComputeQueue; }
     bool hasTimelineSemaphoreSupport() const { return m_hasTimelineSemaphores; }
 
+    // Phase 4: VMA staging pool
+    VmaPool getStagingPool() const { return m_stagingPool; }
+
+    // Phase 4: Per-frame descriptor pools (reset each frame for dynamic bind groups)
+    vk::DescriptorPool getPerFrameDescriptorPool(uint32_t frameIndex) {
+        return *m_perFrameDescriptorPools[frameIndex % 2];
+    }
+    void resetPerFrameDescriptorPool(uint32_t frameIndex) {
+        // vkResetDescriptorPool frees all sets allocated from the pool in one shot
+        VkDevice vkDev = static_cast<VkDevice>(*m_device);
+        vkResetDescriptorPool(vkDev,
+                              static_cast<VkDescriptorPool>(*m_perFrameDescriptorPools[frameIndex % 2]),
+                              0);
+    }
+
+    // Phase 4: Descriptor indexing (bindless) capability
+    bool hasDescriptorIndexing() const { return m_hasDescriptorIndexing; }
+
 private:
     // Initialization methods
     void createInstance(bool enableValidation);
@@ -113,6 +131,8 @@ private:
     void createCommandPool();
     void createComputeCommandPool();
     void createDescriptorPool();
+    void createStagingPool();
+    void createPerFrameDescriptorPools();
     void queryCapabilities();
 
     // Helper methods
@@ -138,13 +158,19 @@ private:
 
     // VMA
     VmaAllocator m_vmaAllocator = VK_NULL_HANDLE;
+    VmaPool m_stagingPool = VK_NULL_HANDLE;  // Phase 4: linear-algorithm pool for CopySrc|MapWrite buffers
 
     // Command pools
     vk::raii::CommandPool m_commandPool = nullptr;
     vk::raii::CommandPool m_computeCommandPool = nullptr;
 
-    // Descriptor pool for bind groups
+    // Descriptor pool for bind groups (persistent, long-lived sets)
     vk::raii::DescriptorPool m_descriptorPool = nullptr;
+    // Phase 4: Per-frame pools (reset each frame; for dynamic/transient bind groups)
+    std::array<vk::raii::DescriptorPool, 2> m_perFrameDescriptorPools = {nullptr, nullptr};
+
+    // Phase 4: Descriptor indexing capability (VK_EXT_descriptor_indexing / Vulkan 1.2 core)
+    bool m_hasDescriptorIndexing = false;
 
     // RHI objects
     std::unique_ptr<RHICapabilities> m_capabilities;

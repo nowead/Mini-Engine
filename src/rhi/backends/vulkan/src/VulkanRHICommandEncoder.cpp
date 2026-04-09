@@ -186,6 +186,20 @@ void VulkanRHIRenderPassEncoder::setBindGroup(uint32_t index, rhi::RHIBindGroup*
     );
 }
 
+void VulkanRHIRenderPassEncoder::bindNativeDescriptorSet(uint32_t setIndex,
+                                                          VkDescriptorSet descriptorSet) {
+    if (!m_currentPipelineLayout || !descriptorSet) return;
+    auto* vulkanLayout = static_cast<VulkanRHIPipelineLayout*>(m_currentPipelineLayout);
+    vk::DescriptorSet ds(descriptorSet);
+    m_commandBuffer.bindDescriptorSets(
+        vk::PipelineBindPoint::eGraphics,
+        vulkanLayout->getVkPipelineLayout(),
+        setIndex,
+        ds,
+        {}
+    );
+}
+
 void VulkanRHIRenderPassEncoder::setVertexBuffer(uint32_t slot, rhi::RHIBuffer* buffer, uint64_t offset) {
     auto* vulkanBuffer = static_cast<VulkanRHIBuffer*>(buffer);
     std::array<vk::Buffer, 1> buffers = { vulkanBuffer->getVkBuffer() };

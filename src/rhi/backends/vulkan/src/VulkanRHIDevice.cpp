@@ -36,6 +36,8 @@ VulkanRHIDevice::VulkanRHIDevice(GLFWwindow* window, bool enableValidation)
     createCommandPool();
     createComputeCommandPool();
     createDescriptorPool();
+    createStagingPool();
+    createPerFrameDescriptorPools();
     queryCapabilities();
 
     // Create RHI queue wrappers
@@ -51,6 +53,12 @@ VulkanRHIDevice::~VulkanRHIDevice() {
     // Wait for device to be idle before cleanup
     if (*m_device != VK_NULL_HANDLE) {
         m_device.waitIdle();
+    }
+
+    // Phase 4: Destroy VMA staging pool before allocator
+    if (m_stagingPool != VK_NULL_HANDLE) {
+        vmaDestroyPool(m_vmaAllocator, m_stagingPool);
+        m_stagingPool = VK_NULL_HANDLE;
     }
 
     // Destroy VMA allocator
@@ -212,7 +220,40 @@ void VulkanRHIDevice::createLogicalDevice() {
     m_hasTimelineSemaphores = features12.timelineSemaphore;
     std::cout << "Timeline semaphores: " << (m_hasTimelineSemaphores ? "supported" : "not supported") << std::endl;
 
+    // Phase 4: Query descriptor indexing (bindless) support via extension properties
+    // Promoted to Vulkan 1.2 core; also available as VK_EXT_descriptor_indexing on 1.1 devices.
+    {
+        auto extProps = m_physicalDevice.enumerateDeviceExtensionProperties();
+        bool hasDescIndexingExt = false;
+        for (const auto& ext : extProps) {
+            if (std::string_view(ext.extensionName) == VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME) {
+                hasDescIndexingExt = true;
+                break;
+            }
+        }
+        if (hasDescIndexingExt) {
+            // Query the actual feature bits
+            auto descChain = m_physicalDevice.getFeatures2<
+                vk::PhysicalDeviceFeatures2,
+                vk::PhysicalDeviceDescriptorIndexingFeatures>();
+            auto& di = descChain.get<vk::PhysicalDeviceDescriptorIndexingFeatures>();
+            m_hasDescriptorIndexing =
+                di.descriptorBindingPartiallyBound &&
+                di.descriptorBindingSampledImageUpdateAfterBind &&
+                di.runtimeDescriptorArray &&
+                di.shaderSampledImageArrayNonUniformIndexing;
+            if (m_hasDescriptorIndexing) {
+                m_deviceExtensions.push_back(VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME);
+                std::cout << "[VulkanRHIDevice] Descriptor indexing (bindless) supported\n";
+            }
+        }
+        if (!m_hasDescriptorIndexing) {
+            std::cout << "[VulkanRHIDevice] Descriptor indexing not available — bindless disabled\n";
+        }
+    }
+
     // Build pNext chain: dynamicRendering -> sync2 -> (optional) timelineSemaphore
+    //                 -> (optional) descriptorIndexing
     vk::PhysicalDeviceDynamicRenderingFeatures dynamicRenderingFeatures{
         .dynamicRendering = VK_TRUE
     };
@@ -224,10 +265,28 @@ void VulkanRHIDevice::createLogicalDevice() {
         .pNext = &sync2Features,
         .timelineSemaphore = m_hasTimelineSemaphores ? VK_TRUE : VK_FALSE
     };
+    // Phase 4: descriptor indexing features appended to the chain when supported
+    // Field order matches the struct definition in VkPhysicalDeviceDescriptorIndexingFeatures
+    vk::PhysicalDeviceDescriptorIndexingFeatures descriptorIndexingFeatures{};
+    descriptorIndexingFeatures.shaderSampledImageArrayNonUniformIndexing  = VK_TRUE;
+    descriptorIndexingFeatures.descriptorBindingPartiallyBound            = VK_TRUE;
+    descriptorIndexingFeatures.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+    descriptorIndexingFeatures.runtimeDescriptorArray                     = VK_TRUE;
 
-    void* featureChainHead = m_hasTimelineSemaphores
-        ? static_cast<void*>(&timelineSemaphoreFeatures)
-        : static_cast<void*>(&sync2Features);
+    // Assemble the chain head
+    void* featureChainHead;
+    if (m_hasDescriptorIndexing) {
+        // timelineSemaphore -> sync2 -> dynamicRendering (already chained above)
+        // Add descriptorIndexing at the front
+        descriptorIndexingFeatures.pNext = m_hasTimelineSemaphores
+            ? static_cast<void*>(&timelineSemaphoreFeatures)
+            : static_cast<void*>(&sync2Features);
+        featureChainHead = &descriptorIndexingFeatures;
+    } else if (m_hasTimelineSemaphores) {
+        featureChainHead = &timelineSemaphoreFeatures;
+    } else {
+        featureChainHead = &sync2Features;
+    }
 
     vk::PhysicalDeviceFeatures2 deviceFeatures2{
         .pNext = featureChainHead,
@@ -265,9 +324,16 @@ void VulkanRHIDevice::createLogicalDevice() {
 
 void VulkanRHIDevice::createVmaAllocator() {
     std::cout << "Creating VMA allocator..." << std::endl;
-    
+
+    // Use the physical device's actual API version so VMA doesn't try to call
+    // Vulkan 1.2/1.3 functions that may not be available on all drivers (e.g. lavapipe).
+    auto physProps = m_physicalDevice.getProperties();
+    uint32_t actualApiVersion = physProps.apiVersion;
+    // Cap at 1.3 — we don't need anything newer
+    if (actualApiVersion > VK_API_VERSION_1_3) actualApiVersion = VK_API_VERSION_1_3;
+
     VmaAllocatorCreateInfo allocatorInfo{};
-    allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_3;
+    allocatorInfo.vulkanApiVersion = actualApiVersion;
     allocatorInfo.physicalDevice = *m_physicalDevice;
     allocatorInfo.device = *m_device;
     allocatorInfo.instance = *m_instance;
@@ -316,6 +382,79 @@ void VulkanRHIDevice::createDescriptorPool() {
     poolInfo.pPoolSizes = poolSizes.data();
 
     m_descriptorPool = vk::raii::DescriptorPool(m_device, poolInfo);
+}
+
+void VulkanRHIDevice::createStagingPool() {
+    // Phase 4: Linear-algorithm VMA pool for short-lived upload (CopySrc|MapWrite) buffers.
+    // LINEAR_ALGORITHM allocates sequentially and frees all at once — ideal for
+    // frame-scoped staging buffers that are created, used for upload, then destroyed.
+    VmaPoolCreateInfo poolInfo{};
+    poolInfo.memoryTypeIndex = 0;  // Will be resolved by VMA
+    poolInfo.flags = VMA_POOL_CREATE_LINEAR_ALGORITHM_BIT;
+    poolInfo.blockSize = 16 * 1024 * 1024;  // 16 MB blocks
+    poolInfo.minBlockCount = 1;
+    poolInfo.maxBlockCount = 8;
+
+    // Resolve the memory type index for HOST_VISIBLE | HOST_COHERENT memory
+    VkMemoryRequirements memReq{};
+    memReq.size = 1;
+    memReq.alignment = 1;
+    memReq.memoryTypeBits = 0xFFFFFFFF;
+
+    VmaAllocationCreateInfo testAllocInfo{};
+    testAllocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+    testAllocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+
+    VkBufferCreateInfo testBufInfo{};
+    testBufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    testBufInfo.size  = 64;
+    testBufInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+
+    uint32_t memTypeIdx = 0;
+    VkResult res = vmaFindMemoryTypeIndexForBufferInfo(
+        m_vmaAllocator,
+        &testBufInfo,
+        &testAllocInfo,
+        &memTypeIdx);
+
+    if (res == VK_SUCCESS) {
+        poolInfo.memoryTypeIndex = memTypeIdx;
+        VkResult poolRes = vmaCreatePool(m_vmaAllocator, &poolInfo, &m_stagingPool);
+        if (poolRes != VK_SUCCESS) {
+            std::cerr << "[VulkanRHIDevice] Warning: failed to create staging pool (VMA error "
+                      << poolRes << "), falling back to default allocator\n";
+            m_stagingPool = VK_NULL_HANDLE;
+        } else {
+            std::cout << "[VulkanRHIDevice] VMA staging pool created (16MB blocks, linear algorithm)\n";
+        }
+    } else {
+        std::cerr << "[VulkanRHIDevice] Warning: could not resolve staging memory type, skipping staging pool\n";
+    }
+}
+
+void VulkanRHIDevice::createPerFrameDescriptorPools() {
+    // Phase 4: Two descriptor pools (one per frame-in-flight) for dynamic bind groups
+    // that are created and destroyed each frame. Reset via resetPerFrameDescriptorPool().
+    // Currently serves as infrastructure; future dynamic bind group allocations use these pools.
+    std::vector<vk::DescriptorPoolSize> poolSizes = {
+        { vk::DescriptorType::eUniformBuffer,        256 },
+        { vk::DescriptorType::eStorageBuffer,        256 },
+        { vk::DescriptorType::eSampler,              128 },
+        { vk::DescriptorType::eSampledImage,         256 },
+        { vk::DescriptorType::eStorageImage,          64 },
+        { vk::DescriptorType::eCombinedImageSampler, 256 },
+    };
+
+    vk::DescriptorPoolCreateInfo poolInfo;
+    // NOTE: no eFreeDescriptorSet — entire pool is reset at once each frame
+    poolInfo.maxSets = 256;
+    poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+    poolInfo.pPoolSizes = poolSizes.data();
+
+    for (int i = 0; i < 2; ++i) {
+        m_perFrameDescriptorPools[i] = vk::raii::DescriptorPool(m_device, poolInfo);
+    }
+    std::cout << "[VulkanRHIDevice] Per-frame descriptor pools created (2x256 sets)\n";
 }
 
 void VulkanRHIDevice::queryCapabilities() {

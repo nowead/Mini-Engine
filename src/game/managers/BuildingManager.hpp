@@ -206,6 +206,16 @@ public:
         objectBufferDirty = true;
     }
 
+    /**
+     * @brief Enable or disable bindless texture index encoding in per-instance data.
+     * When disabled (default), roughnessAOPad.b encodes BINDLESS_INVALID (no texture lookup).
+     * Enable this only after the bindless descriptor heap is ready.
+     */
+    void setUseBindlessTextures(bool enable) {
+        m_useBindlessTextures = enable;
+        objectBufferDirty = true;
+    }
+
 private:
     // ========== RHI Resources ==========
     rhi::RHIDevice* rhiDevice;
@@ -224,6 +234,8 @@ private:
     size_t currentBufferIndex = 0;
     size_t currentBufferCapacity = 0;
     bool objectBufferDirty = true;
+
+    bool m_useBindlessTextures = false;
 
     // ========== Animation Queue ==========
     std::vector<uint64_t> animatingEntities;                        // List of entities currently animating

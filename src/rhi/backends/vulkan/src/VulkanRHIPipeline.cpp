@@ -15,11 +15,18 @@ VulkanRHIPipelineLayout::VulkanRHIPipelineLayout(VulkanRHIDevice* device, const 
     , m_layout(nullptr)
 {
     std::vector<vk::DescriptorSetLayout> setLayouts;
-    setLayouts.reserve(desc.bindGroupLayouts.size());
+    setLayouts.reserve(desc.bindGroupLayouts.size() + desc.nativeExtraSetLayouts.size());
 
     for (auto* layout : desc.bindGroupLayouts) {
         auto* vulkanLayout = static_cast<VulkanRHIBindGroupLayout*>(layout);
         setLayouts.push_back(vulkanLayout->getVkDescriptorSetLayout());
+    }
+
+    // Phase 4: append native VkDescriptorSetLayout handles (e.g. bindless set layout)
+    for (void* nativeLayout : desc.nativeExtraSetLayouts) {
+        if (nativeLayout) {
+            setLayouts.push_back(static_cast<VkDescriptorSetLayout>(nativeLayout));
+        }
     }
 
     // Map rhi::PushConstantRange -> vk::PushConstantRange

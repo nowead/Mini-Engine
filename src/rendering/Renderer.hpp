@@ -16,6 +16,7 @@
 #ifndef __EMSCRIPTEN__
 #include "src/rendering/GBufferPass.hpp"
 #include "src/rendering/DeferredLightingPass.hpp"
+#include "src/rendering/BindlessTextureManager.hpp"
 #endif
 
 #include <GLFW/glfw3.h>
@@ -194,6 +195,15 @@ public:
 
     // Shadow scene radius (controls shadow orthographic projection extent)
     void setShadowSceneRadius(float radius) { shadowSceneRadius = radius; }
+
+    /** @brief Returns true if bindless texture indexing is available on this device (Phase 4). */
+    bool isBindlessAvailable() const {
+#ifndef __EMSCRIPTEN__
+        return bindlessTextureManager && bindlessTextureManager->isAvailable();
+#else
+        return false;
+#endif
+    }
     float getShadowSceneRadius() const { return shadowSceneRadius; }
 
 #ifndef __EMSCRIPTEN__
@@ -398,6 +408,13 @@ private:
     // Phase 3: Deferred Rendering
     std::unique_ptr<rendering::GBufferPass>          gBufferPass;
     std::unique_ptr<rendering::DeferredLightingPass> deferredLightingPass;
+
+    // Phase 4: Bindless texture registry + 3 solid-color material textures
+    std::unique_ptr<rendering::BindlessTextureManager> bindlessTextureManager;
+    // Material textures: [0]=concrete, [1]=metal, [2]=glass (1×1 RGBA8 solid color)
+    std::array<std::unique_ptr<rhi::RHITexture>,     3> bindlessMaterialTextures;
+    std::array<std::unique_ptr<rhi::RHITextureView>, 3> bindlessMaterialViews;
+    std::unique_ptr<rhi::RHISampler>                    bindlessSampler;
 #endif
 
     // RHI initialization methods (Phase 4)
@@ -412,8 +429,9 @@ private:
     void createShadowRenderer();    // Phase 3.3: Shadow mapping (CSM)
     void createIBL();               // Phase 1.2: IBL initialization
 #ifndef __EMSCRIPTEN__
-    void createGBufferPass();       // Phase 3: G-Buffer geometry pass
-    void createDeferredLightingPass(); // Phase 3: Deferred lighting
+    void createGBufferPass();           // Phase 3: G-Buffer geometry pass
+    void createDeferredLightingPass();  // Phase 3: Deferred lighting
+    void createBindlessResources();     // Phase 4: Bindless texture manager + material textures
 #endif
     void createCullingPipeline();   // Phase 2.2: GPU frustum culling
     void createHDRRenderTarget();   // HDR offscreen texture (all platforms)

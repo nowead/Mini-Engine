@@ -34,11 +34,29 @@ VulkanRHIBuffer::VulkanRHIBuffer(VulkanRHIDevice* device, const BufferDesc& desc
     // Determine VMA usage based on buffer usage
     VmaAllocationCreateInfo allocInfo{};
 
-    // If buffer needs to be mapped (Uniform, MapRead, MapWrite, CopyDst), use CPU-visible memory
-    if (hasFlag(desc.usage, BufferUsage::Uniform) ||
-        hasFlag(desc.usage, BufferUsage::MapRead) ||
-        hasFlag(desc.usage, BufferUsage::MapWrite) ||
-        hasFlag(desc.usage, BufferUsage::CopyDst)) {
+    // Phase 4: Short-lived upload buffers (CopySrc|MapWrite) go through the staging pool.
+    // The linear-algorithm pool eliminates per-allocation metadata overhead for these
+    // high-frequency buffers and avoids fragmentation in the default heap.
+    const bool isStagingBuffer = hasFlag(desc.usage, BufferUsage::CopySrc) &&
+                                  hasFlag(desc.usage, BufferUsage::MapWrite);
+    if (isStagingBuffer) {
+        VmaPool stagingPool = m_device->getStagingPool();
+        if (stagingPool != VK_NULL_HANDLE) {
+            allocInfo.pool  = stagingPool;
+            allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+            allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                              VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        } else {
+            // Fallback when staging pool is unavailable
+            allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+            allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                              VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        }
+    } else if (hasFlag(desc.usage, BufferUsage::Uniform) ||
+               hasFlag(desc.usage, BufferUsage::MapRead) ||
+               hasFlag(desc.usage, BufferUsage::MapWrite) ||
+               hasFlag(desc.usage, BufferUsage::CopyDst)) {
+        // CPU-visible mapped memory (UBOs, readback, CopyDst for CPU-write upload)
         allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
         allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                          VMA_ALLOCATION_CREATE_MAPPED_BIT;

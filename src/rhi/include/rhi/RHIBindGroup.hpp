@@ -24,7 +24,8 @@ enum class BindingType {
     ComparisonSampler,      // Sampler for depth comparison
     SampledTexture,         // Sampled texture (for reading in shaders)
     DepthTexture,           // Depth texture (for shadow mapping)
-    StorageTexture          // Storage texture (for read-write in compute shaders)
+    StorageTexture,         // Storage texture (for read-write in compute shaders)
+    BindlessTextures        // Phase 4: runtime-size COMBINED_IMAGE_SAMPLER array (bindless)
 };
 
 /**
@@ -38,6 +39,7 @@ struct BindGroupLayoutEntry {
     // For buffers
     bool hasDynamicOffset = false;  // Whether this binding uses dynamic offsets
     uint64_t minBufferBindingSize = 0;  // Minimum buffer size (0 = no minimum)
+    uint32_t descriptorCount = 1;   // Phase 4: array size for BindlessTextures (ignored for other types)
 
     // For textures (sampled, depth, storage)
     TextureViewDimension textureViewDimension = TextureViewDimension::View2D;

@@ -17,7 +17,10 @@ struct alignas(16) ObjectData {
     glm::vec4 boundingBoxMin;   // 16 bytes — AABB min (w unused)
     glm::vec4 boundingBoxMax;   // 16 bytes — AABB max (w unused)
     glm::vec4 colorAndMetallic; // 16 bytes — rgb=albedo, a=metallic
-    glm::vec4 roughnessAOPad;   // 16 bytes — r=roughness, g=ao, ba=pad
+    glm::vec4 roughnessAOPad;   // 16 bytes — r=roughness, g=ao,
+                                //   b=float-encoded uint32 bindless texture index
+                                //     (Phase 4: use glm::uintBitsToFloat(idx), 0xFFFFFFFF = no texture)
+                                //   a=pad
     // Total: 128 bytes
 };
 

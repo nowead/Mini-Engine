@@ -58,13 +58,69 @@ public:
     {
         if (m_imageBarriers.empty() && m_bufferBarriers.empty()) return;
 
-        vk::DependencyInfo depInfo{
-            .bufferMemoryBarrierCount = static_cast<uint32_t>(m_bufferBarriers.size()),
-            .pBufferMemoryBarriers    = m_bufferBarriers.empty() ? nullptr : m_bufferBarriers.data(),
-            .imageMemoryBarrierCount  = static_cast<uint32_t>(m_imageBarriers.size()),
-            .pImageMemoryBarriers     = m_imageBarriers.empty() ? nullptr : m_imageBarriers.data()
-        };
-        cmd.pipelineBarrier2(depInfo);
+        if (cmd.getDispatcher()->vkCmdPipelineBarrier2) {
+            // Preferred path: synchronization2 available
+            vk::DependencyInfo depInfo{
+                .bufferMemoryBarrierCount = static_cast<uint32_t>(m_bufferBarriers.size()),
+                .pBufferMemoryBarriers    = m_bufferBarriers.empty() ? nullptr : m_bufferBarriers.data(),
+                .imageMemoryBarrierCount  = static_cast<uint32_t>(m_imageBarriers.size()),
+                .pImageMemoryBarriers     = m_imageBarriers.empty() ? nullptr : m_imageBarriers.data()
+            };
+            cmd.pipelineBarrier2(depInfo);
+        } else {
+            // Fallback: Vulkan 1.0 pipelineBarrier (conservative over-synchronization)
+            // Used on drivers that don't support VK_KHR_synchronization2 (e.g. lavapipe 1.1)
+            auto toStage1 = [](vk::PipelineStageFlags2 s2) -> vk::PipelineStageFlags {
+                if (s2 == vk::PipelineStageFlags2{}) return vk::PipelineStageFlagBits::eTopOfPipe;
+                return vk::PipelineStageFlagBits::eAllCommands;
+            };
+            auto toAccess1 = [](vk::AccessFlags2 a2) -> vk::AccessFlags {
+                if (a2 == vk::AccessFlags2{}) return {};
+                return vk::AccessFlagBits::eMemoryRead | vk::AccessFlagBits::eMemoryWrite;
+            };
+
+            std::vector<vk::ImageMemoryBarrier> imgBarriers1;
+            imgBarriers1.reserve(m_imageBarriers.size());
+            for (const auto& b : m_imageBarriers) {
+                imgBarriers1.push_back(vk::ImageMemoryBarrier{
+                    .srcAccessMask       = toAccess1(b.srcAccessMask),
+                    .dstAccessMask       = toAccess1(b.dstAccessMask),
+                    .oldLayout           = b.oldLayout,
+                    .newLayout           = b.newLayout,
+                    .srcQueueFamilyIndex = b.srcQueueFamilyIndex,
+                    .dstQueueFamilyIndex = b.dstQueueFamilyIndex,
+                    .image               = b.image,
+                    .subresourceRange    = b.subresourceRange
+                });
+            }
+            std::vector<vk::BufferMemoryBarrier> bufBarriers1;
+            bufBarriers1.reserve(m_bufferBarriers.size());
+            for (const auto& b : m_bufferBarriers) {
+                bufBarriers1.push_back(vk::BufferMemoryBarrier{
+                    .srcAccessMask       = toAccess1(b.srcAccessMask),
+                    .dstAccessMask       = toAccess1(b.dstAccessMask),
+                    .srcQueueFamilyIndex = b.srcQueueFamilyIndex,
+                    .dstQueueFamilyIndex = b.dstQueueFamilyIndex,
+                    .buffer              = b.buffer,
+                    .offset              = b.offset,
+                    .size                = b.size
+                });
+            }
+
+            vk::PipelineStageFlags srcStage = vk::PipelineStageFlagBits::eAllCommands;
+            vk::PipelineStageFlags dstStage = vk::PipelineStageFlagBits::eAllCommands;
+            // Determine tightest src/dst stages from barriers when possible
+            if (!m_imageBarriers.empty()) {
+                srcStage = toStage1(m_imageBarriers[0].srcStageMask);
+                dstStage = toStage1(m_imageBarriers[0].dstStageMask);
+            } else if (!m_bufferBarriers.empty()) {
+                srcStage = toStage1(m_bufferBarriers[0].srcStageMask);
+                dstStage = toStage1(m_bufferBarriers[0].dstStageMask);
+            }
+
+            cmd.pipelineBarrier(srcStage, dstStage,
+                                {}, {}, bufBarriers1, imgBarriers1);
+        }
         clear();
     }
 

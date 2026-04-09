@@ -3,11 +3,10 @@
 #include "src/utils/FileUtils.hpp"
 #include <iostream>
 
-#ifdef __linux__
 #include <rhi/vulkan/VulkanRHIDevice.hpp>
 #include <rhi/vulkan/VulkanRHITexture.hpp>
+#include <rhi/vulkan/VulkanRHICommandEncoder.hpp>
 #include <vulkan/vulkan.h>
-#endif
 
 namespace rendering {
 
@@ -32,8 +31,10 @@ GBufferPass::~GBufferPass() {
 bool GBufferPass::initialize(uint32_t width, uint32_t height,
                               rhi::RHIBindGroupLayout* buildingBGLayout,
                               rhi::RHIBindGroupLayout* ssboLayout,
-                              rhi::RHITextureView* depthView) {
-    m_depthView = depthView;
+                              rhi::RHITextureView* depthView,
+                              VkDescriptorSetLayout bindlessLayout) {
+    m_depthView      = depthView;
+    m_bindlessLayout = bindlessLayout;
 
     if (!createTextures(width, height)) { std::cerr << "[GBufferPass] createTextures failed\n"; return false; }
     if (!createSampler())               { std::cerr << "[GBufferPass] createSampler failed\n";  return false; }
@@ -43,10 +44,13 @@ bool GBufferPass::initialize(uint32_t width, uint32_t height,
     if (!createLinuxFramebuffer()) { std::cerr << "[GBufferPass] createLinuxFramebuffer failed\n"; return false; }
 #endif
 
-    if (!createPipeline(buildingBGLayout, ssboLayout)) { std::cerr << "[GBufferPass] createPipeline failed\n"; return false; }
+    if (!createPipeline(buildingBGLayout, ssboLayout, bindlessLayout)) {
+        std::cerr << "[GBufferPass] createPipeline failed\n"; return false;
+    }
 
     m_initialized = true;
-    std::cout << "[GBufferPass] Initialized " << width << "x" << height << "\n";
+    std::cout << "[GBufferPass] Initialized " << width << "x" << height
+              << (bindlessLayout ? " (bindless enabled)" : " (bindless disabled)") << "\n";
     return true;
 }
 
@@ -114,7 +118,8 @@ bool GBufferPass::createSampler() {
 }
 
 bool GBufferPass::createPipeline(rhi::RHIBindGroupLayout* buildingBGLayout,
-                                  rhi::RHIBindGroupLayout* ssboLayout) {
+                                  rhi::RHIBindGroupLayout* ssboLayout,
+                                  VkDescriptorSetLayout bindlessLayout) {
     // Load shaders
     auto loadSpv = [&](const char* path, rhi::ShaderStage stage, const char* label) {
         auto raw = FileUtils::readFile(path);
@@ -124,14 +129,22 @@ bool GBufferPass::createPipeline(rhi::RHIBindGroupLayout* buildingBGLayout,
         return m_device->createShader(rhi::ShaderDesc(src, label));
     };
 
+    // Choose shader variant: bindless version uses RuntimeDescriptorArray capability
+    // which requires VK_EXT_descriptor_indexing (not available on lavapipe Vulkan 1.1).
+    const char* fragSpvPath = bindlessLayout
+        ? "shaders/gbuffer.frag.spv"
+        : "shaders/gbuffer_nobindless.frag.spv";
+
     m_vertexShader   = loadSpv("shaders/gbuffer.vert.spv", rhi::ShaderStage::Vertex,   "GBufferVS");
-    m_fragmentShader = loadSpv("shaders/gbuffer.frag.spv", rhi::ShaderStage::Fragment, "GBufferFS");
+    m_fragmentShader = loadSpv(fragSpvPath,                  rhi::ShaderStage::Fragment, "GBufferFS");
     if (!m_vertexShader || !m_fragmentShader) return false;
 
-    // Pipeline layout: set 0 = building bind group (UBO + textures), set 1 = SSBO
+    // Pipeline layout: set 0 = building bind group (UBO + textures), set 1 = SSBO,
+    //                  set 2 = bindless texture array (Phase 4, optional)
     rhi::PipelineLayoutDesc layoutDesc;
     if (buildingBGLayout) layoutDesc.bindGroupLayouts.push_back(buildingBGLayout);
     if (ssboLayout)       layoutDesc.bindGroupLayouts.push_back(ssboLayout);
+    if (bindlessLayout)   layoutDesc.nativeExtraSetLayouts.push_back(bindlessLayout);
     layoutDesc.label = "GBufferPipelineLayout";
 
     m_pipelineLayout = m_device->createPipelineLayout(layoutDesc);
@@ -190,7 +203,8 @@ void GBufferPass::execute(rhi::RHICommandEncoder* encoder,
                            rhi::RHIBuffer*     vertexBuffer,
                            rhi::RHIBuffer*     indexBuffer,
                            rhi::RHIBuffer*     indirectBuffer,
-                           uint32_t width, uint32_t height) {
+                           uint32_t width, uint32_t height,
+                           VkDescriptorSet bindlessSet) {
     if (!m_initialized || !encoder) return;
 
     rhi::RenderPassDesc passDesc;
@@ -242,6 +256,16 @@ void GBufferPass::execute(rhi::RHICommandEncoder* encoder,
 
     if (bindGroup0)   pass->setBindGroup(0, bindGroup0);
     if (ssboBindGroup) pass->setBindGroup(1, ssboBindGroup);
+
+    // Phase 4: bind bindless texture array at set 2 using native Vulkan call.
+    // The bindless set was created outside the RHI bind group system (needs special pool flags),
+    // so we bypass setBindGroup and call vkCmdBindDescriptorSets directly via bindNativeDescriptorSet.
+    if (bindlessSet && m_bindlessLayout) {
+        auto* vulkanPass = dynamic_cast<RHI::Vulkan::VulkanRHIRenderPassEncoder*>(pass.get());
+        if (vulkanPass) {
+            vulkanPass->bindNativeDescriptorSet(2, bindlessSet);
+        }
+    }
 
     if (vertexBuffer && indexBuffer && indirectBuffer) {
         pass->setVertexBuffer(0, vertexBuffer, 0);
@@ -347,7 +371,7 @@ bool GBufferPass::createLinuxFramebuffer() {
     // Retrieve framebuffer size from texture
     uint32_t W = 0, H = 0;
     if (m_gBuffer0) {
-        auto sz = m_gBuffer0->getDesc().size;
+        auto sz = m_gBuffer0->getSize();
         W = sz.width; H = sz.height;
     }
 

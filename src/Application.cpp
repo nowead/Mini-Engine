@@ -120,8 +120,13 @@ void Application::initGameLogic() {
     // Initialize Particle System
     particleSystem = std::make_unique<effects::ParticleSystem>(rhiDevice, rhiQueue);
 
-    // Create sample buildings in a grid pattern
+    // Phase 4: enable bindless texture indices in per-instance data if device supports it
     auto* buildingManager = worldManager->getBuildingManager();
+    if (buildingManager && renderer->isBindlessAvailable()) {
+        buildingManager->setUseBindlessTextures(true);
+    }
+
+    // Create sample buildings in a grid pattern
     if (buildingManager) {
         int gridSize = 4;
         float spacing = 30.0f;

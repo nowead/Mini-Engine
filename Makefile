@@ -60,7 +60,7 @@ COLOR_BLUE := \033[0;34m
 COLOR_YELLOW := \033[0;33m
 COLOR_RESET := \033[0m
 
-.PHONY: all build run run-only clean re help info demo-smoke demo-instancing demo-pbr demo-dual-light release wasm configure-wasm build-wasm serve-wasm clean-wasm setup-emscripten
+.PHONY: all build run run-only clean re help info demo-smoke demo-instancing demo-pbr demo-dual-light release wasm configure-wasm build-wasm serve-wasm clean-wasm setup-emscripten shaders
 
 # Default target
 all: build
@@ -81,6 +81,12 @@ configure: info
 	@echo "$(COLOR_YELLOW)Configuring project...$(COLOR_RESET)"
 	@$(ENV_SETUP) && cmake --preset $(CMAKE_PRESET) -DBUILD_TESTS=ON
 	@echo "$(COLOR_GREEN)Configuration complete!$(COLOR_RESET)"
+
+# Compile only GLSL shaders to SPIR-V (without full rebuild)
+shaders: configure
+	@echo "$(COLOR_YELLOW)Compiling GLSL shaders...$(COLOR_RESET)"
+	@$(ENV_SETUP) && cmake --build $(BUILD_DIR) --target building_shaders
+	@echo "$(COLOR_GREEN)Shader compilation complete!$(COLOR_RESET)"
 
 # Build the project (includes demo executables)
 build: configure
@@ -144,6 +150,7 @@ help:
 	@echo ""
 	@echo "$(COLOR_BLUE)Build & Run:$(COLOR_RESET)"
 	@echo "  $(COLOR_GREEN)make$(COLOR_RESET)                    - Build project (with demos)"
+	@echo "  $(COLOR_GREEN)make shaders$(COLOR_RESET)            - Compile GLSL shaders only (fast)"
 	@echo "  $(COLOR_GREEN)make run$(COLOR_RESET)                - Build and run MiniEngine"
 	@echo "  $(COLOR_GREEN)make run-only$(COLOR_RESET)           - Run MiniEngine (no build)"
 	@echo "  $(COLOR_GREEN)make release$(COLOR_RESET)            - Build without demos (production)"

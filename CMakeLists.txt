@@ -197,6 +197,9 @@ if(NOT EMSCRIPTEN)
         src/rendering/GBufferPass.hpp
         src/rendering/DeferredLightingPass.cpp
         src/rendering/DeferredLightingPass.hpp
+        # Phase 4: Bindless Rendering
+        src/rendering/BindlessTextureManager.cpp
+        src/rendering/BindlessTextureManager.hpp
     )
 
     target_include_directories(MiniEngine BEFORE PRIVATE
@@ -455,6 +458,14 @@ if(NOT EMSCRIPTEN)
         DEPENDS ${BUILDING_SHADER_DIR}/gbuffer.frag.glsl
         COMMENT "Compiling gbuffer.frag.glsl -> SPIR-V"
     )
+    add_custom_command(
+        OUTPUT ${BUILDING_SHADER_DIR}/gbuffer_nobindless.frag.spv
+        COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=fragment
+                -o ${BUILDING_SHADER_DIR}/gbuffer_nobindless.frag.spv
+                ${BUILDING_SHADER_DIR}/gbuffer_nobindless.frag.glsl
+        DEPENDS ${BUILDING_SHADER_DIR}/gbuffer_nobindless.frag.glsl
+        COMMENT "Compiling gbuffer_nobindless.frag.glsl -> SPIR-V"
+    )
     # Phase 3: Deferred lighting shaders
     add_custom_command(
         OUTPUT ${BUILDING_SHADER_DIR}/deferred_lighting.vert.spv
@@ -492,6 +503,7 @@ if(NOT EMSCRIPTEN)
         ${BUILDING_SHADER_DIR}/ssao_blur.comp.spv
         ${BUILDING_SHADER_DIR}/gbuffer.vert.spv
         ${BUILDING_SHADER_DIR}/gbuffer.frag.spv
+        ${BUILDING_SHADER_DIR}/gbuffer_nobindless.frag.spv
         ${BUILDING_SHADER_DIR}/deferred_lighting.vert.spv
         ${BUILDING_SHADER_DIR}/deferred_lighting.frag.spv
     )

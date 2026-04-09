@@ -97,6 +97,9 @@ Renderer::Renderer(GLFWwindow* window,
 
     // Phase 4.1: GPU Profiler
 #ifndef __EMSCRIPTEN__
+    // Phase 4: Bindless texture manager (must be before GBufferPass so the layout is ready)
+    createBindlessResources();
+
     // Phase 3: G-Buffer + Deferred Lighting (created after shadow + IBL are ready)
     createGBufferPass();
     createDeferredLightingPass();
@@ -1063,6 +1066,105 @@ bool Renderer::loadEnvironmentMap(const std::string& hdrPath) {
 // ============================================================================
 
 #ifndef __EMSCRIPTEN__
+void Renderer::createBindlessResources() {
+    // Phase 4: Create bindless texture manager + 3 solid-colour material textures.
+    // On lavapipe (Vulkan 1.1, no descriptor indexing) the manager reports isAvailable()=false
+    // and the GBuffer pass falls back to procedural albedo — no visual change on this system.
+    if (!rhiBridge || !rhiBridge->isReady()) return;
+    auto* device = rhiBridge->getDevice();
+    auto* queue  = rhiBridge->getGraphicsQueue();
+    if (!device || !queue) return;
+
+    bindlessTextureManager = std::make_unique<rendering::BindlessTextureManager>(device);
+    if (!bindlessTextureManager->isAvailable()) {
+        LOG_INFO("Renderer") << "Bindless textures unavailable on this device (graceful fallback)";
+        return;
+    }
+
+    // --- Create a nearest-neighbour sampler for the 1×1 material textures ---
+    rhi::SamplerDesc samplerDesc{};
+    samplerDesc.minFilter  = rhi::FilterMode::Nearest;
+    samplerDesc.magFilter  = rhi::FilterMode::Nearest;
+    samplerDesc.mipmapFilter = rhi::MipmapMode::Nearest;
+    samplerDesc.addressModeU = rhi::AddressMode::Repeat;
+    samplerDesc.addressModeV = rhi::AddressMode::Repeat;
+    bindlessSampler = device->createSampler(samplerDesc);
+    if (!bindlessSampler) {
+        LOG_ERROR("Renderer") << "createBindlessResources: failed to create sampler";
+        return;
+    }
+
+    // --- Solid-colour 1×1 RGBA8 material textures ---
+    //   Index 0: concrete / asphalt  (0.35, 0.35, 0.38, 1.0)
+    //   Index 1: metal               (0.50, 0.52, 0.55, 1.0)
+    //   Index 2: glass               (0.40, 0.58, 0.72, 1.0)
+    const std::array<std::array<uint8_t, 4>, 3> colors = {{
+        { 89,  89,  97, 255},   // concrete
+        {127, 133, 140, 255},   // metal
+        {102, 148, 184, 255},   // glass
+    }};
+
+    for (int i = 0; i < 3; ++i) {
+        // Staging buffer
+        rhi::BufferDesc stagingDesc{};
+        stagingDesc.size  = 4;
+        stagingDesc.usage = rhi::BufferUsage::CopySrc | rhi::BufferUsage::MapWrite;
+        auto staging = device->createBuffer(stagingDesc);
+        if (!staging) continue;
+
+        void* mapped = staging->map();
+        std::memcpy(mapped, colors[i].data(), 4);
+        staging->unmap();
+
+        // GPU texture
+        rhi::TextureDesc texDesc{};
+        texDesc.size          = rhi::Extent3D{1, 1, 1};
+        texDesc.dimension     = rhi::TextureDimension::Texture2D;
+        texDesc.format        = rhi::TextureFormat::RGBA8Unorm;
+        texDesc.mipLevelCount = 1;
+        texDesc.sampleCount   = 1;
+        texDesc.usage         = rhi::TextureUsage::CopyDst | rhi::TextureUsage::Sampled;
+        bindlessMaterialTextures[i] = device->createTexture(texDesc);
+        if (!bindlessMaterialTextures[i]) continue;
+
+        // Upload
+        auto encoder = device->createCommandEncoder();
+        encoder->transitionTextureLayout(bindlessMaterialTextures[i].get(),
+                                         rhi::TextureLayout::Undefined,
+                                         rhi::TextureLayout::TransferDst);
+        rhi::BufferTextureCopyInfo bufCopy{};
+        bufCopy.buffer   = staging.get();
+        rhi::TextureCopyInfo texCopy{};
+        texCopy.texture  = bindlessMaterialTextures[i].get();
+        texCopy.mipLevel = 0;
+        encoder->copyBufferToTexture(bufCopy, texCopy, rhi::Extent3D{1, 1, 1});
+        encoder->transitionTextureLayout(bindlessMaterialTextures[i].get(),
+                                         rhi::TextureLayout::TransferDst,
+                                         rhi::TextureLayout::ShaderReadOnly);
+        auto cmd = encoder->finish();
+        queue->submit(cmd.get());
+        queue->waitIdle();
+
+        // Texture view — created via RHITexture::createView()
+        rhi::TextureViewDesc viewDesc{};
+        viewDesc.format    = rhi::TextureFormat::RGBA8Unorm;
+        viewDesc.dimension = rhi::TextureViewDimension::View2D;
+        viewDesc.baseMipLevel   = 0;
+        viewDesc.mipLevelCount  = 1;
+        viewDesc.baseArrayLayer = 0;
+        viewDesc.arrayLayerCount = 1;
+        bindlessMaterialViews[i] = bindlessMaterialTextures[i]->createView(viewDesc);
+        if (!bindlessMaterialViews[i]) continue;
+
+        // Register in bindless manager
+        uint32_t idx = bindlessTextureManager->registerTexture(
+            bindlessMaterialViews[i].get(), bindlessSampler.get());
+        LOG_INFO("Renderer") << "Material texture " << i << " registered at bindless slot " << idx;
+    }
+
+    LOG_INFO("Renderer") << "Bindless resources ready (" << bindlessTextureManager->isAvailable() << ")";
+}
+
 void Renderer::createGBufferPass() {
     if (!rhiBridge || !rhiBridge->isReady()) return;
     auto* device = rhiBridge->getDevice();
@@ -1071,11 +1173,17 @@ void Renderer::createGBufferPass() {
     uint32_t W = rhiBridge->getSwapchain()->getWidth();
     uint32_t H = rhiBridge->getSwapchain()->getHeight();
 
+    // Phase 4: pass the bindless descriptor set layout (null when unavailable → disabled)
+    VkDescriptorSetLayout bindlessLayout = VK_NULL_HANDLE;
+    if (bindlessTextureManager && bindlessTextureManager->isAvailable())
+        bindlessLayout = bindlessTextureManager->getVkDescriptorSetLayout();
+
     gBufferPass = std::make_unique<rendering::GBufferPass>(device);
     if (!gBufferPass->initialize(W, H,
                                   buildingBindGroupLayout.get(),
                                   ssboBindGroupLayout.get(),
-                                  rhiDepthImageView.get())) {
+                                  rhiDepthImageView.get(),
+                                  bindlessLayout)) {
         LOG_ERROR("Renderer") << "GBufferPass initialization failed";
         gBufferPass.reset();
     } else {
@@ -2425,6 +2533,16 @@ void Renderer::drawFrame() {
 
     uint32_t frameIndex = rhiBridge->getCurrentFrameIndex();
 
+    // Phase 4: Reset per-frame descriptor pool for this frame slot.
+    // Currently no dynamic bind groups are allocated from it (infrastructure only),
+    // so this is a no-op that primes the pool for future per-frame allocations.
+#ifndef __EMSCRIPTEN__
+    {
+        auto* vd = dynamic_cast<RHI::Vulkan::VulkanRHIDevice*>(rhiBridge->getDevice());
+        if (vd) vd->resetPerFrameDescriptorPool(frameIndex);
+    }
+#endif
+
     // Step 2: Update CSM light matrices (before uniform buffer update)
     if (shadowRenderer && shadowRenderer->isInitialized()) {
         shadowRenderer->updateLightMatrices(sunDirection, cameraPosition,
@@ -2730,13 +2848,19 @@ void Renderer::drawFrame() {
 #endif
             rhi::RHIBindGroup* bg0 = (frameIndex < buildingBindGroups.size())
                                      ? buildingBindGroups[frameIndex].get() : nullptr;
+            // Phase 4: pass bindless descriptor set (null when unavailable → shader uses procedural albedo)
+            VkDescriptorSet bindlessSet = VK_NULL_HANDLE;
+            if (bindlessTextureManager && bindlessTextureManager->isAvailable())
+                bindlessSet = bindlessTextureManager->getVkDescriptorSet();
+
             gBufferPass->execute(encoder.get(),
                                  bg0,
                                  ssboBindGroups[frameIndex].get(),
                                  mesh->getVertexBuffer(),
                                  mesh->getIndexBuffer(),
                                  indirectDrawBuffers[frameIndex].get(),
-                                 W, H);
+                                 W, H,
+                                 bindlessSet);
         }
         pendingInstancedData.reset();
     }

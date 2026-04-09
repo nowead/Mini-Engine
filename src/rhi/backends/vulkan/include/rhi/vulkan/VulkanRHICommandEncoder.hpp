@@ -66,6 +66,10 @@ public:
                           uint32_t offset, uint32_t size, const void* data) override;
     void end() override;
 
+    // Phase 4: bind a natively-created VkDescriptorSet (e.g. bindless texture set)
+    // at the given set index using the current pipeline layout.
+    void bindNativeDescriptorSet(uint32_t setIndex, VkDescriptorSet descriptorSet);
+
 private:
     VulkanRHIDevice* m_device;
     vk::raii::CommandBuffer& m_commandBuffer;

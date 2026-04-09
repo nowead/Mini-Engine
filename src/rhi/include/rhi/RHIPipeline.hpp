@@ -133,6 +133,11 @@ struct PipelineLayoutDesc {
     std::vector<RHIBindGroupLayout*> bindGroupLayouts;
     std::vector<PushConstantRange> pushConstantRanges;
     const char* label = nullptr;
+    // Phase 4: native set layouts appended after bindGroupLayouts (Vulkan: VkDescriptorSetLayout).
+    // Backend-specific; ignored on non-Vulkan backends. Used for bindless descriptor sets
+    // that require special creation flags (PARTIALLY_BOUND, UPDATE_AFTER_BIND) not
+    // expressible through the RHI abstraction.
+    std::vector<void*> nativeExtraSetLayouts;
 
     PipelineLayoutDesc() = default;
 };
