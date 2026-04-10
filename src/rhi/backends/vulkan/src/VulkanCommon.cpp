@@ -1,4 +1,5 @@
 #include <rhi/vulkan/VulkanCommon.hpp>
+#include <stdexcept>
 
 namespace RHI {
 namespace Vulkan {

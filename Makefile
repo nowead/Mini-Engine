@@ -29,7 +29,7 @@ else ifeq ($(DETECTED_OS),macOS)
     VULKAN_LAYER_PATH := $(HOMEBREW_PREFIX)/opt/vulkan-validationlayers/share/vulkan/explicit_layer.d
 else ifeq ($(DETECTED_OS),Windows)
     CMAKE_PRESET := windows-default
-    VULKAN_SDK := C:/VulkanSDK/1.3.296.0
+    VULKAN_SDK := $(or $(VULKAN_SDK),C:/VulkanSDK/1.4.321.1)
     EXPORT_LIB_PATH :=
     VULKAN_LAYER_PATH := $(VULKAN_SDK)/Bin
 else
@@ -46,13 +46,24 @@ ifeq ($(DETECTED_OS),Linux)
     ENV_SETUP := $(EXPORT_VULKAN_SDK) && $(EXPORT_PATH) && export LD_LIBRARY_PATH="$(VULKAN_SDK)/lib:$$LD_LIBRARY_PATH" && $(EXPORT_VK_LAYER)
 else ifeq ($(DETECTED_OS),macOS)
     ENV_SETUP := export PATH="$(HOMEBREW_PREFIX)/bin:$$PATH" && export VK_LAYER_PATH="$(VULKAN_LAYER_PATH)" && export DYLD_FALLBACK_LIBRARY_PATH="$(HOMEBREW_PREFIX)/opt/vulkan-validationlayers/lib:$(HOMEBREW_PREFIX)/lib:/usr/local/lib:/usr/lib"
+else ifeq ($(DETECTED_OS),Windows)
+    VS_ROOT := C:/Program Files/Microsoft Visual Studio/2022/Community
+    ENV_SETUP := export VCPKG_ROOT="C:/dev/vcpkg" && \
+        export VULKAN_SDK="$(VULKAN_SDK)" && \
+        export VK_LAYER_PATH="$(VULKAN_LAYER_PATH)" && \
+        export PATH="$(VULKAN_SDK)/Bin:C:/Program Files/LLVM/bin:$(VS_ROOT)/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin:$(VS_ROOT)/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja:$$PATH"
 else
     ENV_SETUP := $(EXPORT_VULKAN_SDK) && $(EXPORT_PATH) && $(EXPORT_VK_LAYER)
 endif
 
 # Build directory
-BUILD_DIR := build
-EXECUTABLE := $(BUILD_DIR)/MiniEngine
+ifeq ($(DETECTED_OS),Windows)
+    BUILD_DIR := build-windows
+    EXECUTABLE := $(BUILD_DIR)/MiniEngine.exe
+else
+    BUILD_DIR := build
+    EXECUTABLE := $(BUILD_DIR)/MiniEngine
+endif
 
 # Colors for output
 COLOR_GREEN := \033[0;32m
@@ -126,25 +137,33 @@ release: info
 # =============================================================================
 # Demo Executables
 # =============================================================================
+ifeq ($(DETECTED_OS),Windows)
+    EXE_EXT := .exe
+    DEMO_PREFIX := $(BUILD_DIR)/
+else
+    EXE_EXT :=
+    DEMO_PREFIX := ./$(BUILD_DIR)/
+endif
+
 demo-smoke: build
 	@echo "$(COLOR_YELLOW)Running RHI smoke test...$(COLOR_RESET)"
-	@$(ENV_SETUP) && ./$(BUILD_DIR)/rhi_smoke_test
+	@$(ENV_SETUP) && $(DEMO_PREFIX)rhi_smoke_test$(EXE_EXT)
 
 demo-instancing: build
 	@echo "$(COLOR_YELLOW)Running GPU instancing demo...$(COLOR_RESET)"
-	@$(ENV_SETUP) && ./$(BUILD_DIR)/instancing_test
+	@$(ENV_SETUP) && $(DEMO_PREFIX)instancing_test$(EXE_EXT)
 
 demo-pbr: build
 	@echo "$(COLOR_YELLOW)Running PBR Material Showcase...$(COLOR_RESET)"
-	@$(ENV_SETUP) && cd $(CURDIR) && ./$(BUILD_DIR)/pbr_demo
+	@$(ENV_SETUP) && cd $(CURDIR) && $(DEMO_PREFIX)pbr_demo$(EXE_EXT)
 
 demo-dual-light: build
 	@echo "$(COLOR_YELLOW)Running Dual Light PBR Demo...$(COLOR_RESET)"
-	@$(ENV_SETUP) && cd $(CURDIR) && ./$(BUILD_DIR)/dual_light_demo
+	@$(ENV_SETUP) && cd $(CURDIR) && $(DEMO_PREFIX)dual_light_demo$(EXE_EXT)
 
 demo-showcase: build
 	@echo "$(COLOR_YELLOW)Running Portfolio Showcase Demo (Phase 1~4)...$(COLOR_RESET)"
-	@$(ENV_SETUP) && cd $(CURDIR) && ./$(BUILD_DIR)/showcase_demo
+	@$(ENV_SETUP) && cd $(CURDIR) && $(DEMO_PREFIX)showcase_demo$(EXE_EXT)
 
 # Display help
 help:

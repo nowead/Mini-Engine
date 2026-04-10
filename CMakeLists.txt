@@ -226,7 +226,7 @@ if(NOT EMSCRIPTEN)
     )
 
     # Slang shader compilation
-    find_program(SLANGC_EXECUTABLE slangc HINTS $ENV{VULKAN_SDK}/bin REQUIRED)
+    find_program(SLANGC_EXECUTABLE slangc HINTS $ENV{VULKAN_SDK}/bin $ENV{VULKAN_SDK}/Bin)
     set(SHADER_SLANG_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shader.slang)
 
     function(add_slang_shader_target TARGET)

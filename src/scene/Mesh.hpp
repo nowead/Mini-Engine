@@ -6,6 +6,7 @@
 #include <vector>
 #include <string>
 #include <memory>
+#include <stdexcept>
 
 /**
  * @brief Mesh class encapsulating vertex and index data with GPU buffers

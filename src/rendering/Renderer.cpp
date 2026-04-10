@@ -2579,6 +2579,24 @@ void Renderer::drawFrame() {
     }
 #endif
 
+    // Windows: emit UNDEFINED→ShaderReadOnly barriers for IBL textures + dummy skybox cubemap
+    // once on the first frame that uses IBL. The validation layer on Windows doesn't track
+    // layout transitions from one-time-submit init command buffers into the frame's cmd buffer.
+#if !defined(__linux__) && !defined(__EMSCRIPTEN__)
+    if (!m_iblBarriersEmitted) {
+        if (iblManager && iblManager->isInitialized())
+            iblManager->emitInitializationBarriers(encoder.get());
+        if (skyboxRenderer && !skyboxRenderer->hasEnvironmentMap()
+                && skyboxRenderer->getDummyEnvTexture()) {
+            encoder->transitionTextureLayout(
+                skyboxRenderer->getDummyEnvTexture(),
+                rhi::TextureLayout::Undefined,
+                rhi::TextureLayout::ShaderReadOnly);
+        }
+        m_iblBarriersEmitted = true;
+    }
+#endif
+
     // Step 5: SSBO setup + frustum culling + shadow pass
     if (pendingInstancedData && pendingInstancedData->instanceCount > 0) {
         auto* mesh = pendingInstancedData->mesh;
@@ -2830,32 +2848,6 @@ void Renderer::drawFrame() {
         uint32_t H = rhiBridge->getSwapchain()->getHeight();
 
         if (mesh && mesh->hasData() && objectBuffer) {
-#if !defined(__linux__)
-            // macOS/Windows: transition G-Buffers Undefined → ColorAttachment
-            auto* ve = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
-            if (ve) {
-                auto barrierUndef = [&](rhi::RHITexture* tex) {
-                    auto* vt = dynamic_cast<RHI::Vulkan::VulkanRHITexture*>(tex);
-                    if (!vt) return;
-                    ve->getCommandBuffer().pipelineBarrier(
-                        vk::PipelineStageFlagBits::eTopOfPipe,
-                        vk::PipelineStageFlagBits::eColorAttachmentOutput,
-                        {}, {}, {},
-                        vk::ImageMemoryBarrier{
-                            .srcAccessMask = {}, .dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
-                            .oldLayout = vk::ImageLayout::eUndefined,
-                            .newLayout = vk::ImageLayout::eColorAttachmentOptimal,
-                            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                            .image = vt->getVkImage(),
-                            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}
-                        });
-                };
-                barrierUndef(gBufferPass->getGBuffer0());
-                barrierUndef(gBufferPass->getGBuffer1());
-                barrierUndef(gBufferPass->getGBuffer2());
-            }
-#endif
             rhi::RHIBindGroup* bg0 = (frameIndex < buildingBindGroups.size())
                                      ? buildingBindGroups[frameIndex].get() : nullptr;
             // Phase 4: pass bindless descriptor set (null when unavailable → shader uses procedural albedo)

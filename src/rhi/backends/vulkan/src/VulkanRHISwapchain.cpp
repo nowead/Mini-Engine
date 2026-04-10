@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <limits>
 #include <iostream>
+#include <stdexcept>
 
 namespace RHI {
 namespace Vulkan {

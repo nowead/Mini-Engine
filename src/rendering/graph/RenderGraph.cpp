@@ -339,6 +339,9 @@ void RenderGraph::execute(rhi::RHICommandEncoder* encoder)
                        needed.stage, needed.access, needed.layout);
 
         entry.currentState = needed;
+        // Keep global layout tracker in sync so beginRenderPass emits correct barriers
+        RHI::Vulkan::VulkanRHICommandEncoder::notifyImageLayoutChange(
+            static_cast<VkImage>(img), needed.layout);
     };
 
     // Process buffer dependency: transition from current state to needed state

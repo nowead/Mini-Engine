@@ -4,6 +4,7 @@
 #include <rhi/vulkan/VulkanRHITexture.hpp>
 #include <rhi/vulkan/VulkanRHISampler.hpp>
 #include <map>
+#include <stdexcept>
 
 namespace RHI {
 namespace Vulkan {

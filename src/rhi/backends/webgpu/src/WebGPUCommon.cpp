@@ -1,4 +1,5 @@
 #include "rhi/webgpu/WebGPUCommon.hpp"
+#include <stdexcept>
 
 namespace RHI {
 namespace WebGPU {

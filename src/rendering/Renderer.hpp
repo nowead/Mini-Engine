@@ -409,6 +409,7 @@ private:
     std::unique_ptr<rendering::ShadowRenderer> shadowRenderer;
     // Phase 1.2: IBL
     std::unique_ptr<rendering::IBLManager> iblManager;
+    bool m_iblBarriersEmitted = false;  // Windows: emit UNDEFINED→ShaderReadOnly once per frame set
     float shadowBias = 0.008f;  // Constant bias to prevent shadow acne (uniform across all surfaces)
     float shadowStrength = 0.7f;  // Shadow darkness
     float exposure = 1.0f;      // PBR tone mapping exposure

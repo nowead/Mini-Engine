@@ -3,6 +3,7 @@
 #include "src/utils/Vertex.hpp"
 #include <vector>
 #include <string>
+#include <stdexcept>
 
 /**
  * @brief OBJ file loader utility

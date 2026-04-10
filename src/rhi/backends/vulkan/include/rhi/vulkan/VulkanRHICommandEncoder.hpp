@@ -130,6 +130,11 @@ public:
     // Vulkan-specific: Get command buffer for manual barrier insertion
     vk::raii::CommandBuffer& getCommandBuffer() { return m_commandBuffer; }
 
+    // Notify the global layout tracker that an image has been transitioned to a new layout.
+    // Must be called by any code that emits VkCmdPipelineBarrier outside of the encoder's
+    // own transitionTextureLayout / beginRenderPass helpers (e.g., the render graph).
+    static void notifyImageLayoutChange(VkImage image, vk::ImageLayout newLayout);
+
 private:
     VulkanRHIDevice* m_device;
     vk::raii::CommandBuffer m_commandBuffer;

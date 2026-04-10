@@ -53,6 +53,17 @@ public:
 
     bool isInitialized() const { return m_initialized; }
 
+    /**
+     * @brief Emit UNDEFINED → ShaderReadOnly barriers for all IBL textures
+     *        into the provided command encoder.
+     *
+     * Call this once at the start of the first render frame that uses IBL
+     * (before any draw calls). This ensures the validation layer sees the
+     * transitions in the same command buffer as the draws, working around
+     * a Windows validation layer limitation with one-time init submissions.
+     */
+    void emitInitializationBarriers(rhi::RHICommandEncoder* encoder);
+
 private:
     // Texture creation
     bool createTextures();

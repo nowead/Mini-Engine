@@ -12,6 +12,7 @@
 #include <rhi/vulkan/VulkanRHISwapchain.hpp>
 #include <iostream>
 #include <set>
+#include <stdexcept>
 
 namespace RHI {
 namespace Vulkan {

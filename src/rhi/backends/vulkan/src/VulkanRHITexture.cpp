@@ -12,6 +12,7 @@ VulkanRHITextureView::VulkanRHITextureView(VulkanRHIDevice* device,
                                            VkImage image,
                                            const TextureViewDesc& desc)
     : m_device(device)
+    , m_parentImage(image)
     , m_format(desc.format)
     , m_dimension(desc.dimension)
 {
@@ -98,12 +99,14 @@ VulkanRHITextureView::~VulkanRHITextureView() {
 
 VulkanRHITextureView::VulkanRHITextureView(VulkanRHITextureView&& other) noexcept
     : m_device(other.m_device)
+    , m_parentImage(other.m_parentImage)
     , m_imageView(other.m_imageView)
     , m_imageViewRAII(std::move(other.m_imageViewRAII))
     , m_format(other.m_format)
     , m_dimension(other.m_dimension)
     , m_ownsImageView(other.m_ownsImageView)
 {
+    other.m_parentImage = VK_NULL_HANDLE;
     other.m_imageView = VK_NULL_HANDLE;
     other.m_ownsImageView = false;
 }
@@ -115,12 +118,14 @@ VulkanRHITextureView& VulkanRHITextureView::operator=(VulkanRHITextureView&& oth
         }
 
         m_device = other.m_device;
+        m_parentImage = other.m_parentImage;
         m_imageView = other.m_imageView;
         m_imageViewRAII = std::move(other.m_imageViewRAII);
         m_format = other.m_format;
         m_dimension = other.m_dimension;
         m_ownsImageView = other.m_ownsImageView;
 
+        other.m_parentImage = VK_NULL_HANDLE;
         other.m_imageView = VK_NULL_HANDLE;
         other.m_ownsImageView = false;
     }

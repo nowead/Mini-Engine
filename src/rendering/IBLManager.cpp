@@ -659,4 +659,20 @@ bool IBLManager::generatePrefilteredMap() {
     return true;
 }
 
+void IBLManager::emitInitializationBarriers(rhi::RHICommandEncoder* encoder) {
+    if (!encoder) return;
+    if (m_envCubemap)
+        encoder->transitionTextureLayout(m_envCubemap.get(),
+            rhi::TextureLayout::Undefined, rhi::TextureLayout::ShaderReadOnly);
+    if (m_irradianceMap)
+        encoder->transitionTextureLayout(m_irradianceMap.get(),
+            rhi::TextureLayout::Undefined, rhi::TextureLayout::ShaderReadOnly);
+    if (m_prefilteredMap)
+        encoder->transitionTextureLayout(m_prefilteredMap.get(),
+            rhi::TextureLayout::Undefined, rhi::TextureLayout::ShaderReadOnly);
+    if (m_brdfLut)
+        encoder->transitionTextureLayout(m_brdfLut.get(),
+            rhi::TextureLayout::Undefined, rhi::TextureLayout::ShaderReadOnly);
+}
+
 } // namespace rendering

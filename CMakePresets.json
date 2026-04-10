@@ -23,15 +23,38 @@
       {
         "name": "windows-default",
         "displayName": "Windows Default Config with Clang",
-        "description": "Default build for Windows using vcpkg with Clang compiler",
+        "description": "Default build for Windows using vcpkg with Clang 21 (standalone LLVM)",
         "generator": "Ninja",
         "binaryDir": "${sourceDir}/build-windows",
         "cacheVariables": {
           "CMAKE_BUILD_TYPE": "Debug",
           "CMAKE_TOOLCHAIN_FILE": "C:\\dev\\vcpkg\\scripts\\buildsystems\\vcpkg.cmake",
           "CMAKE_EXPORT_COMPILE_COMMANDS": "TRUE",
-          "CMAKE_C_COMPILER": "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/bin/clang.exe",
-          "CMAKE_CXX_COMPILER": "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/bin/clang++.exe"
+          "CMAKE_C_COMPILER": "C:/Program Files/LLVM/bin/clang.exe",
+          "CMAKE_CXX_COMPILER": "C:/Program Files/LLVM/bin/clang++.exe",
+          "CMAKE_MAKE_PROGRAM": "C:/Program Files/Microsoft Visual Studio/2022/Community/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe",
+          "CMAKE_RC_COMPILER": "C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/rc.exe",
+          "VULKAN_SDK": "$env{VULKAN_SDK}"
+        },
+        "environment": {
+          "VCPKG_TARGET_TRIPLET": "x64-windows"
+        }
+      },
+      {
+        "name": "windows-release",
+        "displayName": "Windows Release Config with Clang",
+        "description": "Optimized release build for Windows",
+        "generator": "Ninja",
+        "binaryDir": "${sourceDir}/build-windows-release",
+        "cacheVariables": {
+          "CMAKE_BUILD_TYPE": "Release",
+          "CMAKE_TOOLCHAIN_FILE": "C:\\dev\\vcpkg\\scripts\\buildsystems\\vcpkg.cmake",
+          "CMAKE_EXPORT_COMPILE_COMMANDS": "TRUE",
+          "CMAKE_C_COMPILER": "C:/Program Files/LLVM/bin/clang.exe",
+          "CMAKE_CXX_COMPILER": "C:/Program Files/LLVM/bin/clang++.exe",
+          "CMAKE_MAKE_PROGRAM": "C:/Program Files/Microsoft Visual Studio/2022/Community/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe",
+          "CMAKE_RC_COMPILER": "C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/rc.exe",
+          "VULKAN_SDK": "$env{VULKAN_SDK}"
         },
         "environment": {
           "VCPKG_TARGET_TRIPLET": "x64-windows"
@@ -73,6 +96,10 @@
         {
             "name": "windows-default",
             "configurePreset": "windows-default"
+        },
+        {
+            "name": "windows-release",
+            "configurePreset": "windows-release"
         },
         {
             "name": "linux-default",

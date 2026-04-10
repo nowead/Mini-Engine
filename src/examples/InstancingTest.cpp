@@ -5,6 +5,7 @@
 #include <cmath>
 #include <fstream>
 #include <vector>
+#include <stdexcept>
 
 namespace examples {
 

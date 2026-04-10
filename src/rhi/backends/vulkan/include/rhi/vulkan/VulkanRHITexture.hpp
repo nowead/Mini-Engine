@@ -44,6 +44,7 @@ public:
 
     // Vulkan-specific accessors
     VkImageView getVkImageView() const { return m_imageView; }
+    VkImage     getParentImage() const { return m_parentImage; }
 
 private:
     friend class VulkanRHISwapchain;
@@ -55,6 +56,7 @@ private:
                          TextureViewDimension dimension);
 
     VulkanRHIDevice* m_device;
+    VkImage m_parentImage = VK_NULL_HANDLE;
     VkImageView m_imageView = VK_NULL_HANDLE;
     vk::raii::ImageView m_imageViewRAII = nullptr;  // For swapchain-owned views
     TextureFormat m_format;

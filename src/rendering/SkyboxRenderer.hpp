@@ -74,6 +74,7 @@ public:
     void setEnvironmentMap(rhi::RHITextureView* envView, rhi::RHISampler* sampler);
 
     bool hasEnvironmentMap() const { return m_hasEnvMap; }
+    rhi::RHITexture* getDummyEnvTexture() const { return m_dummyEnvTexture.get(); }
 
     void setExposure(float exposure) { m_exposure = exposure; }
     float getExposure() const { return m_exposure; }

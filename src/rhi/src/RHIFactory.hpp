@@ -5,6 +5,7 @@
 #include <memory>
 #include <vector>
 #include <string>
+#include <stdexcept>
 
 // Forward declarations for platform types
 struct GLFWwindow;

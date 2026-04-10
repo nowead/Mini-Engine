@@ -2,6 +2,7 @@
 #include <rhi/vulkan/VulkanRHIDevice.hpp>
 #include <rhi/vulkan/VulkanRHIShader.hpp>
 #include <rhi/vulkan/VulkanRHIBindGroup.hpp>
+#include <stdexcept>
 
 namespace RHI {
 namespace Vulkan {

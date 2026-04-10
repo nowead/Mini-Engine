@@ -1,6 +1,7 @@
 #include "Mesh.hpp"
 #include "src/loaders/OBJLoader.hpp"
 #include <cstring>
+#include <stdexcept>
 
 Mesh::Mesh(rhi::RHIDevice* device, rhi::RHIQueue* queue)
     : rhiDevice(device), graphicsQueue(queue) {

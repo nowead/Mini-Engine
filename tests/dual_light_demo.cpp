@@ -30,6 +30,7 @@
 #include <memory>
 #include <iostream>
 #include <cmath>
+#include <stdexcept>
 
 // =============================================================================
 // Sphere Mesh Generation

@@ -5,9 +5,16 @@
 #include <rhi/vulkan/VulkanRHIPipeline.hpp>
 #include <rhi/vulkan/VulkanRHIBindGroup.hpp>
 #include <iostream>  // Phase 7.5: For std::cerr warning message
+#include <unordered_map>
 
 namespace RHI {
 namespace Vulkan {
+
+// Track the current image layout for each VkImage so that dynamic rendering passes
+// (Mac/Windows) can emit the correct barrier from any previous layout to the
+// required attachment layout. Traditional render passes (Linux) handle this
+// automatically via initialLayout / finalLayout in VkRenderPassCreateInfo.
+static std::unordered_map<VkImage, vk::ImageLayout> s_imageLayouts;
 
 // ============================================================================
 // VulkanRHICommandBuffer Implementation
@@ -94,6 +101,77 @@ VulkanRHIRenderPassEncoder::VulkanRHIRenderPassEncoder(VulkanRHIDevice* device, 
 #endif
 
     // macOS/Windows or Linux fallback: Use dynamic rendering (Vulkan 1.3)
+    // Emit correct layout transition barriers before beginRendering so that
+    // images are in the required layout. On first frame they come from UNDEFINED;
+    // on subsequent frames they come from wherever the render graph left them
+    // (typically SHADER_READ_ONLY_OPTIMAL after post-process sampling).
+    // Barriers are collected per source-stage bucket to satisfy Vulkan's rule
+    // that srcStageMask must cover all non-zero srcAccessMask flags.
+
+    std::vector<vk::ImageMemoryBarrier> fromUndefinedBarriers;
+    std::vector<vk::ImageMemoryBarrier> fromShaderReadBarriers;
+    std::vector<vk::ImageMemoryBarrier> fromColorAttachBarriers;
+
+    auto emitBarrierToColor = [&](VkImage img) {
+        if (!img) return;
+        auto target = vk::ImageLayout::eColorAttachmentOptimal;
+        auto it = s_imageLayouts.find(img);
+        vk::ImageLayout current = (it != s_imageLayouts.end())
+            ? it->second : vk::ImageLayout::eUndefined;
+        if (current == target) return;
+
+        vk::ImageMemoryBarrier b;
+        b.oldLayout           = current;
+        b.newLayout           = target;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image               = img;
+        b.subresourceRange    = { vk::ImageAspectFlagBits::eColor, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS };
+        b.dstAccessMask       = vk::AccessFlagBits::eColorAttachmentWrite;
+
+        if (current == vk::ImageLayout::eUndefined) {
+            b.srcAccessMask = {};
+            fromUndefinedBarriers.push_back(b);
+        } else if (current == vk::ImageLayout::eShaderReadOnlyOptimal) {
+            b.srcAccessMask = vk::AccessFlagBits::eShaderRead;
+            fromShaderReadBarriers.push_back(b);
+        } else {
+            b.srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+            fromColorAttachBarriers.push_back(b);
+        }
+        s_imageLayouts[img] = target;
+    };
+
+    auto emitBarrierToDepth = [&](VkImage img) {
+        if (!img) return;
+        auto target = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+        auto it = s_imageLayouts.find(img);
+        vk::ImageLayout current = (it != s_imageLayouts.end())
+            ? it->second : vk::ImageLayout::eUndefined;
+        if (current == target) return;
+
+        vk::ImageMemoryBarrier b;
+        b.oldLayout           = current;
+        b.newLayout           = target;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image               = img;
+        b.subresourceRange    = { vk::ImageAspectFlagBits::eDepth, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS };
+        b.dstAccessMask       = vk::AccessFlagBits::eDepthStencilAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentRead;
+
+        if (current == vk::ImageLayout::eUndefined) {
+            b.srcAccessMask = {};
+            fromUndefinedBarriers.push_back(b);
+        } else if (current == vk::ImageLayout::eShaderReadOnlyOptimal) {
+            b.srcAccessMask = vk::AccessFlagBits::eShaderRead;
+            fromShaderReadBarriers.push_back(b);
+        } else {
+            b.srcAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+            fromColorAttachBarriers.push_back(b);
+        }
+        s_imageLayouts[img] = target;
+    };
+
     // Convert color attachments
     std::vector<vk::RenderingAttachmentInfo> colorAttachments;
     m_colorAttachmentViews.clear();  // Store views for layout transition on end
@@ -102,6 +180,8 @@ VulkanRHIRenderPassEncoder::VulkanRHIRenderPassEncoder(VulkanRHIDevice* device, 
 
         auto* vulkanView = static_cast<VulkanRHITextureView*>(attachment.view);
         vk::ImageView imageView = vulkanView->getVkImageView();
+
+        emitBarrierToColor(vulkanView->getParentImage());
 
         vk::RenderingAttachmentInfo colorAttachment;
         colorAttachment.imageView = imageView;
@@ -127,6 +207,8 @@ VulkanRHIRenderPassEncoder::VulkanRHIRenderPassEncoder(VulkanRHIDevice* device, 
     if (desc.depthStencilAttachment && desc.depthStencilAttachment->view) {
         auto* vulkanView = static_cast<VulkanRHITextureView*>(desc.depthStencilAttachment->view);
 
+        emitBarrierToDepth(vulkanView->getParentImage());
+
         depthAttachment.imageView = vulkanView->getVkImageView();
         depthAttachment.imageLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
         depthAttachment.loadOp = ToVkAttachmentLoadOp(desc.depthStencilAttachment->depthLoadOp);
@@ -135,6 +217,29 @@ VulkanRHIRenderPassEncoder::VulkanRHIRenderPassEncoder(VulkanRHIDevice* device, 
             desc.depthStencilAttachment->depthClearValue, 0);
 
         hasDepth = true;
+    }
+
+    // Emit layout transition barriers — one pipelineBarrier call per source-stage bucket
+    // so that srcStageMask correctly covers all srcAccessMask flags.
+    auto dstStage = vk::PipelineStageFlagBits::eColorAttachmentOutput
+                  | vk::PipelineStageFlagBits::eEarlyFragmentTests;
+
+    if (!fromUndefinedBarriers.empty()) {
+        m_commandBuffer.pipelineBarrier(
+            vk::PipelineStageFlagBits::eTopOfPipe, dstStage,
+            {}, nullptr, nullptr, fromUndefinedBarriers);
+    }
+    if (!fromShaderReadBarriers.empty()) {
+        m_commandBuffer.pipelineBarrier(
+            vk::PipelineStageFlagBits::eFragmentShader | vk::PipelineStageFlagBits::eComputeShader,
+            dstStage,
+            {}, nullptr, nullptr, fromShaderReadBarriers);
+    }
+    if (!fromColorAttachBarriers.empty()) {
+        m_commandBuffer.pipelineBarrier(
+            vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eLateFragmentTests,
+            dstStage,
+            {}, nullptr, nullptr, fromColorAttachBarriers);
     }
 
     // Begin dynamic rendering
@@ -594,6 +699,15 @@ void VulkanRHICommandEncoder::transitionTextureLayout(rhi::RHITexture* texture,
         {},
         nullptr, nullptr, barrier
     );
+
+    // Update the persistent layout tracker so beginRenderPass knows the current layout
+    s_imageLayouts[barrier.image] = barrier.newLayout;
+}
+
+void VulkanRHICommandEncoder::notifyImageLayoutChange(VkImage image, vk::ImageLayout newLayout) {
+    if (image) {
+        s_imageLayouts[image] = newLayout;
+    }
 }
 
 std::unique_ptr<RHICommandBuffer> VulkanRHICommandEncoder::finish() {
