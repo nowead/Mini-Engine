@@ -186,6 +186,18 @@ public:
     void setAOStrength(float s) { aoStrength = s; }
     float getAOStrength() const { return aoStrength; }
 
+    void setTonemapEnabled(bool on) { tonemapEnabled = on; }
+    bool getTonemapEnabled() const { return tonemapEnabled; }
+
+    void setDebugCascades(bool on) { debugCascades = on; }
+    bool getDebugCascades() const { return debugCascades; }
+
+    /**
+     * @brief Set dynamic point lights for the deferred lighting pass (Phase 4 showcase).
+     *        Clamped to MAX_POINT_LIGHTS (32). Call once per frame before drawFrame().
+     */
+    void setPointLights(const std::vector<PointLight>& lights) { pendingPointLights = lights; }
+
     /**
      * @brief Load HDR environment map and initialize full IBL pipeline
      * @param hdrPath Path to .hdr equirectangular environment map
@@ -383,6 +395,9 @@ private:
     // Instanced rendering data (submitted per-frame) - stored by value
     std::optional<rendering::InstancedRenderData> pendingInstancedData;
 
+    // Phase 4 showcase: dynamic point lights submitted each frame
+    std::vector<PointLight> pendingPointLights;
+
     // Particle rendering
     std::unique_ptr<effects::ParticleRenderer> particleRenderer;
     effects::ParticleSystem* pendingParticleSystem = nullptr;
@@ -399,6 +414,8 @@ private:
     float exposure = 1.0f;      // PBR tone mapping exposure
     float bloomStrength = 0.04f; // Bloom intensity
     float aoStrength = 0.6f;     // SSAO darkening strength
+    bool  tonemapEnabled = true; // ACES tonemap on/off
+    bool  debugCascades  = false;// CSM cascade color debug
     float shadowSceneRadius = 200.0f;  // Orthographic projection half-extent for shadows
 
 #ifndef __EMSCRIPTEN__

@@ -60,7 +60,7 @@ COLOR_BLUE := \033[0;34m
 COLOR_YELLOW := \033[0;33m
 COLOR_RESET := \033[0m
 
-.PHONY: all build run run-only clean re help info demo-smoke demo-instancing demo-pbr demo-dual-light release wasm configure-wasm build-wasm serve-wasm clean-wasm setup-emscripten shaders
+.PHONY: all build run run-only clean re help info demo-smoke demo-instancing demo-pbr demo-dual-light demo-showcase release wasm configure-wasm build-wasm serve-wasm clean-wasm setup-emscripten shaders
 
 # Default target
 all: build
@@ -142,6 +142,10 @@ demo-dual-light: build
 	@echo "$(COLOR_YELLOW)Running Dual Light PBR Demo...$(COLOR_RESET)"
 	@$(ENV_SETUP) && cd $(CURDIR) && ./$(BUILD_DIR)/dual_light_demo
 
+demo-showcase: build
+	@echo "$(COLOR_YELLOW)Running Portfolio Showcase Demo (Phase 1~4)...$(COLOR_RESET)"
+	@$(ENV_SETUP) && cd $(CURDIR) && ./$(BUILD_DIR)/showcase_demo
+
 # Display help
 help:
 	@echo "$(COLOR_BLUE)========================================$(COLOR_RESET)"
@@ -160,6 +164,7 @@ help:
 	@echo "  $(COLOR_GREEN)make demo-instancing$(COLOR_RESET)    - Run GPU instancing demo (1000 cubes)"
 	@echo "  $(COLOR_GREEN)make demo-pbr$(COLOR_RESET)           - Run PBR Material Showcase (5x5 spheres)"
 	@echo "  $(COLOR_GREEN)make demo-dual-light$(COLOR_RESET)    - Run Dual Point Light PBR Demo"
+	@echo "  $(COLOR_GREEN)make demo-showcase$(COLOR_RESET)     - Run Portfolio Showcase (Phase 1~4, deferred + 24 point lights)"
 	@echo ""
 	@echo "$(COLOR_BLUE)Maintenance:$(COLOR_RESET)"
 	@echo "  $(COLOR_GREEN)make clean$(COLOR_RESET)              - Remove all build artifacts"

@@ -75,6 +75,10 @@ public:
     vk::RenderPass getHDRRenderPass() const { return *m_hdrRenderPass ? *m_hdrRenderPass : VK_NULL_HANDLE; }
     vk::Framebuffer getHDRFramebuffer() const { return *m_hdrFramebuffer ? *m_hdrFramebuffer : VK_NULL_HANDLE; }
 
+    // HDR continuation pass: same formats but loadOp=Load — used by DeferredLighting to preserve skybox
+    void createHDRLoadRenderPass();
+    vk::RenderPass getHDRLoadRenderPass() const { return *m_hdrLoadRenderPass ? *m_hdrLoadRenderPass : VK_NULL_HANDLE; }
+
     // Post-process pass: swapchain format, no depth — tonemap+FXAA writes here
     void createPostProcessRenderPass();
     void createPostProcessFramebuffers();
@@ -108,6 +112,9 @@ private:
     // HDR offscreen render pass (RGBA16Float + depth) — geometry renders here
     vk::raii::RenderPass m_hdrRenderPass = nullptr;
     vk::raii::Framebuffer m_hdrFramebuffer = nullptr;  // single FB (one HDR texture)
+
+    // HDR continuation render pass (loadOp=Load) — used by DeferredLighting to preserve skybox
+    vk::raii::RenderPass m_hdrLoadRenderPass = nullptr;
 
     // Post-process render pass (swapchain format, no depth) — tonemap+FXAA writes here
     vk::raii::RenderPass m_postProcessRenderPass = nullptr;

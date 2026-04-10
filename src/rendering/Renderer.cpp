@@ -1209,7 +1209,8 @@ void Renderer::createDeferredLightingPass() {
 #ifdef __linux__
     auto* rhiVulkanSC = dynamic_cast<RHI::Vulkan::VulkanRHISwapchain*>(rhiBridge->getSwapchain());
     if (rhiVulkanSC)
-        nativeRenderPass = reinterpret_cast<void*>(static_cast<VkRenderPass>(rhiVulkanSC->getHDRRenderPass()));
+        // Use the Load variant render pass so the pipeline is compatible with LoadOp::Load
+        nativeRenderPass = reinterpret_cast<void*>(static_cast<VkRenderPass>(rhiVulkanSC->getHDRLoadRenderPass()));
 #endif
 
     deferredLightingPass = std::make_unique<rendering::DeferredLightingPass>(device);
@@ -1484,6 +1485,7 @@ void Renderer::createHDRRenderTarget() {
         auto* depthVkView = dynamic_cast<RHI::Vulkan::VulkanRHITextureView*>(rhiDepthImageView.get());
         if (hdrVkView && depthVkView) {
             vulkanSwapchain->createHDRRenderPass();
+            vulkanSwapchain->createHDRLoadRenderPass();   // load variant for DeferredLighting
             vulkanSwapchain->createHDRFramebuffer(hdrVkView->getVkImageView(),
                                                   depthVkView->getVkImageView());
             vulkanSwapchain->createPostProcessRenderPass();
@@ -1775,7 +1777,7 @@ void Renderer::createPostProcessPipeline() {
     rhi::PushConstantRange pcRange;
     pcRange.stageFlags = rhi::ShaderStage::Fragment;
     pcRange.offset     = 0;
-    pcRange.size       = sizeof(float) * 5;  // vec2 texelSize + bloomStrength + exposure + aoStrength
+    pcRange.size       = sizeof(float) * 6;  // vec2 texelSize + bloomStrength + exposure + aoStrength + tonemapEnabled
     plDesc.pushConstantRanges.push_back(pcRange);
     postprocessPipelineLayout = rhiBridge->createPipelineLayout(plDesc);
 
@@ -2156,6 +2158,7 @@ void Renderer::recreatePostProcessResources() {
         auto* depthVkView = dynamic_cast<RHI::Vulkan::VulkanRHITextureView*>(rhiDepthImageView.get());
         if (hdrVkView && depthVkView) {
             vulkanSwapchain->createHDRRenderPass();
+            vulkanSwapchain->createHDRLoadRenderPass();   // load variant for DeferredLighting
             vulkanSwapchain->createHDRFramebuffer(hdrVkView->getVkImageView(),
                                                   depthVkView->getVkImageView());
             vulkanSwapchain->createPostProcessRenderPass();
@@ -2492,6 +2495,13 @@ void Renderer::updateRHIUniformBuffer(uint32_t currentImage) {
     ubo.shadowMapSize  = glm::vec2(rendering::ShadowRenderer::SHADOW_MAP_SIZE);
     ubo.shadowBias     = shadowBias;
     ubo.shadowStrength = shadowStrength;
+
+    // Phase 4 showcase: pack dynamic point lights
+    ubo.numPointLights = static_cast<uint32_t>(
+        std::min(pendingPointLights.size(), static_cast<size_t>(MAX_POINT_LIGHTS)));
+    for (uint32_t i = 0; i < ubo.numPointLights; ++i)
+        ubo.pointLights[i] = pendingPointLights[i];
+    ubo.debugCascades = debugCascades ? 1.0f : 0.0f;
 
     // Copy to RHI uniform buffer - always use write() to ensure proper flush to GPU
     auto* buffer = rhiUniformBuffers[currentImage].get();
@@ -3068,8 +3078,9 @@ void Renderer::drawFrame() {
 
 #ifdef __linux__
             if (auto* rhiVulkanSC = dynamic_cast<RHI::Vulkan::VulkanRHISwapchain*>(swapchain)) {
+                // Use the Load variant so the skybox rendered in the first HDR pass is preserved
                 dlDesc.nativeRenderPass  = reinterpret_cast<void*>(
-                    static_cast<VkRenderPass>(rhiVulkanSC->getHDRRenderPass()));
+                    static_cast<VkRenderPass>(rhiVulkanSC->getHDRLoadRenderPass()));
                 dlDesc.nativeFramebuffer = reinterpret_cast<void*>(
                     static_cast<VkFramebuffer>(rhiVulkanSC->getHDRFramebuffer()));
             }
@@ -3177,9 +3188,9 @@ void Renderer::drawFrame() {
                         ppPass->setScissorRect(0, 0, W, H);
                         ppPass->setPipeline(postprocessPipeline.get());
                         ppPass->setBindGroup(0, postprocessBindGroup.get());
-                        struct PostProcessPC { float texelW; float texelH; float bloomStr; float exposure; float aoStr; };
+                        struct PostProcessPC { float texelW; float texelH; float bloomStr; float exposure; float aoStr; float tonemapOn; };
                         float effectiveAO = ssaoPipeline ? aoStrength : 0.0f;
-                        PostProcessPC pc{ 1.0f / W, 1.0f / H, bloomStrength, exposure, effectiveAO };
+                        PostProcessPC pc{ 1.0f / W, 1.0f / H, bloomStrength, exposure, effectiveAO, tonemapEnabled ? 1.0f : 0.0f };
                         ppPass->setPushConstants(postprocessPipelineLayout.get(),
                             rhi::ShaderStage::Fragment, 0, sizeof(pc), &pc);
                         ppPass->draw(3);

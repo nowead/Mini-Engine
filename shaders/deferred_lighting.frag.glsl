@@ -10,6 +10,13 @@ const float PI = 3.14159265359;
 // Inputs
 // ---------------------------------------------------------------------------
 
+struct PointLight {
+    vec3 position;
+    float radius;
+    vec3 color;
+    float intensity;
+};
+
 layout(set = 0, binding = 0) uniform UniformBufferObject {
     mat4 model;
     mat4 view;
@@ -27,6 +34,11 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
     vec2 shadowMapSize;
     float shadowBias;
     float shadowStrength;
+    PointLight pointLights[32];
+    uint numPointLights;
+    float debugCascades;  // 1.0 = visualize CSM cascade regions
+    float _pad1;
+    float _pad2;
 } ubo;
 
 // G-Buffers
@@ -190,9 +202,53 @@ void main() {
     vec3 fallbackAmbient = albedo * ao;
     vec3 ambient        = mix(fallbackAmbient, iblAmbient, step(0.001, iblStrength)) * ubo.ambientIntensity;
 
-    // CSM shadow
+    // CSM shadow (directional sun only)
     float shadow = calculateCSMShadow(worldPos, N, L);
 
     vec3 color = ambient + (1.0 - shadow) * Lo;
-    outColor   = vec4(color, 1.0);
+
+    // Dynamic point lights (deferred rendering advantage: O(lights) not O(lights*geometry))
+    for (uint i = 0u; i < ubo.numPointLights; ++i) {
+        vec3  Lp   = ubo.pointLights[i].position - worldPos;
+        float dist = length(Lp);
+        float r    = max(ubo.pointLights[i].radius, 0.001);
+        if (dist >= r) continue;
+
+        Lp = normalize(Lp);
+        float atten = clamp(1.0 - (dist / r), 0.0, 1.0);
+        atten *= atten; // quadratic falloff
+
+        vec3  Hp     = normalize(V + Lp);
+        float NdotLp = max(dot(N, Lp), 0.0);
+        float NdotVp = max(dot(N, V),  0.0);
+
+        float Dp = distributionGGX(N, Hp, roughness);
+        float Gp = geometrySmith(N, V, Lp, roughness);
+        vec3  Fp = fresnelSchlick(max(dot(Hp, V), 0.0), F0);
+
+        vec3 specP = (Dp * Gp * Fp) / (4.0 * NdotVp * NdotLp + 0.0001);
+        vec3 kDp   = (vec3(1.0) - Fp) * (1.0 - metallic);
+
+        vec3 radianceP = ubo.pointLights[i].color * ubo.pointLights[i].intensity * atten;
+        color += (kDp * albedo / PI + specP) * radianceP * NdotLp;
+    }
+
+    // CSM cascade debug visualization
+    if (ubo.debugCascades > 0.5) {
+        vec4 posView = ubo.view * vec4(worldPos, 1.0);
+        float viewDepth = -posView.z;
+        vec3 cascadeColors[4] = vec3[](
+            vec3(1.0, 0.2, 0.2),   // cascade 0: red   (0~10m)
+            vec3(0.2, 1.0, 0.2),   // cascade 1: green (10~50m)
+            vec3(0.2, 0.4, 1.0),   // cascade 2: blue  (50~200m)
+            vec3(1.0, 0.9, 0.1)    // cascade 3: yellow(200~1000m)
+        );
+        int ci = 3;
+        for (int i = 0; i < 4; ++i) {
+            if (viewDepth < ubo.cascadeSplits[i]) { ci = i; break; }
+        }
+        color = mix(color, cascadeColors[ci], 0.5);
+    }
+
+    outColor = vec4(color, 1.0);
 }

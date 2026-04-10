@@ -22,6 +22,7 @@ layout(push_constant) uniform PostProcessParams {
     float bloomStrength;  // [0..1] how much bloom to add
     float exposure;       // EV adjustment applied before ACES
     float aoStrength;     // [0..1] SSAO darkening strength
+    float tonemapEnabled; // 1.0 = apply ACES, 0.0 = passthrough (raw HDR clamped)
 } params;
 
 // ---- ACES Filmic Tone Mapping -----------------------------------------------
@@ -47,7 +48,8 @@ vec3 tonemappedSample(vec2 uv) {
     // ao=1.0 → fully lit, ao=0.0 → fully occluded
     composite *= mix(1.0, ao, params.aoStrength);
 
-    return ACESFilm(composite * max(params.exposure, 0.001));
+    vec3 exposed = composite * max(params.exposure, 0.001);
+    return (params.tonemapEnabled > 0.5) ? ACESFilm(exposed) : clamp(exposed, 0.0, 1.0);
 }
 
 // ---- Perceptual Luminance (Rec. 601) ----------------------------------------

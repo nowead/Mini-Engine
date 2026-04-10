@@ -540,6 +540,70 @@ void VulkanRHISwapchain::createHDRRenderPass() {
     std::cout << "[Swapchain] HDR render pass created" << std::endl;
 }
 
+void VulkanRHISwapchain::createHDRLoadRenderPass() {
+    if (*m_hdrLoadRenderPass) return;
+
+    // Same formats as m_hdrRenderPass, but loadOp=Load so prior HDR content (skybox) is preserved.
+    // initialLayout=ShaderReadOnlyOptimal because the first HDR pass ends in that layout.
+    vk::AttachmentDescription colorAttachment;
+    colorAttachment.format         = vk::Format::eR16G16B16A16Sfloat;
+    colorAttachment.samples        = vk::SampleCountFlagBits::e1;
+    colorAttachment.loadOp         = vk::AttachmentLoadOp::eLoad;
+    colorAttachment.storeOp        = vk::AttachmentStoreOp::eStore;
+    colorAttachment.stencilLoadOp  = vk::AttachmentLoadOp::eDontCare;
+    colorAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+    colorAttachment.initialLayout  = vk::ImageLayout::eShaderReadOnlyOptimal;
+    colorAttachment.finalLayout    = vk::ImageLayout::eShaderReadOnlyOptimal;
+
+    vk::AttachmentDescription depthAttachment;
+    depthAttachment.format         = vk::Format::eD32Sfloat;
+    depthAttachment.samples        = vk::SampleCountFlagBits::e1;
+    depthAttachment.loadOp         = vk::AttachmentLoadOp::eLoad;
+    depthAttachment.storeOp        = vk::AttachmentStoreOp::eStore;
+    depthAttachment.stencilLoadOp  = vk::AttachmentLoadOp::eDontCare;
+    depthAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+    depthAttachment.initialLayout  = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+    depthAttachment.finalLayout    = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
+    vk::AttachmentReference colorRef;
+    colorRef.attachment = 0;
+    colorRef.layout     = vk::ImageLayout::eColorAttachmentOptimal;
+
+    vk::AttachmentReference depthRef;
+    depthRef.attachment = 1;
+    depthRef.layout     = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
+    vk::SubpassDescription subpass;
+    subpass.pipelineBindPoint       = vk::PipelineBindPoint::eGraphics;
+    subpass.colorAttachmentCount    = 1;
+    subpass.pColorAttachments       = &colorRef;
+    subpass.pDepthStencilAttachment = &depthRef;
+
+    vk::SubpassDependency dep;
+    dep.srcSubpass    = VK_SUBPASS_EXTERNAL;
+    dep.dstSubpass    = 0;
+    dep.srcStageMask  = vk::PipelineStageFlagBits::eColorAttachmentOutput |
+                        vk::PipelineStageFlagBits::eEarlyFragmentTests;
+    dep.dstStageMask  = vk::PipelineStageFlagBits::eColorAttachmentOutput |
+                        vk::PipelineStageFlagBits::eEarlyFragmentTests;
+    dep.srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+    dep.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite |
+                        vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+
+    std::array<vk::AttachmentDescription, 2> attachments = { colorAttachment, depthAttachment };
+
+    vk::RenderPassCreateInfo info;
+    info.attachmentCount = static_cast<uint32_t>(attachments.size());
+    info.pAttachments    = attachments.data();
+    info.subpassCount    = 1;
+    info.pSubpasses      = &subpass;
+    info.dependencyCount = 1;
+    info.pDependencies   = &dep;
+
+    m_hdrLoadRenderPass = vk::raii::RenderPass(m_device->getVkDevice(), info);
+    std::cout << "[Swapchain] HDR load render pass created\n";
+}
+
 void VulkanRHISwapchain::createHDRFramebuffer(vk::ImageView hdrColorView, vk::ImageView depthView) {
     std::array<vk::ImageView, 2> attachments = { hdrColorView, depthView };
 

@@ -888,6 +888,84 @@ if(BUILD_TESTS)
         endif()
     endif()
 
+    # ==========================================================================
+    # Portfolio Showcase Demo (Phase 1~4 unified)
+    # ==========================================================================
+    add_executable(showcase_demo
+        tests/showcase_demo.cpp
+        src/rendering/Renderer.cpp
+        src/rendering/Renderer.hpp
+        src/rendering/RendererBridge.hpp
+        src/rendering/RendererBridge.cpp
+        src/rendering/BatchRenderer.cpp
+        src/rendering/BatchRenderer.hpp
+        src/scene/Mesh.cpp
+        src/scene/Mesh.hpp
+        src/scene/SceneManager.cpp
+        src/scene/SceneManager.hpp
+        src/scene/Camera.cpp
+        src/scene/Camera.hpp
+        src/scene/SceneNode.cpp
+        src/scene/SceneNode.hpp
+        src/scene/SceneGraph.cpp
+        src/scene/SceneGraph.hpp
+        src/scene/SectorNode.cpp
+        src/scene/SectorNode.hpp
+        src/scene/AABB.hpp
+        src/scene/Quadtree.cpp
+        src/scene/Quadtree.hpp
+        src/scene/Frustum.hpp
+        src/loaders/OBJLoader.cpp
+        src/loaders/OBJLoader.hpp
+        src/resources/ResourceManager.cpp
+        src/resources/ResourceManager.hpp
+        src/ui/ImGuiBackend.hpp
+        src/ui/ImGuiVulkanBackend.hpp
+        src/ui/ImGuiVulkanBackend.cpp
+        src/ui/ImGuiManager.cpp
+        src/ui/ImGuiManager.hpp
+        src/utils/Vertex.hpp
+        src/utils/FileUtils.hpp
+        src/effects/Particle.hpp
+        src/effects/ParticleSystem.cpp
+        src/effects/ParticleSystem.hpp
+        src/effects/ParticleRenderer.cpp
+        src/effects/ParticleRenderer.hpp
+        src/rendering/SkyboxRenderer.cpp
+        src/rendering/SkyboxRenderer.hpp
+        src/rendering/ShadowRenderer.cpp
+        src/rendering/ShadowRenderer.hpp
+        src/rendering/IBLManager.cpp
+        src/rendering/IBLManager.hpp
+        src/utils/GpuProfiler.cpp
+        src/utils/GpuProfiler.hpp
+        src/rendering/graph/RenderGraph.cpp
+        src/rendering/graph/RenderGraph.hpp
+        src/rendering/graph/RenderGraphResource.hpp
+        src/rendering/graph/RenderPass.hpp
+        src/rendering/graph/BarrierBatch.hpp
+        src/rendering/GBufferPass.cpp
+        src/rendering/GBufferPass.hpp
+        src/rendering/DeferredLightingPass.cpp
+        src/rendering/DeferredLightingPass.hpp
+        src/rendering/BindlessTextureManager.cpp
+        src/rendering/BindlessTextureManager.hpp
+        src/rendering/InstancedRenderData.hpp
+    )
+
+    configure_rhi_test(showcase_demo)
+    if(NOT EMSCRIPTEN)
+        target_link_libraries(showcase_demo PRIVATE
+            Stb::stb tinyobjloader::tinyobjloader imgui::imgui)
+    else()
+        target_link_libraries(showcase_demo PRIVATE tinyobjloader imgui::imgui)
+    endif()
+
+    # Reuse existing compiled shaders (deferred, building, shadow, post-process, etc.)
+    if(NOT EMSCRIPTEN)
+        add_dependencies(showcase_demo building_shaders)
+    endif()
+
     # Custom target to run PBR demo
     add_custom_target(run
         COMMAND ${CMAKE_CURRENT_BINARY_DIR}/pbr_demo
@@ -897,7 +975,7 @@ if(BUILD_TESTS)
         USES_TERMINAL
     )
 
-    message(STATUS "Demo executables enabled: rhi_smoke_test, instancing_test, pbr_demo, dual_light_demo")
+    message(STATUS "Demo executables enabled: rhi_smoke_test, instancing_test, pbr_demo, dual_light_demo, showcase_demo")
     message(STATUS "Run with: make pbr_demo && make run OR make demo-dual-light")
 else()
     message(STATUS "Demo executables disabled (BUILD_TESTS=OFF)")

@@ -21,6 +21,16 @@ template<> struct std::hash<Vertex> {
 	}
 };
 
+// Phase 4 showcase: dynamic point light (std140-compatible)
+struct alignas(16) PointLight {
+    glm::vec3 position;
+    float radius;
+    glm::vec3 color;
+    float intensity;
+};
+
+static constexpr uint32_t MAX_POINT_LIGHTS = 32;
+
 struct UniformBufferObject {
 	alignas(16) glm::mat4 model;
 	alignas(16) glm::mat4 view;
@@ -40,4 +50,9 @@ struct UniformBufferObject {
 	alignas(16) glm::vec2 shadowMapSize;    // Shadow map dimensions (2048x2048)
 	float shadowBias;                        // Depth bias to prevent shadow acne
 	float shadowStrength;                    // Shadow darkness (0.0-1.0, default: 0.5)
+	// Phase 4 showcase: dynamic point lights
+	alignas(16) PointLight pointLights[MAX_POINT_LIGHTS];
+	alignas(4)  uint32_t numPointLights = 0;
+	float debugCascades = 0.0f;  // 1.0 = visualize CSM cascade regions with debug colors
+	float _pad1 = 0, _pad2 = 0;
 };
