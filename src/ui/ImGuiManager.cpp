@@ -35,138 +35,136 @@ void ImGuiManager::newFrame() {
 
 void ImGuiManager::renderUI(Camera& camera, uint32_t buildingCount,
                             effects::ParticleSystem* particleSystem) {
-    // Main control window - fixed to top-left corner
-    ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_Always);
-    ImGui::Begin("Mini-Engine", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove);
-
-    ImGui::Text("Building Visualization Engine");
-    ImGui::Separator();
-
-    // Debug Views — G-Buffer / post-process channel selector
-    if (ImGui::CollapsingHeader("Debug Views", ImGuiTreeNodeFlags_DefaultOpen)) {
-        const char* viewNames[] = {
-            "Final",       // 0
-            "Normals",     // 1
-            "Albedo",      // 2
-            "Metallic",    // 3
-            "Roughness",   // 4
-            "Material AO", // 5
-            "Depth",       // 6
-            "SSAO Mask",   // 7
-            "Bloom Mask",  // 8
-        };
-        for (int i = 0; i < 9; ++i) {
-            if (ImGui::RadioButton(viewNames[i], m_lightingSettings.debugView == i))
-                m_lightingSettings.debugView = i;
-            if (i < 8) ImGui::SameLine();
-        }
-    }
-
-    ImGui::Separator();
-
-    // Camera controls
-    if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
-        // Reset camera
-        if (ImGui::Button("Reset Camera")) {
-            camera.reset();
-        }
-    }
-
-    ImGui::Separator();
-
-    // Scene info
-    if (ImGui::CollapsingHeader("Scene", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::Text("Buildings: %u", buildingCount);
-        ImGui::Text("Rendering: GPU-Driven (Indirect Draw)");
-
-        // Phase 4.1: Stress test — building count slider
+    // Helper: colored section title matching showcase style
+    auto sectionTitle = [](const char* label) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.85f, 1.f, 1.f));
+        ImGui::TextUnformatted(label);
+        ImGui::PopStyleColor();
         ImGui::Separator();
-        ImGui::Text("Stress Test:");
-        if (ImGui::SliderInt("Count", &m_targetBuildingCount, 16, 100000, "%d",
-                             ImGuiSliderFlags_Logarithmic)) {
-            m_buildingCountChanged = true;
-        }
-        if (ImGui::Button("16")) { m_targetBuildingCount = 16; m_buildingCountChanged = true; }
+    };
+
+    // Main control window — fixed width, top-left
+    ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(390, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.88f);
+    ImGui::Begin("Mini-Engine  |  Vulkan Deferred Renderer  |  PBR + CSM + Bindless",
+                 nullptr,
+                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
+
+    // ── Feature Summary ──────────────────────────────────────────────────────
+    auto badge = [](const char* label) {
+        ImGui::TextColored(ImVec4(0.25f, 1.f, 0.45f, 1.f), "[+]");
         ImGui::SameLine();
-        if (ImGui::Button("1K")) { m_targetBuildingCount = 1000; m_buildingCountChanged = true; }
+        ImGui::TextUnformatted(label);
+    };
+    badge("Deferred Rendering  (G-Buffer + Lighting pass)");
+    badge("4-Cascade Shadow Maps  (PSSM, 0~1000 m)");
+    badge("Render Graph  (auto sync2 barrier inference)");
+    badge("Bindless Textures  (VK_EXT_descriptor_indexing)");
+    badge("HDR Pipeline  (Bloom + SSAO + ACES + FXAA)");
+    badge("GPU Frustum Culling  (compute + indirect draw)");
+    ImGui::Spacing();
+
+    // ── G-Buffer Inspector ───────────────────────────────────────────────────
+    sectionTitle("G-Buffer Inspector");
+    ImGui::TextDisabled("Inspect raw PBR channels written to the G-Buffer");
+    ImGui::Spacing();
+
+    // Row 0
+    if (ImGui::RadioButton("Final",       m_lightingSettings.debugView == 0)) m_lightingSettings.debugView = 0; ImGui::SameLine();
+    if (ImGui::RadioButton("Normals",     m_lightingSettings.debugView == 1)) m_lightingSettings.debugView = 1; ImGui::SameLine();
+    if (ImGui::RadioButton("Albedo",      m_lightingSettings.debugView == 2)) m_lightingSettings.debugView = 2;
+    // Row 1
+    if (ImGui::RadioButton("Metallic",    m_lightingSettings.debugView == 3)) m_lightingSettings.debugView = 3; ImGui::SameLine();
+    if (ImGui::RadioButton("Roughness",   m_lightingSettings.debugView == 4)) m_lightingSettings.debugView = 4; ImGui::SameLine();
+    if (ImGui::RadioButton("Mat AO",      m_lightingSettings.debugView == 5)) m_lightingSettings.debugView = 5;
+    // Row 2
+    if (ImGui::RadioButton("Depth",       m_lightingSettings.debugView == 6)) m_lightingSettings.debugView = 6; ImGui::SameLine();
+    if (ImGui::RadioButton("SSAO Mask",   m_lightingSettings.debugView == 7)) m_lightingSettings.debugView = 7; ImGui::SameLine();
+    if (ImGui::RadioButton("Bloom Mask",  m_lightingSettings.debugView == 8)) m_lightingSettings.debugView = 8;
+
+    // Contextual hint per view
+    static const char* viewHints[] = {
+        "",
+        "  World-space normals remapped: XYZ -> RGB  (gray = 0.5)",
+        "  Linear albedo (sRGB conversion handled by swapchain format)",
+        "  Metallic channel  (0 = dielectric, 1 = conductor)",
+        "  Roughness channel  (0 = mirror, 1 = fully rough)",
+        "  Material ambient occlusion stored in GBuffer2.r",
+        "  Linearized depth  (near=0.1 m, far=1000 m) -> [0, 1]",
+        "  Screen-space ambient occlusion mask  (white = fully lit)",
+        "  Bloom bright-pass mask  (amplified x8 for visibility)",
+    };
+    if (m_lightingSettings.debugView > 0)
+        ImGui::TextColored(ImVec4(0.65f, 0.75f, 0.85f, 1.f),
+            "%s", viewHints[m_lightingSettings.debugView]);
+    ImGui::Spacing();
+
+    // ── 4-Cascade Shadow Maps ────────────────────────────────────────────────
+    sectionTitle("4-Cascade Shadow Maps  (CSM / PSSM)");
+
+    ImGui::Checkbox("Visualize Cascade Regions", &m_lightingSettings.debugCascades);
+    if (m_lightingSettings.debugCascades) {
+        ImGui::TextColored(ImVec4(1.f,  0.3f, 0.3f, 1.f), "  Red    =  C0    0 – 10 m   (near, high res)");
+        ImGui::TextColored(ImVec4(0.3f, 1.f,  0.3f, 1.f), "  Green  =  C1   10 – 50 m");
+        ImGui::TextColored(ImVec4(0.4f, 0.5f, 1.f,  1.f), "  Blue   =  C2   50 – 200 m");
+        ImGui::TextColored(ImVec4(1.f,  0.9f, 0.2f, 1.f), "  Yellow =  C3  200 – 1000 m (far)");
+    } else {
+        ImGui::TextDisabled("  Toggle to see per-cascade coverage boundaries");
+    }
+    ImGui::Spacing();
+
+    // ── Post-Process Stack ───────────────────────────────────────────────────
+    sectionTitle("Post-Process Stack");
+
+    // Bloom
+    ImGui::Checkbox("Bloom  (Kawase Dual Blur)", &m_lightingSettings.enableBloom);
+    if (m_lightingSettings.enableBloom) {
         ImGui::SameLine();
-        if (ImGui::Button("10K")) { m_targetBuildingCount = 10000; m_buildingCountChanged = true; }
-        ImGui::SameLine();
-        if (ImGui::Button("100K")) { m_targetBuildingCount = 100000; m_buildingCountChanged = true; }
+        ImGui::SetNextItemWidth(110);
+        ImGui::SliderFloat("##bloom", &m_lightingSettings.bloomStrength, 0.0f, 0.5f, "%.3f");
     }
 
-    ImGui::Separator();
-
-    // Particle Effects
-    if (ImGui::CollapsingHeader("Particle Effects", ImGuiTreeNodeFlags_DefaultOpen)) {
-        // Effect type selection
-        const char* effectTypes[] = {
-            "Rocket Launch",
-            "Confetti",
-            "Smoke Fall",
-            "Sparks",
-            "Glow",
-            "Rain"
-        };
-        ImGui::Combo("Effect Type", &m_selectedEffectType, effectTypes, 6);
-
-        // Position
-        ImGui::DragFloat3("Position", m_effectPosition, 1.0f, -100.0f, 100.0f);
-
-        // Duration
-        ImGui::SliderFloat("Duration (s)", &m_effectDuration, 0.5f, 10.0f);
-
-        // Spawn button
-        if (ImGui::Button("Spawn Effect")) {
-            m_particleRequest.requested = true;
-            m_particleRequest.type = static_cast<effects::ParticleEffectType>(m_selectedEffectType);
-            m_particleRequest.position = glm::vec3(m_effectPosition[0], m_effectPosition[1], m_effectPosition[2]);
-            m_particleRequest.duration = m_effectDuration;
-        }
-
-        // Particle statistics
-        if (particleSystem) {
-            ImGui::Separator();
-            ImGui::Text("Active Particles: %u", particleSystem->getTotalActiveParticles());
-            ImGui::Text("Emitters: %zu", particleSystem->getEmitterCount());
-        }
+    // SSAO
+    ImGui::Checkbox("SSAO  (Bilateral Blur)", &m_lightingSettings.enableSSAO);
+    if (m_lightingSettings.enableSSAO) {
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(110);
+        ImGui::SliderFloat("##ao", &m_lightingSettings.aoStrength, 0.0f, 1.0f, "%.2f");
     }
 
-    ImGui::Separator();
+    // ACES Tonemap
+    ImGui::Checkbox("ACES Filmic Tonemap", &m_lightingSettings.enableTonemap);
+    if (!m_lightingSettings.enableTonemap)
+        ImGui::TextColored(ImVec4(1.f, 0.5f, 0.2f, 1.f),
+            "  [!] Raw HDR output — highlights clipped");
 
-    // Phase 3.3: Lighting controls
-    if (ImGui::CollapsingHeader("Lighting")) {
-        // Sun direction using azimuth/elevation
+    // FXAA
+    ImGui::Checkbox("FXAA  (Luminance edge detection)", &m_lightingSettings.enableFXAA);
+
+    ImGui::Spacing();
+
+    // ── Directional Light / Exposure ─────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Directional Light / Exposure")) {
         bool dirChanged = false;
-        dirChanged |= ImGui::SliderFloat("Sun Azimuth", &m_sunAzimuth, 0.0f, 360.0f, "%.1f deg");
-        dirChanged |= ImGui::SliderFloat("Sun Elevation", &m_sunElevation, 5.0f, 90.0f, "%.1f deg");
-
+        dirChanged |= ImGui::SliderFloat("Sun Azimuth",   &m_sunAzimuth,   0.0f, 360.0f, "%.1f deg");
+        dirChanged |= ImGui::SliderFloat("Sun Elevation", &m_sunElevation, 5.0f,  90.0f, "%.1f deg");
         if (dirChanged) {
-            // Convert spherical to cartesian
-            float azimuthRad = glm::radians(m_sunAzimuth);
-            float elevationRad = glm::radians(m_sunElevation);
+            float az  = glm::radians(m_sunAzimuth);
+            float el  = glm::radians(m_sunElevation);
             m_lightingSettings.sunDirection = glm::vec3(
-                cos(elevationRad) * sin(azimuthRad),
-                sin(elevationRad),
-                cos(elevationRad) * cos(azimuthRad)
-            );
+                cos(el) * sin(az), sin(el), cos(el) * cos(az));
         }
 
-        // Sun intensity
         ImGui::SliderFloat("Sun Intensity", &m_lightingSettings.sunIntensity, 0.0f, 2.0f);
+        ImGui::ColorEdit3("Sun Color",       &m_lightingSettings.sunColor.x);
+        ImGui::SliderFloat("Ambient",        &m_lightingSettings.ambientIntensity, 0.0f, 0.5f);
+        ImGui::SliderFloat("Exposure (EV)",  &m_lightingSettings.exposure, 0.1f, 5.0f, "%.2f");
 
-        // Sun color
-        ImGui::ColorEdit3("Sun Color", &m_lightingSettings.sunColor.x);
-
-        // Ambient intensity
-        ImGui::SliderFloat("Ambient", &m_lightingSettings.ambientIntensity, 0.0f, 0.5f);
-
-        // Presets
         ImGui::Separator();
         ImGui::Text("Presets:");
         if (ImGui::Button("Noon")) {
-            m_sunAzimuth = 0.0f;
-            m_sunElevation = 80.0f;
+            m_sunAzimuth = 0.0f;   m_sunElevation = 80.0f;
             m_lightingSettings.sunIntensity = 1.2f;
             m_lightingSettings.sunColor = glm::vec3(1.0f, 0.98f, 0.95f);
             m_lightingSettings.ambientIntensity = 0.2f;
@@ -174,8 +172,7 @@ void ImGuiManager::renderUI(Camera& camera, uint32_t buildingCount,
         }
         ImGui::SameLine();
         if (ImGui::Button("Sunset")) {
-            m_sunAzimuth = 270.0f;
-            m_sunElevation = 15.0f;
+            m_sunAzimuth = 270.0f; m_sunElevation = 15.0f;
             m_lightingSettings.sunIntensity = 0.8f;
             m_lightingSettings.sunColor = glm::vec3(1.0f, 0.5f, 0.2f);
             m_lightingSettings.ambientIntensity = 0.1f;
@@ -183,85 +180,102 @@ void ImGuiManager::renderUI(Camera& camera, uint32_t buildingCount,
         }
         ImGui::SameLine();
         if (ImGui::Button("Night")) {
-            m_sunAzimuth = 180.0f;
-            m_sunElevation = 10.0f;
+            m_sunAzimuth = 180.0f; m_sunElevation = 10.0f;
             m_lightingSettings.sunIntensity = 0.1f;
             m_lightingSettings.sunColor = glm::vec3(0.4f, 0.5f, 0.7f);
             m_lightingSettings.ambientIntensity = 0.05f;
             m_lightingSettings.exposure = 2.5f;
         }
 
-        // Shadow settings
         ImGui::Separator();
-        ImGui::Text("Shadows (4-Cascade CSM):");
-        ImGui::SliderFloat("Shadow Bias", &m_lightingSettings.shadowBias, 0.001f, 0.02f, "%.4f");
-        ImGui::SliderFloat("Shadow Strength", &m_lightingSettings.shadowStrength, 0.0f, 1.0f, "%.2f");
-        ImGui::Checkbox("Show Cascade Regions", &m_lightingSettings.debugCascades);
-        if (m_lightingSettings.debugCascades) {
-            ImGui::SameLine();
-            ImGui::TextColored(ImVec4(1,0.3f,0.3f,1), "C0"); ImGui::SameLine();
-            ImGui::TextColored(ImVec4(0.3f,1,0.3f,1), "C1"); ImGui::SameLine();
-            ImGui::TextColored(ImVec4(0.3f,0.5f,1,1), "C2"); ImGui::SameLine();
-            ImGui::TextColored(ImVec4(1,1,0.2f,1),   "C3");
-        }
-
-        // PBR Tone Mapping
-        ImGui::Separator();
-        ImGui::Text("Tone Mapping:");
-        ImGui::SliderFloat("Exposure", &m_lightingSettings.exposure, 0.1f, 5.0f, "%.2f");
-
-        // Post-Processing
-        ImGui::Separator();
-        ImGui::Text("Post-Processing:");
-        ImGui::Checkbox("ACES Tonemap", &m_lightingSettings.enableTonemap); ImGui::SameLine();
-        ImGui::Checkbox("FXAA",         &m_lightingSettings.enableFXAA);
-        ImGui::Checkbox("Bloom",        &m_lightingSettings.enableBloom);
-        if (m_lightingSettings.enableBloom)
-            ImGui::SliderFloat("Bloom Strength", &m_lightingSettings.bloomStrength, 0.0f, 0.5f, "%.3f");
-        ImGui::Checkbox("SSAO",         &m_lightingSettings.enableSSAO);
-        if (m_lightingSettings.enableSSAO)
-            ImGui::SliderFloat("AO Strength",    &m_lightingSettings.aoStrength,    0.0f, 1.0f, "%.2f");
+        ImGui::Text("Shadow Settings:");
+        ImGui::SliderFloat("Shadow Bias",     &m_lightingSettings.shadowBias,     0.001f, 0.02f, "%.4f");
+        ImGui::SliderFloat("Shadow Strength", &m_lightingSettings.shadowStrength, 0.0f,   1.0f,  "%.2f");
     }
 
-    ImGui::Separator();
+    ImGui::Spacing();
 
-    // Bindless & Memory metrics
+    // ── Scene ────────────────────────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Scene", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Text("Buildings: %u", buildingCount);
+        ImGui::Text("Rendering: GPU frustum cull + indirect draw");
+        ImGui::Separator();
+        ImGui::Text("Stress Test:");
+        if (ImGui::SliderInt("Count", &m_targetBuildingCount, 16, 100000, "%d",
+                             ImGuiSliderFlags_Logarithmic))
+            m_buildingCountChanged = true;
+        if (ImGui::Button("16"))   { m_targetBuildingCount =     16; m_buildingCountChanged = true; } ImGui::SameLine();
+        if (ImGui::Button("1K"))   { m_targetBuildingCount =   1000; m_buildingCountChanged = true; } ImGui::SameLine();
+        if (ImGui::Button("10K"))  { m_targetBuildingCount =  10000; m_buildingCountChanged = true; } ImGui::SameLine();
+        if (ImGui::Button("100K")) { m_targetBuildingCount = 100000; m_buildingCountChanged = true; }
+
+        // Camera reset in scene section
+        ImGui::Separator();
+        if (ImGui::Button("Reset Camera")) camera.reset();
+    }
+
+    ImGui::Spacing();
+
+    // ── Particle Effects ─────────────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Particle Effects")) {
+        const char* effectTypes[] = {
+            "Rocket Launch", "Confetti", "Smoke Fall",
+            "Sparks", "Glow", "Rain"
+        };
+        ImGui::Combo("Effect Type", &m_selectedEffectType, effectTypes, 6);
+        ImGui::DragFloat3("Position", m_effectPosition, 1.0f, -100.0f, 100.0f);
+        ImGui::SliderFloat("Duration (s)", &m_effectDuration, 0.5f, 10.0f);
+        if (ImGui::Button("Spawn Effect")) {
+            m_particleRequest.requested = true;
+            m_particleRequest.type = static_cast<effects::ParticleEffectType>(m_selectedEffectType);
+            m_particleRequest.position = glm::vec3(
+                m_effectPosition[0], m_effectPosition[1], m_effectPosition[2]);
+            m_particleRequest.duration = m_effectDuration;
+        }
+        if (particleSystem) {
+            ImGui::Separator();
+            ImGui::Text("Active Particles: %u", particleSystem->getTotalActiveParticles());
+            ImGui::Text("Emitters: %zu",        particleSystem->getEmitterCount());
+        }
+    }
+
+    ImGui::Spacing();
+
+    // ── Bindless & Memory ────────────────────────────────────────────────────
     if (ImGui::CollapsingHeader("Bindless & Memory")) {
         const auto& bm = m_bindlessMetrics;
 
-        // Bindless texture registry
-        ImGui::Text("Bindless Textures:");
-        if (bm.bindlessAvailable) {
-            ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.4f, 1.0f), "  Available (VK_EXT_descriptor_indexing)");
-            ImGui::Text("  Registered: %u / %u slots", bm.registeredTextures, bm.maxTextures);
+        ImGui::TextDisabled("VK_EXT_descriptor_indexing  |  VMA custom pools");
+        ImGui::Spacing();
 
-            // Descriptor bind savings visualisation
-            ImGui::Separator();
-            ImGui::Text("Descriptor Bind Model  (%u objects):", bm.lastInstanceCount);
+        if (bm.bindlessAvailable) {
+            ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.4f, 1.0f),
+                "Bindless: enabled  (%u / %u slots)", bm.registeredTextures, bm.maxTextures);
+            ImGui::Text("Objects: %u", bm.lastInstanceCount);
+            ImGui::Spacing();
+
             ImGui::TextColored(ImVec4(0.3f, 0.8f, 1.0f, 1.0f),
-                "  Bindless:    1 bind  (global array, shader-indexed)");
+                "  Bindless bind:     1  (global descriptor array)");
             uint32_t tradBinds = bm.lastInstanceCount * bm.registeredTextures;
             ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
-                "  Traditional: %u binds (per-object × per-texture)", tradBinds);
+                "  Traditional bind:  %u  (%u obj x %u tex)",
+                tradBinds, bm.lastInstanceCount, bm.registeredTextures);
             if (tradBinds > 1) {
                 ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.3f, 0.8f, 0.4f, 1.0f));
-                ImGui::ProgressBar(1.0f / static_cast<float>(tradBinds > 0 ? tradBinds : 1),
-                    ImVec2(-1, 12.0f), "bindless");
+                ImGui::ProgressBar(1.0f / static_cast<float>(tradBinds),
+                    ImVec2(-1, 12.0f), "bindless ratio");
                 ImGui::PopStyleColor();
             }
         } else {
             ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f),
-                "  Unavailable  (procedural albedo fallback)");
+                "Bindless: unavailable  (procedural albedo fallback)");
         }
 
-        // VMA memory
         ImGui::Separator();
-        ImGui::Text("VMA GPU Memory:");
         float allocMB    = static_cast<float>(bm.vmaAllocatedBytes) / (1024.0f * 1024.0f);
         float reservedMB = static_cast<float>(bm.vmaReservedBytes)  / (1024.0f * 1024.0f);
-        ImGui::Text("  Allocations: %llu", (unsigned long long)bm.vmaAllocCount);
-        ImGui::Text("  Used:        %.1f MB", allocMB);
-        ImGui::Text("  Reserved:    %.1f MB  (VMA blocks)", reservedMB);
+        ImGui::Text("VMA: %llu allocs  |  %.1f MB used  |  %.1f MB reserved",
+            (unsigned long long)bm.vmaAllocCount, allocMB, reservedMB);
         if (reservedMB > 0.5f) {
             float frac = (allocMB / reservedMB);
             frac = frac > 1.0f ? 1.0f : frac;
@@ -273,67 +287,63 @@ void ImGuiManager::renderUI(Camera& camera, uint32_t buildingCount,
         }
     }
 
-    ImGui::Separator();
+    ImGui::Spacing();
 
-    // Controls help
+    // ── Controls ─────────────────────────────────────────────────────────────
     if (ImGui::CollapsingHeader("Controls")) {
-        ImGui::BulletText("Left Mouse + Drag: Rotate camera");
-        ImGui::BulletText("Mouse Wheel: Zoom in/out");
-        ImGui::BulletText("W/A/S/D: Move camera");
-        ImGui::BulletText("R: Reset camera");
-        ImGui::BulletText("ESC: Exit");
+        ImGui::BulletText("Left drag: orbit camera");
+        ImGui::BulletText("Right drag: pan camera");
+        ImGui::BulletText("Scroll: zoom");
+        ImGui::BulletText("W/A/S/D: move camera");
+        ImGui::BulletText("R: reset camera");
+        ImGui::BulletText("ESC: exit");
     }
 
-    ImGui::Separator();
+    ImGui::Spacing();
 
-    // Statistics
+    // ── Statistics ───────────────────────────────────────────────────────────
     if (ImGui::CollapsingHeader("Statistics", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
-        ImGui::Text("Frame Time: %.3f ms", 1000.0f / ImGui::GetIO().Framerate);
+        ImGui::Text("FPS: %.1f  |  Frame: %.3f ms",
+            ImGui::GetIO().Framerate, 1000.0f / ImGui::GetIO().Framerate);
 
         // GPU pass timer bar chart
         ImGui::Separator();
         float gpuTotal = m_gpuTiming.cullingMs + m_gpuTiming.shadowMs + m_gpuTiming.gbufferMs
                        + m_gpuTiming.ssaoMs + m_gpuTiming.bloomMs
                        + m_gpuTiming.deferredMs + m_gpuTiming.postprocessMs;
-        ImGui::Text("GPU Total: %.3f ms", gpuTotal);
+        ImGui::Text("GPU Total: %.3f ms  (%.0f FPS budget)",
+            gpuTotal, gpuTotal > 0.001f ? 1000.0f / gpuTotal : 0.0f);
 
-        // Bar chart: each pass as a labeled progress bar
         struct PassBar { const char* name; float ms; ImVec4 color; };
         const PassBar bars[] = {
-            { "Frustum Cull",    m_gpuTiming.cullingMs,     ImVec4(0.4f, 0.8f, 0.4f, 1.0f) },
-            { "Shadow Pass",     m_gpuTiming.shadowMs,      ImVec4(0.3f, 0.5f, 0.9f, 1.0f) },
-            { "G-Buffer",        m_gpuTiming.gbufferMs,     ImVec4(0.9f, 0.7f, 0.2f, 1.0f) },
-            { "SSAO",            m_gpuTiming.ssaoMs,        ImVec4(0.6f, 0.4f, 0.9f, 1.0f) },
-            { "Bloom",           m_gpuTiming.bloomMs,       ImVec4(1.0f, 0.6f, 0.2f, 1.0f) },
-            { "Deferred Lit.",   m_gpuTiming.deferredMs,    ImVec4(0.9f, 0.3f, 0.3f, 1.0f) },
-            { "Post-Process",    m_gpuTiming.postprocessMs, ImVec4(0.3f, 0.8f, 0.8f, 1.0f) },
+            { "Frustum Cull", m_gpuTiming.cullingMs,     ImVec4(0.4f, 0.8f, 0.4f, 1.0f) },
+            { "Shadow Pass",  m_gpuTiming.shadowMs,      ImVec4(0.3f, 0.5f, 0.9f, 1.0f) },
+            { "G-Buffer",     m_gpuTiming.gbufferMs,     ImVec4(0.9f, 0.7f, 0.2f, 1.0f) },
+            { "SSAO",         m_gpuTiming.ssaoMs,        ImVec4(0.6f, 0.4f, 0.9f, 1.0f) },
+            { "Bloom",        m_gpuTiming.bloomMs,       ImVec4(1.0f, 0.6f, 0.2f, 1.0f) },
+            { "Deferred Lit", m_gpuTiming.deferredMs,    ImVec4(0.9f, 0.3f, 0.3f, 1.0f) },
+            { "Post-Process", m_gpuTiming.postprocessMs, ImVec4(0.3f, 0.8f, 0.8f, 1.0f) },
         };
-        float barMax = (gpuTotal > 0.001f) ? gpuTotal : 1.0f;
+        float barMax   = (gpuTotal > 0.001f) ? gpuTotal : 1.0f;
         float barWidth = ImGui::GetContentRegionAvail().x - 80.0f;
         barWidth = (barWidth < 60.0f) ? 60.0f : barWidth;
         for (const auto& b : bars) {
-            float fraction = b.ms / barMax;
             ImGui::TextUnformatted(b.name);
             ImGui::SameLine(80.0f);
             ImGui::PushStyleColor(ImGuiCol_PlotHistogram, b.color);
-            char barLabel[24];
-            snprintf(barLabel, sizeof(barLabel), "%.2f ms", b.ms);
-            ImGui::ProgressBar(fraction, ImVec2(barWidth, 14.0f), barLabel);
+            char lbl[24];
+            snprintf(lbl, sizeof(lbl), "%.2f ms", b.ms);
+            ImGui::ProgressBar(b.ms / barMax, ImVec2(barWidth, 14.0f), lbl);
             ImGui::PopStyleColor();
         }
     }
 
-    // Demo window toggle
     ImGui::Separator();
     ImGui::Checkbox("Show ImGui Demo", &showDemoWindow);
-
     ImGui::End();
 
-    // Show demo window if enabled
-    if (showDemoWindow) {
+    if (showDemoWindow)
         ImGui::ShowDemoWindow(&showDemoWindow);
-    }
 }
 
 void ImGuiManager::render(rhi::RHICommandEncoder* encoder, uint32_t imageIndex) {

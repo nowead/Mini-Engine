@@ -244,74 +244,101 @@ bool ShadowRenderer::createPipeline(void* nativeRenderPass, rhi::RHIBindGroupLay
 /**
  * Compute the light-space orthographic matrix that tightly covers
  * the camera frustum sub-slice [nearSlice, farSlice].
+ *
+ * Algorithm:
+ *   1. Extract cameraNear/cameraFar from cameraProj using Z-row coefficients
+ *      (immune to Y-flip — [2][2] and [3][2] are unaffected by proj[1][1] *= -1).
+ *   2. Unproject the 8 NDC corners of the FULL frustum to world space via inv(P*V).
+ *   3. Linearly interpolate the near/far corner rays to get the sub-slice corners
+ *      at [nearSlice, farSlice] in view depth.
+ *   4. Fit a tight light-space AABB around those sub-corners, extend Z to catch
+ *      shadow casters outside the camera frustum, then build the ortho matrix.
+ *
+ * Replaces the previous approach which extracted fovY from cameraProj[1][1],
+ * which was negative after the Vulkan Y-flip and produced garbage sub-projections.
  */
 glm::mat4 ShadowRenderer::computeCascadeMatrix(const glm::vec3& lightDir,
                                                 const glm::mat4& cameraView,
                                                 const glm::mat4& cameraProj,
                                                 float nearSlice, float farSlice) {
-    // Build a projection for the sub-slice with glm::perspective approximation.
-    // We extract frustum corners in world space, then find the tight ortho box.
-    glm::mat4 invViewProj = glm::inverse(cameraProj * cameraView);
+    // ── Step 1: Extract camera near/far from projection matrix ─────────────
+    // For OpenGL-convention perspective (Y-flip doesn't touch these entries):
+    //   proj[2][2] = A = -(far + near) / (far - near)
+    //   proj[3][2] = B = -2 * far * near / (far - near)
+    //   => near = B / (A - 1),  far = B / (A + 1)
+    float A = cameraProj[2][2];
+    float B = cameraProj[3][2];
+    float cameraNear = B / (A - 1.0f);
+    float cameraFar  = B / (A + 1.0f);
 
-    // 8 NDC corners of the sub-frustum
-    float ndc_n = nearSlice, ndc_f = farSlice;
-    // Convert view-space near/far to NDC z (Vulkan: z in [0,1])
-    // For simplicity, use the full NDC slab [0,1] per sub-slice by rebuilding proj
-    // Actually, we project corners in NDC and unproject them.
-    // Use the full frustum (z 0..1) but scaled to the sub-range in view space:
-    glm::mat4 subProj = glm::perspective(
-        glm::radians(45.0f), 1.0f, nearSlice, farSlice);  // placeholder aspect
-    // Override: use cameraProj's fov/aspect by substituting near/far
-    // We extract fov/aspect from cameraProj:
-    float f   = cameraProj[1][1];  // cot(fovy/2)
-    float asp = f / cameraProj[0][0];
-    float fovY = 2.0f * std::atan(1.0f / f);
-    subProj = glm::perspective(fovY, asp, nearSlice, farSlice);
-    // Vulkan depth convention
-    subProj[1][1] *= -1.0f;
-    subProj[2][2] = -farSlice / (farSlice - nearSlice);
-    subProj[3][2] = -(farSlice * nearSlice) / (farSlice - nearSlice);
-
-    glm::mat4 invSub = glm::inverse(subProj * cameraView);
-
-    // 8 corners in NDC (Vulkan: z in [0,1])
-    const glm::vec3 ndcCorners[8] = {
-        {-1,-1,0},{1,-1,0},{1,1,0},{-1,1,0},
-        {-1,-1,1},{1,-1,1},{1,1,1},{-1,1,1}
-    };
-    glm::vec3 frustumCorners[8];
-    for (int i = 0; i < 8; ++i) {
-        glm::vec4 ws = invSub * glm::vec4(ndcCorners[i], 1.0f);
-        frustumCorners[i] = glm::vec3(ws) / ws.w;
+    // Guard against degenerate projection (e.g. infinite far plane)
+    if (std::abs(cameraFar - cameraNear) < 1.0f) {
+        cameraNear = 0.1f;
+        cameraFar  = 1000.0f;
     }
 
-    // Frustum center
+    // ── Step 2: Unproject full-frustum NDC corners to world space ──────────
+    // Use z=0 (near, Vulkan NDC) and z=1 (far) — matches shader depth convention.
+    glm::mat4 invVP = glm::inverse(cameraProj * cameraView);
+
+    const glm::vec3 ndcCorners[8] = {
+        {-1,-1, 0},{1,-1, 0},{1,1, 0},{-1,1, 0},   // near (z = 0)
+        {-1,-1, 1},{1,-1, 1},{1,1, 1},{-1,1, 1}    // far  (z = 1)
+    };
+    glm::vec3 fullCorners[8];
+    for (int i = 0; i < 8; ++i) {
+        glm::vec4 ws = invVP * glm::vec4(ndcCorners[i], 1.0f);
+        fullCorners[i] = glm::vec3(ws) / ws.w;
+    }
+
+    // ── Step 3: Interpolate to the cascade sub-slice ───────────────────────
+    // fullCorners[0–3] = world positions at cameraNear
+    // fullCorners[4–7] = world positions at cameraFar
+    float range = cameraFar - cameraNear;
+    float tNear = glm::clamp((nearSlice - cameraNear) / range, 0.0f, 1.0f);
+    float tFar  = glm::clamp((farSlice  - cameraNear) / range, 0.0f, 1.0f);
+
+    glm::vec3 subCorners[8];
+    for (int i = 0; i < 4; ++i) {
+        glm::vec3 ray = fullCorners[i + 4] - fullCorners[i];
+        subCorners[i]     = fullCorners[i] + ray * tNear;  // cascade near
+        subCorners[i + 4] = fullCorners[i] + ray * tFar;   // cascade far
+    }
+
+    // ── Step 4: Light-space AABB ────────────────────────────────────────────
     glm::vec3 center(0.0f);
-    for (auto& c : frustumCorners) center += c;
+    for (auto& c : subCorners) center += c;
     center /= 8.0f;
 
-    // Light view matrix looking at frustum center
-    glm::vec3 up = std::abs(glm::dot(lightDir, glm::vec3(0,1,0))) < 0.99f
-                   ? glm::vec3(0,1,0) : glm::vec3(0,0,1);
+    glm::vec3 up = std::abs(glm::dot(lightDir, glm::vec3(0, 1, 0))) < 0.99f
+                   ? glm::vec3(0, 1, 0) : glm::vec3(0, 0, 1);
     glm::mat4 lightView = glm::lookAt(center + lightDir, center, up);
 
-    // AABB in light space
     glm::vec3 minLS( 1e9f), maxLS(-1e9f);
-    for (auto& c : frustumCorners) {
+    for (auto& c : subCorners) {
         glm::vec3 ls = glm::vec3(lightView * glm::vec4(c, 1.0f));
         minLS = glm::min(minLS, ls);
         maxLS = glm::max(maxLS, ls);
     }
-    // Add margin
-    float margin = (maxLS.x - minLS.x) * 0.05f;
-    minLS -= margin;
-    maxLS += margin;
 
-    // Ortho projection (Vulkan depth [0,1])
-    glm::mat4 lightProj = glm::ortho(minLS.x, maxLS.x, minLS.y, maxLS.y, -maxLS.z, -minLS.z);
-    lightProj[1][1] *= -1.0f;  // Vulkan Y flip
-    // Remap Z from [-1,1] to [0,1]
-    lightProj[2][2] *= 0.5f;
+    // Extend Z to capture shadow casters outside the visible frustum
+    float zExt = (maxLS.z - minLS.z) * 0.5f;
+    minLS.z -= zExt;
+    maxLS.z += zExt;
+
+    // Small XY margin (3 %) to avoid edge artefacts
+    float xM = (maxLS.x - minLS.x) * 0.03f;
+    float yM = (maxLS.y - minLS.y) * 0.03f;
+    minLS.x -= xM;  maxLS.x += xM;
+    minLS.y -= yM;  maxLS.y += yM;
+
+    // ── Step 5: Orthographic projection (Vulkan depth [0, 1]) ──────────────
+    // glm::ortho produces OpenGL NDC z in [-1,1], so remap to [0,1] manually.
+    glm::mat4 lightProj = glm::ortho(minLS.x, maxLS.x,
+                                      minLS.y, maxLS.y,
+                                      -maxLS.z, -minLS.z);
+    lightProj[1][1] *= -1.0f;          // Vulkan Y flip
+    lightProj[2][2] *= 0.5f;           // remap z: [-1,1] → [0,1]
     lightProj[3][2]  = lightProj[3][2] * 0.5f + 0.5f;
 
     return lightProj * lightView;
