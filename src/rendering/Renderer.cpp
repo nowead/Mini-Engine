@@ -131,6 +131,31 @@ Renderer::~Renderer() {
 GpuProfiler* Renderer::getGpuProfiler() {
     return gpuProfiler.get();
 }
+
+Renderer::BindlessMetrics Renderer::getBindlessMetrics() const {
+    BindlessMetrics m;
+    m.lastInstanceCount = lastInstanceCount;
+
+    // Bindless texture registry
+    if (bindlessTextureManager) {
+        m.bindlessAvailable  = bindlessTextureManager->isAvailable();
+        m.registeredTextures = bindlessTextureManager->getRegisteredCount();
+        m.maxTextures        = rendering::BindlessTextureManager::MAX_TEXTURES;
+    }
+
+    // VMA allocation stats
+    if (auto* vkDev = dynamic_cast<const RHI::Vulkan::VulkanRHIDevice*>(rhiBridge->getDevice())) {
+        VmaAllocator vma = const_cast<RHI::Vulkan::VulkanRHIDevice*>(vkDev)->getVmaAllocator();
+        if (vma) {
+            VmaTotalStatistics stats{};
+            vmaCalculateStatistics(vma, &stats);
+            m.vmaAllocCount     = stats.total.statistics.allocationCount;
+            m.vmaAllocatedBytes = stats.total.statistics.allocationBytes;
+            m.vmaReservedBytes  = stats.total.statistics.blockBytes;
+        }
+    }
+    return m;
+}
 #endif
 
 void Renderer::loadModel(const std::string& modelPath) {
@@ -1777,7 +1802,7 @@ void Renderer::createPostProcessPipeline() {
     rhi::PushConstantRange pcRange;
     pcRange.stageFlags = rhi::ShaderStage::Fragment;
     pcRange.offset     = 0;
-    pcRange.size       = sizeof(float) * 6;  // vec2 texelSize + bloomStrength + exposure + aoStrength + tonemapEnabled
+    pcRange.size       = sizeof(float) * 8;  // texelSize(2) + bloomStr + exposure + aoStr + tonemapOn + debugView + fxaaEnabled
     plDesc.pushConstantRanges.push_back(pcRange);
     postprocessPipelineLayout = rhiBridge->createPipelineLayout(plDesc);
 
@@ -2502,6 +2527,7 @@ void Renderer::updateRHIUniformBuffer(uint32_t currentImage) {
     for (uint32_t i = 0; i < ubo.numPointLights; ++i)
         ubo.pointLights[i] = pendingPointLights[i];
     ubo.debugCascades = debugCascades ? 1.0f : 0.0f;
+    ubo.debugView     = debugView;
 
     // Copy to RHI uniform buffer - always use write() to ensure proper flush to GPU
     auto* buffer = rhiUniformBuffers[currentImage].get();
@@ -2619,6 +2645,7 @@ void Renderer::drawFrame() {
 
             // Phase 2.2+3.2: Perform GPU frustum culling
             uint32_t instanceCount = pendingInstancedData->instanceCount;
+            lastInstanceCount = instanceCount;  // cache for metrics panel
             uint32_t meshIndexCount = static_cast<uint32_t>(mesh->getIndexCount());
 
 #ifndef __EMSCRIPTEN__
@@ -2785,7 +2812,7 @@ void Renderer::drawFrame() {
     if (gpuProfiler) {
         auto* ve = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
         if (ve) gpuProfiler->beginTimer(ve->getCommandBuffer(), frameIndex,
-            GpuProfiler::TimerId::MainRenderPass);
+            GpuProfiler::TimerId::GBufferPass);
     }
 #endif
 
@@ -2876,7 +2903,7 @@ void Renderer::drawFrame() {
     if (gpuProfiler) {
         auto* ve = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(encoder.get());
         if (ve) gpuProfiler->endTimer(ve->getCommandBuffer(), frameIndex,
-            GpuProfiler::TimerId::MainRenderPass);
+            GpuProfiler::TimerId::GBufferPass);
     }
 #endif
 
@@ -3010,9 +3037,13 @@ void Renderer::drawFrame() {
         if (ssaoPipeline && ssaoBlurPipeline && ssaoBindGroup && ssaoBlurBindGroup
             && rgSSAO != INVALID)
         {
-            {   // SSAO pass
+            {   // SSAO pass — begins SSAOPass timer
+                uint32_t ssaoFI = frameIndex;
                 auto pass = m_renderGraph.addPass("SSAO", PT::Compute,
-                    [this, sW, sH](rhi::RHICommandEncoder* enc) {
+                    [this, sW, sH, ssaoFI](rhi::RHICommandEncoder* enc) {
+                        auto* ve = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(enc);
+                        if (gpuProfiler && ve) gpuProfiler->beginTimer(ve->getCommandBuffer(), ssaoFI,
+                            GpuProfiler::TimerId::SSAOPass, vk::PipelineStageFlagBits::eComputeShader);
                         auto ce = enc->beginComputePass("SSAO");
                         ce->setPipeline(ssaoPipeline.get());
                         ce->setBindGroup(0, ssaoBindGroup.get());
@@ -3035,9 +3066,10 @@ void Renderer::drawFrame() {
                 m_renderGraph.addReadDep(pass, rgDepth, RA::SampleCompute);
                 m_renderGraph.addWriteDep(pass, rgSSAO,  RA::StorageWrite);
             }
-            {   // SSAO blur pass
+            {   // SSAO blur pass — ends SSAOPass timer
+                uint32_t ssaoFI = frameIndex;
                 auto pass = m_renderGraph.addPass("SSAOBlur", PT::Compute,
-                    [this, sW, sH](rhi::RHICommandEncoder* enc) {
+                    [this, sW, sH, ssaoFI](rhi::RHICommandEncoder* enc) {
                         auto ce = enc->beginComputePass("SSAO Blur");
                         ce->setPipeline(ssaoBlurPipeline.get());
                         ce->setBindGroup(0, ssaoBlurBindGroup.get());
@@ -3047,6 +3079,9 @@ void Renderer::drawFrame() {
                             rhi::ShaderStage::Compute, 0, sizeof(pc), &pc);
                         ce->dispatch((sW + 7) / 8, (sH + 7) / 8, 1);
                         ce->end();
+                        auto* ve = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(enc);
+                        if (gpuProfiler && ve) gpuProfiler->endTimer(ve->getCommandBuffer(), ssaoFI,
+                            GpuProfiler::TimerId::SSAOPass, vk::PipelineStageFlagBits::eComputeShader);
                     });
                 m_renderGraph.addReadDep(pass,  rgSSAO,    RA::SampleCompute);
                 m_renderGraph.addWriteDep(pass, rgSSAOBlur, RA::StorageWrite);
@@ -3081,6 +3116,9 @@ void Renderer::drawFrame() {
             uint32_t dlFI = frameIndex;
             auto pass = m_renderGraph.addPass("DeferredLighting", PT::Render,
                 [this, dlDesc, W, H, dlFI](rhi::RHICommandEncoder* enc) {
+                    auto* ve = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(enc);
+                    if (gpuProfiler && ve) gpuProfiler->beginTimer(ve->getCommandBuffer(), dlFI,
+                        GpuProfiler::TimerId::DeferredLighting);
                     auto dlPass = enc->beginRenderPass(dlDesc);
                     if (dlPass) {
                         dlPass->setViewport(0.0f, 0.0f, float(W), float(H), 0.0f, 1.0f);
@@ -3090,6 +3128,8 @@ void Renderer::drawFrame() {
                         dlPass->draw(3);  // Fullscreen triangle
                         dlPass->end();
                     }
+                    if (gpuProfiler && ve) gpuProfiler->endTimer(ve->getCommandBuffer(), dlFI,
+                        GpuProfiler::TimerId::DeferredLighting);
                 });
             // Reads
             m_renderGraph.addReadDep(pass, rgGBuffer0, RA::SampleFragment);
@@ -3103,9 +3143,13 @@ void Renderer::drawFrame() {
 
         // ---- Bloom passes ----
         if (bloomThresholdPipeline && bloomBlurPipeline && rgBloom != INVALID) {
-            {   // Bloom threshold pass (HDR → half-res bright-pass)
+            {   // Bloom threshold pass (HDR → half-res bright-pass) — begins BloomPass timer
+                uint32_t bloomFI = frameIndex;
                 auto pass = m_renderGraph.addPass("BloomThreshold", PT::Compute,
-                    [this, bW, bH](rhi::RHICommandEncoder* enc) {
+                    [this, bW, bH, bloomFI](rhi::RHICommandEncoder* enc) {
+                        auto* ve = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(enc);
+                        if (gpuProfiler && ve) gpuProfiler->beginTimer(ve->getCommandBuffer(), bloomFI,
+                            GpuProfiler::TimerId::BloomPass, vk::PipelineStageFlagBits::eComputeShader);
                         auto ce = enc->beginComputePass("Bloom Threshold");
                         ce->setPipeline(bloomThresholdPipeline.get());
                         ce->setBindGroup(0, bloomThresholdBindGroup.get());
@@ -3130,8 +3174,9 @@ void Renderer::drawFrame() {
                 rendergraph::RGResourceHandle readTex  = (pingPong == 0) ? rgBloom     : rgBloomPing;
                 rendergraph::RGResourceHandle writeTex = (pingPong == 0) ? rgBloomPing : rgBloom;
 
+                uint32_t bloomFI2 = frameIndex;
                 auto pass = m_renderGraph.addPass("BloomBlur", PT::Compute,
-                    [this, bW, bH, iter, pingPong](rhi::RHICommandEncoder* enc) {
+                    [this, bW, bH, iter, pingPong, bloomFI2](rhi::RHICommandEncoder* enc) {
                         auto ce = enc->beginComputePass("Bloom Blur");
                         ce->setPipeline(bloomBlurPipeline.get());
                         ce->setBindGroup(0, bloomBlurBindGroups[pingPong].get());
@@ -3141,6 +3186,12 @@ void Renderer::drawFrame() {
                             rhi::ShaderStage::Compute, 0, sizeof(pc), &pc);
                         ce->dispatch((bW + 7) / 8, (bH + 7) / 8, 1);
                         ce->end();
+                        // End BloomPass timer after the last blur iteration
+                        if (iter == 3) {
+                            auto* ve = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(enc);
+                            if (gpuProfiler && ve) gpuProfiler->endTimer(ve->getCommandBuffer(), bloomFI2,
+                                GpuProfiler::TimerId::BloomPass, vk::PipelineStageFlagBits::eComputeShader);
+                        }
                     });
                 m_renderGraph.addReadDep(pass, readTex,  RA::SampleCompute);
                 m_renderGraph.addWriteDep(pass, writeTex, RA::StorageWrite);
@@ -3173,6 +3224,9 @@ void Renderer::drawFrame() {
 
             auto pass = m_renderGraph.addPass("PostProcess", PT::Render,
                 [this, ppDesc, W, H, frameIndex, imgIdx](rhi::RHICommandEncoder* enc) {
+                    auto* ve = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(enc);
+                    if (gpuProfiler && ve) gpuProfiler->beginTimer(ve->getCommandBuffer(), frameIndex,
+                        GpuProfiler::TimerId::PostProcess);
                     auto ppPass = enc->beginRenderPass(ppDesc);
                     if (ppPass) {
                         ppPass->setViewport(0.0f, 0.0f, static_cast<float>(W),
@@ -3180,9 +3234,19 @@ void Renderer::drawFrame() {
                         ppPass->setScissorRect(0, 0, W, H);
                         ppPass->setPipeline(postprocessPipeline.get());
                         ppPass->setBindGroup(0, postprocessBindGroup.get());
-                        struct PostProcessPC { float texelW; float texelH; float bloomStr; float exposure; float aoStr; float tonemapOn; };
+                        struct PostProcessPC {
+                            float texelW, texelH;
+                            float bloomStr, exposure, aoStr;
+                            float tonemapOn, debugViewF, fxaaOn;
+                        };
                         float effectiveAO = ssaoPipeline ? aoStrength : 0.0f;
-                        PostProcessPC pc{ 1.0f / W, 1.0f / H, bloomStrength, exposure, effectiveAO, tonemapEnabled ? 1.0f : 0.0f };
+                        PostProcessPC pc{
+                            1.0f / W, 1.0f / H,
+                            bloomStrength, exposure, effectiveAO,
+                            tonemapEnabled ? 1.0f : 0.0f,
+                            static_cast<float>(debugView),
+                            fxaaEnabled ? 1.0f : 0.0f
+                        };
                         ppPass->setPushConstants(postprocessPipelineLayout.get(),
                             rhi::ShaderStage::Fragment, 0, sizeof(pc), &pc);
                         ppPass->draw(3);
@@ -3190,6 +3254,8 @@ void Renderer::drawFrame() {
                             imguiManager->render(enc, imgIdx);
                         ppPass->end();
                     }
+                    if (gpuProfiler && ve) gpuProfiler->endTimer(ve->getCommandBuffer(), frameIndex,
+                        GpuProfiler::TimerId::PostProcess);
                 });
             m_renderGraph.addReadDep(pass, rgHDR, RA::SampleFragment);
             if (rgBloom    != INVALID) m_renderGraph.addReadDep(pass, rgBloom,    RA::SampleFragment);

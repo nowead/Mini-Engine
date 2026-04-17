@@ -284,17 +284,40 @@ void Application::mainLoopFrame() {
             renderer->setAmbientIntensity(lighting.ambientIntensity);
             renderer->setShadowBias(lighting.shadowBias);
             renderer->setShadowStrength(lighting.shadowStrength);
+            renderer->setDebugCascades(lighting.debugCascades);
             renderer->setExposure(lighting.exposure);
-            renderer->setBloomStrength(lighting.bloomStrength);
-            renderer->setAOStrength(lighting.aoStrength);
+            // Bloom/SSAO: pass 0 when disabled to bypass the effect without skipping compute
+            renderer->setBloomStrength(lighting.enableBloom  ? lighting.bloomStrength : 0.0f);
+            renderer->setAOStrength(   lighting.enableSSAO   ? lighting.aoStrength    : 0.0f);
+            renderer->setTonemapEnabled(lighting.enableTonemap);
+            renderer->setFXAAEnabled(lighting.enableFXAA);
+            renderer->setDebugView(lighting.debugView);
 
             // Phase 4.1: Pass GPU timing data to ImGui
             if (auto* profiler = renderer->getGpuProfiler()) {
                 ImGuiManager::GPUTiming gpuTiming;
-                gpuTiming.cullingMs  = profiler->getElapsedMs(GpuProfiler::TimerId::FrustumCulling);
-                gpuTiming.shadowMs   = profiler->getElapsedMs(GpuProfiler::TimerId::ShadowPass);
-                gpuTiming.mainPassMs = profiler->getElapsedMs(GpuProfiler::TimerId::MainRenderPass);
+                gpuTiming.cullingMs     = profiler->getElapsedMs(GpuProfiler::TimerId::FrustumCulling);
+                gpuTiming.shadowMs      = profiler->getElapsedMs(GpuProfiler::TimerId::ShadowPass);
+                gpuTiming.gbufferMs     = profiler->getElapsedMs(GpuProfiler::TimerId::GBufferPass);
+                gpuTiming.ssaoMs        = profiler->getElapsedMs(GpuProfiler::TimerId::SSAOPass);
+                gpuTiming.bloomMs       = profiler->getElapsedMs(GpuProfiler::TimerId::BloomPass);
+                gpuTiming.deferredMs    = profiler->getElapsedMs(GpuProfiler::TimerId::DeferredLighting);
+                gpuTiming.postprocessMs = profiler->getElapsedMs(GpuProfiler::TimerId::PostProcess);
                 imgui->setGPUTiming(gpuTiming);
+            }
+
+            // Bindless + VMA metrics
+            {
+                auto bm = renderer->getBindlessMetrics();
+                ImGuiManager::BindlessMetrics ibm;
+                ibm.bindlessAvailable  = bm.bindlessAvailable;
+                ibm.registeredTextures = bm.registeredTextures;
+                ibm.maxTextures        = bm.maxTextures;
+                ibm.lastInstanceCount  = bm.lastInstanceCount;
+                ibm.vmaAllocCount      = bm.vmaAllocCount;
+                ibm.vmaAllocatedBytes  = bm.vmaAllocatedBytes;
+                ibm.vmaReservedBytes   = bm.vmaReservedBytes;
+                imgui->setBindlessMetrics(ibm);
             }
 
             // Phase 4.1: Handle stress test building count change

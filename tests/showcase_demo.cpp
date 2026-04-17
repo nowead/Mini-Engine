@@ -26,6 +26,9 @@
 #include "src/scene/Mesh.hpp"
 #include "src/rendering/InstancedRenderData.hpp"
 #include "src/utils/Vertex.hpp"
+#ifndef __EMSCRIPTEN__
+#include "src/utils/GpuProfiler.hpp"
+#endif
 
 #include <imgui.h>
 
@@ -156,7 +159,7 @@ private:
         glfwInit();
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         m_win = glfwCreateWindow(WIN_W, WIN_H,
-            "Mini-Engine Showcase — Phase 1~4 | Deferred + CSM + Bindless", nullptr, nullptr);
+            "Mini-Engine  |  Vulkan Deferred Renderer  |  PBR + CSM + Bindless", nullptr, nullptr);
         glfwSetWindowUserPointer(m_win, this);
 
         glfwSetFramebufferSizeCallback(m_win, [](GLFWwindow* w,int,int){
@@ -301,108 +304,287 @@ private:
     // -------------------------------------------------------------------------
 
     void buildUI() {
-        ImGui::SetNextWindowPos({10,10}, ImGuiCond_Always);
-        ImGui::SetNextWindowSize({330,0}, ImGuiCond_Always);
-        ImGui::SetNextWindowBgAlpha(0.82f);
-        ImGui::Begin("Mini-Engine Showcase", nullptr,
-            ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoCollapse);
+        ImGui::SetNextWindowPos({10, 10}, ImGuiCond_Always);
+        ImGui::SetNextWindowSize({360, 0}, ImGuiCond_Always);
+        ImGui::SetNextWindowBgAlpha(0.88f);
+        ImGui::Begin("Mini-Engine  |  Vulkan Rendering Showcase", nullptr,
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
 
-        // ── 기술 스택 체크리스트 ──────────────────────────────────────────────
-        ImGui::TextColored({0.4f,0.85f,1.f,1.f}, "Phase 1~4 기술 스택");
-        ImGui::Separator();
-        auto ok = [](const char* s){ ImGui::TextColored({0.3f,1.f,0.35f,1.f},"[v]"); ImGui::SameLine(); ImGui::TextUnformatted(s); };
-        ok("Phase 1 : HDR + Bloom + SSAO + FXAA");
-        ok("Phase 2 : Render Graph (sync2 배리어 자동)");
-        ok("Phase 3 : Deferred G-Buffer + 4-Cascade CSM");
-        ok("Phase 4 : VMA 커스텀 풀 + Bindless 텍스처");
+        // ── Feature Summary ────────────────────────────────────────────────────
+        auto badge = [](const char* label) {
+            ImGui::TextColored({0.25f, 1.f, 0.45f, 1.f}, "[+]");
+            ImGui::SameLine();
+            ImGui::TextUnformatted(label);
+        };
+        badge("Deferred Rendering  (G-Buffer + Lighting pass)");
+        badge("4-Cascade Shadow Maps  (PSSM, 0~1000 m)");
+        badge("Render Graph  (auto sync2 barrier inference)");
+        badge("Bindless Textures  (VK_EXT_descriptor_indexing)");
+        badge("HDR Pipeline  (Bloom + SSAO + ACES + FXAA)");
+        badge("IBL  (Irradiance / Prefiltered Env / BRDF LUT)");
         if (!m_envLoaded)
-            ImGui::TextColored({1.f,0.75f,0.2f,1.f}," ※ IBL: 야경 모드 (lavapipe)");
+            ImGui::TextColored({1.f, 0.75f, 0.25f, 1.f},
+                "  [!] No HDR env map found  —  ambient-only mode");
 
         ImGui::Spacing();
 
-        // ── 1. Dynamic Point Lights ──────────────────────────────────────────
-        ImGui::TextColored({0.4f,0.85f,1.f,1.f}, "1. Dynamic Point Lights  (Phase 3)");
+        // ── 1. Deferred Lighting — multi-light scaling ────────────────────────
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.85f, 1.f, 1.f));
+        ImGui::Text("Deferred Lighting  —  Dynamic Point Lights");
+        ImGui::PopStyleColor();
         ImGui::Separator();
 
-        ImGui::Text("Active lights : %d / %d", m_numLights, NUM_LIGHTS);
+        ImGui::Text("Active lights:  %d / %d", m_numLights, NUM_LIGHTS);
         ImGui::SliderInt("##lights", &m_numLights, 0, NUM_LIGHTS);
 
-        // Forward vs Deferred 비용 비교 — 라이트 수에 따라 강조
-        int tris = GRID*GRID * 32*16*2;   // 구체당 삼각형 수
+        // Cost comparison
+        int tris = GRID * GRID * 32 * 16 * 2;
         ImGui::Spacing();
-        ImGui::TextColored({1.f,0.4f,0.4f,1.f},
-            "Forward:  %d lights x ~%dk tri = 비례 비용", m_numLights, tris/1000);
-        ImGui::TextColored({0.3f,1.f,0.4f,1.f},
-            "Deferred: %d lights x %dx%d px  <- 이 데모", m_numLights, WIN_W, WIN_H);
+        ImGui::TextColored({1.f, 0.42f, 0.42f, 1.f},
+            "Forward  : %d lights x ~%d K tris  (scales badly)", m_numLights, tris / 1000);
+        ImGui::TextColored({0.3f, 1.f, 0.42f, 1.f},
+            "Deferred : %d lights x %d x %d px  (this demo)",   m_numLights, WIN_W, WIN_H);
         if (m_numLights >= 16)
-            ImGui::TextColored({1.f,0.9f,0.2f,1.f}, "  Forward라면 이 숫자는 불가합니다!");
+            ImGui::TextColored({1.f, 0.9f, 0.25f, 1.f},
+                "  >> %d simultaneous lights, constant G-Buffer cost", m_numLights);
 
         ImGui::Spacing();
 
-        // ── 2. CSM Cascade 시각화 (Phase 3) ─────────────────────────────────
-        ImGui::TextColored({0.4f,0.85f,1.f,1.f}, "2. CSM Cascade 시각화  (Phase 3)");
+        // ── 2. Cascade Shadow Maps ─────────────────────────────────────────────
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.85f, 1.f, 1.f));
+        ImGui::Text("4-Cascade Shadow Maps  (CSM / PSSM)");
+        ImGui::PopStyleColor();
         ImGui::Separator();
 
         bool dbg = m_renderer->getDebugCascades();
-        if (ImGui::Checkbox("Cascade 색상 표시", &dbg))
+        if (ImGui::Checkbox("Visualize Cascade Regions", &dbg))
             m_renderer->setDebugCascades(dbg);
 
         if (dbg) {
-            ImGui::TextColored({1.f,0.3f,0.3f,1.f}, "  Red    = Cascade 0  (0 ~ 10m)");
-            ImGui::TextColored({0.3f,1.f,0.3f,1.f}, "  Green  = Cascade 1  (10 ~ 50m)");
-            ImGui::TextColored({0.4f,0.5f,1.f,1.f}, "  Blue   = Cascade 2  (50 ~ 200m)");
-            ImGui::TextColored({1.f,0.9f,0.2f,1.f}, "  Yellow = Cascade 3  (200~1000m)");
+            ImGui::TextColored({1.f,  0.3f, 0.3f, 1.f}, "  Red    =  C0   0 – 10 m  (near, high res)");
+            ImGui::TextColored({0.3f, 1.f,  0.3f, 1.f}, "  Green  =  C1  10 – 50 m");
+            ImGui::TextColored({0.4f, 0.5f, 1.f,  1.f}, "  Blue   =  C2  50 – 200 m");
+            ImGui::TextColored({1.f,  0.9f, 0.2f, 1.f}, "  Yellow =  C3  200 – 1000 m (far)");
         } else {
-            ImGui::TextDisabled("  체크하면 그림자 cascade 경계가 보입니다");
+            ImGui::TextDisabled("  Toggle to see per-cascade coverage boundaries");
         }
 
         ImGui::Spacing();
 
-        // ── 3. Post-process 개별 On/Off ──────────────────────────────────────
-        ImGui::TextColored({0.4f,0.85f,1.f,1.f}, "3. Post-process 토글  (Phase 1)");
+        // ── 3. Post-Process Stack ──────────────────────────────────────────────
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.85f, 1.f, 1.f));
+        ImGui::Text("Post-Process Stack");
+        ImGui::PopStyleColor();
         ImGui::Separator();
 
         // Bloom
         bool bloomOn = (m_renderer->getBloomStrength() > 0.01f);
-        if (ImGui::Checkbox("Bloom (Kawase Dual Blur)", &bloomOn))
+        if (ImGui::Checkbox("Bloom  (Kawase Dual Blur)", &bloomOn))
             m_renderer->setBloomStrength(bloomOn ? m_savedBloom : 0.0f);
         if (bloomOn) {
             float bs = m_renderer->getBloomStrength();
-            if (ImGui::SliderFloat("  강도##bloom", &bs, 0.05f, 3.0f))
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(120);
+            if (ImGui::SliderFloat("##bloom", &bs, 0.05f, 3.0f, "%.2f"))
             { m_renderer->setBloomStrength(bs); m_savedBloom = bs; }
         }
 
         // SSAO
         bool aoOn = (m_renderer->getAOStrength() > 0.01f);
-        if (ImGui::Checkbox("SSAO (Bilateral Blur)", &aoOn))
+        if (ImGui::Checkbox("SSAO   (Bilateral Blur)", &aoOn))
             m_renderer->setAOStrength(aoOn ? m_savedAO : 0.0f);
         if (aoOn) {
             float as = m_renderer->getAOStrength();
-            if (ImGui::SliderFloat("  강도##ao", &as, 0.05f, 2.0f))
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(120);
+            if (ImGui::SliderFloat("##ao", &as, 0.05f, 2.0f, "%.2f"))
             { m_renderer->setAOStrength(as); m_savedAO = as; }
         }
 
-        // Tonemap
+        // ACES tonemap
         bool tmOn = m_renderer->getTonemapEnabled();
         if (ImGui::Checkbox("ACES Filmic Tonemap", &tmOn))
             m_renderer->setTonemapEnabled(tmOn);
         if (!tmOn)
-            ImGui::TextColored({1.f,0.5f,0.2f,1.f}, "  [!] Raw HDR — 하이라이트 날아감");
+            ImGui::TextColored({1.f, 0.5f, 0.2f, 1.f},
+                "  [!] Raw HDR output — highlights clipped");
+
+        // FXAA
+        bool fxaaOn = m_renderer->getFXAAEnabled();
+        if (ImGui::Checkbox("FXAA   (Luminance edge detection)", &fxaaOn))
+            m_renderer->setFXAAEnabled(fxaaOn);
 
         ImGui::Spacing();
 
-        // ── 조명 튜닝 ────────────────────────────────────────────────────────
-        if (ImGui::CollapsingHeader("방향광 / 노출")) {
+        // ── 4. G-Buffer Inspector ──────────────────────────────────────────────
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.85f, 1.f, 1.f));
+        ImGui::Text("G-Buffer Inspector");
+        ImGui::PopStyleColor();
+        ImGui::Separator();
+        ImGui::TextDisabled("Inspect raw PBR channels written to the G-Buffer");
+        ImGui::Spacing();
+
+        // Row 0
+        if (ImGui::RadioButton("Final",     m_debugView == 0)) m_debugView = 0; ImGui::SameLine();
+        if (ImGui::RadioButton("Normals",   m_debugView == 1)) m_debugView = 1; ImGui::SameLine();
+        if (ImGui::RadioButton("Albedo",    m_debugView == 2)) m_debugView = 2;
+        // Row 1
+        if (ImGui::RadioButton("Metallic",  m_debugView == 3)) m_debugView = 3; ImGui::SameLine();
+        if (ImGui::RadioButton("Roughness", m_debugView == 4)) m_debugView = 4; ImGui::SameLine();
+        if (ImGui::RadioButton("AO",        m_debugView == 5)) m_debugView = 5;
+        // Row 2
+        if (ImGui::RadioButton("Depth",     m_debugView == 6)) m_debugView = 6; ImGui::SameLine();
+        if (ImGui::RadioButton("SSAO Buf",  m_debugView == 7)) m_debugView = 7; ImGui::SameLine();
+        if (ImGui::RadioButton("Bloom Buf", m_debugView == 8)) m_debugView = 8;
+
+        m_renderer->setDebugView(m_debugView);
+
+        // Contextual hint per view
+        const char* viewHints[] = {
+            "",
+            "  World-space normals remapped: XYZ -> RGB  (gray = 0.5)",
+            "  Linear albedo (sRGB conversion handled by swapchain format)",
+            "  Vertical gradient: row 0 = Metallic 0.0, row 7 = Metallic 1.0",
+            "  Horizontal gradient: col 0 = Roughness 0.0, col 7 = Roughness 1.0",
+            "  Material ambient occlusion stored in GBuffer2.r",
+            "  Linearized depth  (near=0.1 m, far=1000 m) -> [0,1]",
+            "  Screen-space ambient occlusion mask  (white = fully lit)",
+            "  Bloom bright-pass mask  (amplified x8 for visibility)",
+        };
+        if (m_debugView > 0)
+            ImGui::TextColored({0.65f, 0.75f, 0.85f, 1.f}, "%s", viewHints[m_debugView]);
+
+        ImGui::Spacing();
+
+        // ── Directional Light / Exposure ───────────────────────────────────────
+        if (ImGui::CollapsingHeader("Directional Light / Exposure")) {
             float si = m_renderer->getSunIntensity();
-            if (ImGui::SliderFloat("태양 강도", &si, 0.f, 4.f)) m_renderer->setSunIntensity(si);
+            if (ImGui::SliderFloat("Sun Intensity", &si, 0.f, 4.f)) m_renderer->setSunIntensity(si);
             float ai = m_renderer->getAmbientIntensity();
-            if (ImGui::SliderFloat("Ambient",   &ai, 0.f, 1.f)) m_renderer->setAmbientIntensity(ai);
+            if (ImGui::SliderFloat("Ambient",       &ai, 0.f, 1.f)) m_renderer->setAmbientIntensity(ai);
             float ev = m_renderer->getExposure();
-            if (ImGui::SliderFloat("Exposure",  &ev, 0.1f,4.f)) m_renderer->setExposure(ev);
+            if (ImGui::SliderFloat("Exposure (EV)", &ev, 0.1f,4.f)) m_renderer->setExposure(ev);
         }
 
         ImGui::Spacing();
-        ImGui::TextDisabled("좌드래그: 오비트  우드래그: 팬  스크롤: 줌");
+
+        // ── Bindless Textures & VMA Memory ────────────────────────────────────
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.85f, 1.f, 1.f));
+        ImGui::Text("Bindless Textures & GPU Memory");
+        ImGui::PopStyleColor();
+        ImGui::Separator();
+        ImGui::TextDisabled("VK_EXT_descriptor_indexing  |  VMA custom pools");
+        ImGui::Spacing();
+
+#ifndef __EMSCRIPTEN__
+        {
+            auto bm = m_renderer->getBindlessMetrics();
+            if (bm.bindlessAvailable) {
+                ImGui::TextColored(ImVec4(0.3f, 1.f, 0.4f, 1.f),
+                    "Bindless: enabled  (%u / %u slots)", bm.registeredTextures, bm.maxTextures);
+                ImGui::Text("Objects: %u", bm.lastInstanceCount);
+                ImGui::Spacing();
+
+                // Descriptor bind comparison
+                ImGui::TextColored(ImVec4(0.3f, 0.8f, 1.f, 1.f),
+                    "  Bindless bind:     1  (global descriptor array)");
+                uint32_t trad = bm.lastInstanceCount * bm.registeredTextures;
+                ImGui::TextColored(ImVec4(1.f, 0.6f, 0.3f, 1.f),
+                    "  Traditional bind:  %u  (%u obj x %u tex)",
+                    trad, bm.lastInstanceCount, bm.registeredTextures);
+                if (trad > 1) {
+                    float frac = 1.0f / static_cast<float>(trad);
+                    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.3f, 0.8f, 0.4f, 1.f));
+                    ImGui::ProgressBar(frac, ImVec2(-1, 12.f), "bindless ratio");
+                    ImGui::PopStyleColor();
+                }
+            } else {
+                ImGui::TextColored(ImVec4(1.f, 0.5f, 0.3f, 1.f),
+                    "Bindless: unavailable  (procedural fallback)");
+            }
+            ImGui::Spacing();
+
+            // VMA memory
+            float usedMB  = static_cast<float>(bm.vmaAllocatedBytes) / (1024.f * 1024.f);
+            float resvMB  = static_cast<float>(bm.vmaReservedBytes)  / (1024.f * 1024.f);
+            ImGui::Text("VMA: %llu allocs  |  %.1f MB used  |  %.1f MB reserved",
+                (unsigned long long)bm.vmaAllocCount, usedMB, resvMB);
+            if (resvMB > 0.5f) {
+                float frac = usedMB / resvMB;
+                frac = frac > 1.f ? 1.f : frac;
+                ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.4f, 0.7f, 1.f, 1.f));
+                char lbl[32];
+                snprintf(lbl, sizeof(lbl), "%.1f / %.1f MB", usedMB, resvMB);
+                ImGui::ProgressBar(frac, ImVec2(-1, 12.f), lbl);
+                ImGui::PopStyleColor();
+            }
+        }
+#else
+        ImGui::TextDisabled("(Vulkan only)");
+#endif
+
+        ImGui::Spacing();
+
+        // ── GPU Pass Timings ───────────────────────────────────────────────────
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.85f, 1.f, 1.f));
+        ImGui::Text("GPU Pass Timings");
+        ImGui::PopStyleColor();
+        ImGui::Separator();
+        ImGui::TextDisabled("EMA-smoothed Vulkan timestamp queries (N-2 latency)");
+        ImGui::Spacing();
+
+#ifndef __EMSCRIPTEN__
+        {
+            float cullingMs = 0.f, shadowMs = 0.f, gbufMs = 0.f;
+            float ssaoMs = 0.f, bloomMs = 0.f, deferredMs = 0.f, ppMs = 0.f;
+            if (auto* profiler = m_renderer->getGpuProfiler()) {
+                cullingMs  = profiler->getElapsedMs(GpuProfiler::TimerId::FrustumCulling);
+                shadowMs   = profiler->getElapsedMs(GpuProfiler::TimerId::ShadowPass);
+                gbufMs     = profiler->getElapsedMs(GpuProfiler::TimerId::GBufferPass);
+                ssaoMs     = profiler->getElapsedMs(GpuProfiler::TimerId::SSAOPass);
+                bloomMs    = profiler->getElapsedMs(GpuProfiler::TimerId::BloomPass);
+                deferredMs = profiler->getElapsedMs(GpuProfiler::TimerId::DeferredLighting);
+                ppMs       = profiler->getElapsedMs(GpuProfiler::TimerId::PostProcess);
+            }
+
+            float gpuTotal = cullingMs + shadowMs + gbufMs + ssaoMs + bloomMs + deferredMs + ppMs;
+            ImGui::Text("Total:  %.3f ms  (%.0f FPS budget)", gpuTotal,
+                gpuTotal > 0.001f ? 1000.0f / gpuTotal : 0.0f);
+            ImGui::Spacing();
+
+            struct Bar { const char* name; float ms; ImVec4 col; };
+            const Bar bars[] = {
+                { "Frustum Cull", cullingMs,  ImVec4(0.4f, 0.8f, 0.4f, 1.f) },
+                { "Shadow Pass",  shadowMs,   ImVec4(0.3f, 0.5f, 0.9f, 1.f) },
+                { "G-Buffer",     gbufMs,     ImVec4(0.9f, 0.7f, 0.2f, 1.f) },
+                { "SSAO",         ssaoMs,     ImVec4(0.6f, 0.4f, 0.9f, 1.f) },
+                { "Bloom",        bloomMs,    ImVec4(1.0f, 0.6f, 0.2f, 1.f) },
+                { "Deferred Lit", deferredMs, ImVec4(0.9f, 0.3f, 0.3f, 1.f) },
+                { "Post-Process", ppMs,       ImVec4(0.3f, 0.8f, 0.8f, 1.f) },
+            };
+            float barMax = (gpuTotal > 0.001f) ? gpuTotal : 1.0f;
+            float barW = ImGui::GetContentRegionAvail().x - 90.0f;
+            barW = (barW < 60.0f) ? 60.0f : barW;
+            for (const auto& b : bars) {
+                ImGui::TextUnformatted(b.name);
+                ImGui::SameLine(90.0f);
+                ImGui::PushStyleColor(ImGuiCol_PlotHistogram, b.col);
+                char lbl[24];
+                snprintf(lbl, sizeof(lbl), "%.2f ms", b.ms);
+                ImGui::ProgressBar(b.ms / barMax, ImVec2(barW, 14.0f), lbl);
+                ImGui::PopStyleColor();
+            }
+        }
+#else
+        ImGui::TextDisabled("(Vulkan only)");
+#endif
+
+        ImGui::Text("FPS: %.1f  |  Frame: %.3f ms",
+            ImGui::GetIO().Framerate, 1000.0f / ImGui::GetIO().Framerate);
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::TextDisabled("Left drag: orbit   Right drag: pan   Scroll: zoom   Q/Esc: quit");
         ImGui::End();
     }
 
@@ -444,6 +626,7 @@ private:
     bool   m_envLoaded = false;
     float  m_savedBloom = 1.2f;
     float  m_savedAO    = 1.0f;
+    int    m_debugView  = 0;    // 0=Final, 1=Normals … 8=Bloom
 
     bool   m_lDrag = false, m_rDrag = false;
     double m_mx=0, m_my=0;

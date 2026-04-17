@@ -12,7 +12,11 @@
  * Measures per-pass GPU elapsed time for:
  *   - Frustum Culling (compute)
  *   - Shadow Pass (render)
- *   - Main Render Pass (render)
+ *   - G-Buffer Pass (render)
+ *   - SSAO Pass (compute × 2: AO + blur)
+ *   - Bloom Pass (compute × 5: threshold + 4× blur)
+ *   - Deferred Lighting (render)
+ *   - Post-Process (render: tonemap + FXAA)
  *
  * Uses one VkQueryPool per frame-in-flight to avoid read/write hazards.
  * Results are read back from the previous frame (N-2 latency with double buffering).
@@ -20,10 +24,14 @@
 class GpuProfiler {
 public:
     enum class TimerId : uint32_t {
-        FrustumCulling = 0,
-        ShadowPass     = 1,
-        MainRenderPass = 2,
-        Count          = 3
+        FrustumCulling   = 0,
+        ShadowPass       = 1,
+        GBufferPass      = 2,   // renamed from MainRenderPass
+        SSAOPass         = 3,   // covers SSAO compute + bilateral blur
+        BloomPass        = 4,   // covers threshold + 4× Kawase blur
+        DeferredLighting = 5,
+        PostProcess      = 6,   // tonemap + FXAA
+        Count            = 7
     };
 
     struct TimerResult {
@@ -71,7 +79,11 @@ private:
     static constexpr const char* TIMER_NAMES[TIMER_COUNT] = {
         "Frustum Cull",
         "Shadow Pass",
-        "Main Pass"
+        "G-Buffer",
+        "SSAO",
+        "Bloom",
+        "Deferred Lighting",
+        "Post-Process"
     };
 };
 

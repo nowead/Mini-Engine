@@ -65,11 +65,18 @@ public:
         // Shadow settings
         float shadowBias = 0.008f;      // Depth bias to prevent shadow acne
         float shadowStrength = 0.7f;    // Shadow darkness (0-1)
+        bool  debugCascades = false;    // Cascade region color overlay
         // PBR tone mapping
         float exposure = 1.0f;          // Tone mapping exposure (0.1-5.0)
         // Post-process
         float bloomStrength = 0.04f;    // Bloom intensity (0-0.5)
         float aoStrength = 0.6f;        // SSAO darkening strength (0-1)
+        bool  enableBloom   = true;     // Bloom on/off toggle
+        bool  enableSSAO    = true;     // SSAO on/off toggle
+        bool  enableFXAA    = true;     // FXAA on/off toggle
+        bool  enableTonemap = true;     // ACES tonemap on/off toggle
+        // Debug views: 0=normal, 1=normals, 2=albedo, 3=metallic, 4=roughness, 5=ao, 6=depth, 7=ssao, 8=bloom
+        int   debugView = 0;
     };
 
     LightingSettings& getLightingSettings() { return m_lightingSettings; }
@@ -83,11 +90,27 @@ public:
         return true;
     }
 
-    // Phase 4.1: GPU timing data (set by Application, displayed in Statistics panel)
+    // Bindless + VMA metrics (set by Application, displayed in Statistics panel)
+    struct BindlessMetrics {
+        bool     bindlessAvailable  = false;
+        uint32_t registeredTextures = 0;
+        uint32_t maxTextures        = 0;
+        uint32_t lastInstanceCount  = 0;
+        uint64_t vmaAllocCount      = 0;
+        uint64_t vmaAllocatedBytes  = 0;
+        uint64_t vmaReservedBytes   = 0;
+    };
+    void setBindlessMetrics(const BindlessMetrics& m) { m_bindlessMetrics = m; }
+
+    // GPU timing data (set by Application, displayed as bar chart in Statistics panel)
     struct GPUTiming {
-        float cullingMs  = 0.0f;
-        float shadowMs   = 0.0f;
-        float mainPassMs = 0.0f;
+        float cullingMs      = 0.0f;
+        float shadowMs       = 0.0f;
+        float gbufferMs      = 0.0f;
+        float ssaoMs         = 0.0f;
+        float bloomMs        = 0.0f;
+        float deferredMs     = 0.0f;
+        float postprocessMs  = 0.0f;
     };
     void setGPUTiming(const GPUTiming& timing) { m_gpuTiming = timing; }
 
@@ -112,6 +135,9 @@ private:
     int  m_targetBuildingCount  = 1000;
     bool m_buildingCountChanged = false;
 
-    // Phase 4.1: GPU timing (written by Application, read by Statistics panel)
+    // GPU timing (written by Application, read by Statistics panel)
     GPUTiming m_gpuTiming;
+
+    // Bindless + VMA metrics
+    BindlessMetrics m_bindlessMetrics;
 };

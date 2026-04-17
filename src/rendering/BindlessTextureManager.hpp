@@ -54,6 +54,9 @@ public:
      */
     uint32_t registerTexture(rhi::RHITextureView* view, rhi::RHISampler* sampler);
 
+    /** Number of textures currently registered in the bindless array. */
+    uint32_t getRegisteredCount() const { return m_nextIndex; }
+
     /** Native handles needed by GBufferPass pipeline layout and command buffer. */
     VkDescriptorSetLayout getVkDescriptorSetLayout() const { return m_setLayout; }
     VkDescriptorSet       getVkDescriptorSet()       const { return m_descriptorSet; }

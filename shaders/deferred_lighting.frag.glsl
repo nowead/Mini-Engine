@@ -37,7 +37,7 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
     PointLight pointLights[32];
     uint numPointLights;
     float debugCascades;  // 1.0 = visualize CSM cascade regions
-    float _pad1;
+    int   debugView;      // 0=normal, 1=normals, 2=albedo, 3=metallic, 4=roughness, 5=ao, 6=depth
     float _pad2;
 } ubo;
 
@@ -164,6 +164,35 @@ void main() {
     vec3  albedo    = gb1.rgb;
     float metallic  = gb1.a;
     float ao        = gb2.r;
+
+    // G-Buffer debug views: bypass PBR and output raw channel data
+    if (ubo.debugView != 0) {
+        vec3 dbgColor;
+        if (ubo.debugView == 1) {
+            // Normals: remap [-1,1] → [0,1] for visualization
+            dbgColor = N * 0.5 + 0.5;
+        } else if (ubo.debugView == 2) {
+            // Albedo
+            dbgColor = albedo;
+        } else if (ubo.debugView == 3) {
+            // Metallic (grayscale)
+            dbgColor = vec3(metallic);
+        } else if (ubo.debugView == 4) {
+            // Roughness (grayscale)
+            dbgColor = vec3(roughness);
+        } else if (ubo.debugView == 5) {
+            // Material AO from G-Buffer (grayscale)
+            dbgColor = vec3(ao);
+        } else {
+            // Depth: linearize using a fixed near/far matching the scene camera
+            float near = 0.1;
+            float far  = 1000.0;
+            float linearDepth = (2.0 * near * far) / (far + near - depth * (far - near));
+            dbgColor = vec3(linearDepth / far);
+        }
+        outColor = vec4(dbgColor, 1.0);
+        return;
+    }
 
     vec3 V    = normalize(ubo.cameraPos - worldPos);
     vec3 L    = normalize(ubo.sunDirection);

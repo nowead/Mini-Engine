@@ -23,6 +23,8 @@ layout(push_constant) uniform PostProcessParams {
     float exposure;       // EV adjustment applied before ACES
     float aoStrength;     // [0..1] SSAO darkening strength
     float tonemapEnabled; // 1.0 = apply ACES, 0.0 = passthrough (raw HDR clamped)
+    float debugView;      // 0=normal, 1-6=GBuffer passthrough, 7=SSAO mask, 8=bloom mask
+    float fxaaEnabled;    // 1.0 = FXAA on, 0.0 = no anti-aliasing
 } params;
 
 // ---- ACES Filmic Tone Mapping -----------------------------------------------
@@ -65,6 +67,33 @@ const float SUBPIX_QUALITY     = 0.75;
 void main() {
     vec2 uv = fragUV;
     vec2 ts = params.texelSize;
+
+    // ---- Debug views: bypass full pipeline ----
+    // Views 1-6: deferred_lighting already wrote raw G-Buffer data to HDR;
+    //            sample it directly (no tonemap, no FXAA).
+    if (params.debugView >= 1.0 && params.debugView < 7.0) {
+        vec3 raw = texture(sampler2D(hdrTexture, hdrSampler), uv).rgb;
+        outColor = vec4(raw, 1.0);
+        return;
+    }
+    // View 7: SSAO mask — show screen-space ambient occlusion buffer as grayscale
+    if (params.debugView >= 7.0 && params.debugView < 8.0) {
+        float ao = texture(sampler2D(ssaoTexture, hdrSampler), uv).r;
+        outColor = vec4(vec3(ao), 1.0);
+        return;
+    }
+    // View 8: Bloom mask — amplify bloom texture to make it visible
+    if (params.debugView >= 8.0) {
+        vec3 bloom = texture(sampler2D(bloomTexture, hdrSampler), uv).rgb;
+        outColor = vec4(min(bloom * 8.0, vec3(1.0)), 1.0);
+        return;
+    }
+
+    // ---- FXAA disabled: output tonemapped center sample directly ----
+    if (params.fxaaEnabled < 0.5) {
+        outColor = vec4(tonemappedSample(uv), 1.0);
+        return;
+    }
 
     // ---- Cardinal tonemapped samples ----
     vec3 rgbM = tonemappedSample(uv);

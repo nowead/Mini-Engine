@@ -189,8 +189,15 @@ public:
     void setTonemapEnabled(bool on) { tonemapEnabled = on; }
     bool getTonemapEnabled() const { return tonemapEnabled; }
 
+    void setFXAAEnabled(bool on) { fxaaEnabled = on; }
+    bool getFXAAEnabled() const { return fxaaEnabled; }
+
     void setDebugCascades(bool on) { debugCascades = on; }
     bool getDebugCascades() const { return debugCascades; }
+
+    // 0=normal, 1=normals, 2=albedo, 3=metallic, 4=roughness, 5=ao, 6=depth, 7=ssao, 8=bloom
+    void setDebugView(int v) { debugView = v; }
+    int  getDebugView() const { return debugView; }
 
     /**
      * @brief Set dynamic point lights for the deferred lighting pass (Phase 4 showcase).
@@ -223,6 +230,23 @@ public:
      * @brief Get GPU profiler (for external timing readback)
      */
     class GpuProfiler* getGpuProfiler();
+
+    /**
+     * @brief Bindless + VMA memory metrics for the UI stats panel.
+     */
+    struct BindlessMetrics {
+        // Bindless texture registry
+        bool     bindlessAvailable  = false;
+        uint32_t registeredTextures = 0;
+        uint32_t maxTextures        = 0;
+        uint32_t lastInstanceCount  = 0;   // objects submitted last frame
+
+        // VMA allocation stats (device-local + all heaps)
+        uint64_t vmaAllocCount      = 0;
+        uint64_t vmaAllocatedBytes  = 0;   // bytes actually used by allocations
+        uint64_t vmaReservedBytes   = 0;   // bytes reserved in VMA blocks
+    };
+    BindlessMetrics getBindlessMetrics() const;
 #endif
 
 private:
@@ -394,6 +418,7 @@ private:
 
     // Instanced rendering data (submitted per-frame) - stored by value
     std::optional<rendering::InstancedRenderData> pendingInstancedData;
+    uint32_t lastInstanceCount = 0;  // cached for metrics panel
 
     // Phase 4 showcase: dynamic point lights submitted each frame
     std::vector<PointLight> pendingPointLights;
@@ -416,7 +441,9 @@ private:
     float bloomStrength = 0.04f; // Bloom intensity
     float aoStrength = 0.6f;     // SSAO darkening strength
     bool  tonemapEnabled = true; // ACES tonemap on/off
+    bool  fxaaEnabled    = true; // FXAA anti-aliasing on/off
     bool  debugCascades  = false;// CSM cascade color debug
+    int   debugView      = 0;    // 0=normal, 1-6=GBuffer channels, 7=SSAO, 8=bloom
     float shadowSceneRadius = 200.0f;  // Orthographic projection half-extent for shadows
 
 #ifndef __EMSCRIPTEN__

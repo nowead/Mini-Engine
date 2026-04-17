@@ -54,5 +54,6 @@ struct UniformBufferObject {
 	alignas(16) PointLight pointLights[MAX_POINT_LIGHTS];
 	alignas(4)  uint32_t numPointLights = 0;
 	float debugCascades = 0.0f;  // 1.0 = visualize CSM cascade regions with debug colors
-	float _pad1 = 0, _pad2 = 0;
+	int   debugView     = 0;     // 0=normal, 1=normals, 2=albedo, 3=metallic, 4=roughness, 5=ao, 6=depth
+	float _pad2 = 0;
 };

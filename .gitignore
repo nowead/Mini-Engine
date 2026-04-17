@@ -41,3 +41,7 @@ imgui.ini
 # Local development docs (not tracked)
 REFACTORING_TODO.md
 CAREER_ROADMAP.md
+
+# Learning documents (personal study materials)
+docs/learning/
+!docs/learning/.gitkeep

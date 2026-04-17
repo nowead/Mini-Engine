@@ -42,6 +42,28 @@ void ImGuiManager::renderUI(Camera& camera, uint32_t buildingCount,
     ImGui::Text("Building Visualization Engine");
     ImGui::Separator();
 
+    // Debug Views — G-Buffer / post-process channel selector
+    if (ImGui::CollapsingHeader("Debug Views", ImGuiTreeNodeFlags_DefaultOpen)) {
+        const char* viewNames[] = {
+            "Final",       // 0
+            "Normals",     // 1
+            "Albedo",      // 2
+            "Metallic",    // 3
+            "Roughness",   // 4
+            "Material AO", // 5
+            "Depth",       // 6
+            "SSAO Mask",   // 7
+            "Bloom Mask",  // 8
+        };
+        for (int i = 0; i < 9; ++i) {
+            if (ImGui::RadioButton(viewNames[i], m_lightingSettings.debugView == i))
+                m_lightingSettings.debugView = i;
+            if (i < 8) ImGui::SameLine();
+        }
+    }
+
+    ImGui::Separator();
+
     // Camera controls
     if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
         // Reset camera
@@ -171,9 +193,17 @@ void ImGuiManager::renderUI(Camera& camera, uint32_t buildingCount,
 
         // Shadow settings
         ImGui::Separator();
-        ImGui::Text("Shadows:");
+        ImGui::Text("Shadows (4-Cascade CSM):");
         ImGui::SliderFloat("Shadow Bias", &m_lightingSettings.shadowBias, 0.001f, 0.02f, "%.4f");
         ImGui::SliderFloat("Shadow Strength", &m_lightingSettings.shadowStrength, 0.0f, 1.0f, "%.2f");
+        ImGui::Checkbox("Show Cascade Regions", &m_lightingSettings.debugCascades);
+        if (m_lightingSettings.debugCascades) {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1,0.3f,0.3f,1), "C0"); ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0.3f,1,0.3f,1), "C1"); ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0.3f,0.5f,1,1), "C2"); ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1,1,0.2f,1),   "C3");
+        }
 
         // PBR Tone Mapping
         ImGui::Separator();
@@ -183,8 +213,64 @@ void ImGuiManager::renderUI(Camera& camera, uint32_t buildingCount,
         // Post-Processing
         ImGui::Separator();
         ImGui::Text("Post-Processing:");
-        ImGui::SliderFloat("Bloom Strength", &m_lightingSettings.bloomStrength, 0.0f, 0.5f, "%.3f");
-        ImGui::SliderFloat("AO Strength",    &m_lightingSettings.aoStrength,    0.0f, 1.0f, "%.2f");
+        ImGui::Checkbox("ACES Tonemap", &m_lightingSettings.enableTonemap); ImGui::SameLine();
+        ImGui::Checkbox("FXAA",         &m_lightingSettings.enableFXAA);
+        ImGui::Checkbox("Bloom",        &m_lightingSettings.enableBloom);
+        if (m_lightingSettings.enableBloom)
+            ImGui::SliderFloat("Bloom Strength", &m_lightingSettings.bloomStrength, 0.0f, 0.5f, "%.3f");
+        ImGui::Checkbox("SSAO",         &m_lightingSettings.enableSSAO);
+        if (m_lightingSettings.enableSSAO)
+            ImGui::SliderFloat("AO Strength",    &m_lightingSettings.aoStrength,    0.0f, 1.0f, "%.2f");
+    }
+
+    ImGui::Separator();
+
+    // Bindless & Memory metrics
+    if (ImGui::CollapsingHeader("Bindless & Memory")) {
+        const auto& bm = m_bindlessMetrics;
+
+        // Bindless texture registry
+        ImGui::Text("Bindless Textures:");
+        if (bm.bindlessAvailable) {
+            ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.4f, 1.0f), "  Available (VK_EXT_descriptor_indexing)");
+            ImGui::Text("  Registered: %u / %u slots", bm.registeredTextures, bm.maxTextures);
+
+            // Descriptor bind savings visualisation
+            ImGui::Separator();
+            ImGui::Text("Descriptor Bind Model  (%u objects):", bm.lastInstanceCount);
+            ImGui::TextColored(ImVec4(0.3f, 0.8f, 1.0f, 1.0f),
+                "  Bindless:    1 bind  (global array, shader-indexed)");
+            uint32_t tradBinds = bm.lastInstanceCount * bm.registeredTextures;
+            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
+                "  Traditional: %u binds (per-object × per-texture)", tradBinds);
+            if (tradBinds > 1) {
+                ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.3f, 0.8f, 0.4f, 1.0f));
+                ImGui::ProgressBar(1.0f / static_cast<float>(tradBinds > 0 ? tradBinds : 1),
+                    ImVec2(-1, 12.0f), "bindless");
+                ImGui::PopStyleColor();
+            }
+        } else {
+            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f),
+                "  Unavailable  (procedural albedo fallback)");
+        }
+
+        // VMA memory
+        ImGui::Separator();
+        ImGui::Text("VMA GPU Memory:");
+        float allocMB    = static_cast<float>(bm.vmaAllocatedBytes) / (1024.0f * 1024.0f);
+        float reservedMB = static_cast<float>(bm.vmaReservedBytes)  / (1024.0f * 1024.0f);
+        ImGui::Text("  Allocations: %llu", (unsigned long long)bm.vmaAllocCount);
+        ImGui::Text("  Used:        %.1f MB", allocMB);
+        ImGui::Text("  Reserved:    %.1f MB  (VMA blocks)", reservedMB);
+        if (reservedMB > 0.5f) {
+            float frac = (allocMB / reservedMB);
+            frac = frac > 1.0f ? 1.0f : frac;
+            ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
+            char memLabel[32];
+            snprintf(memLabel, sizeof(memLabel), "%.1f / %.1f MB", allocMB, reservedMB);
+            ImGui::ProgressBar(frac, ImVec2(-1, 12.0f), memLabel);
+            ImGui::PopStyleColor();
+        }
     }
 
     ImGui::Separator();
@@ -205,14 +291,37 @@ void ImGuiManager::renderUI(Camera& camera, uint32_t buildingCount,
         ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
         ImGui::Text("Frame Time: %.3f ms", 1000.0f / ImGui::GetIO().Framerate);
 
-        // Phase 4.1: GPU Timing
+        // GPU pass timer bar chart
         ImGui::Separator();
-        ImGui::Text("GPU Timings:");
-        ImGui::Text("  Frustum Cull: %.3f ms", m_gpuTiming.cullingMs);
-        ImGui::Text("  Shadow Pass:  %.3f ms", m_gpuTiming.shadowMs);
-        ImGui::Text("  Main Pass:    %.3f ms", m_gpuTiming.mainPassMs);
-        float gpuTotal = m_gpuTiming.cullingMs + m_gpuTiming.shadowMs + m_gpuTiming.mainPassMs;
-        ImGui::Text("  GPU Total:    %.3f ms", gpuTotal);
+        float gpuTotal = m_gpuTiming.cullingMs + m_gpuTiming.shadowMs + m_gpuTiming.gbufferMs
+                       + m_gpuTiming.ssaoMs + m_gpuTiming.bloomMs
+                       + m_gpuTiming.deferredMs + m_gpuTiming.postprocessMs;
+        ImGui::Text("GPU Total: %.3f ms", gpuTotal);
+
+        // Bar chart: each pass as a labeled progress bar
+        struct PassBar { const char* name; float ms; ImVec4 color; };
+        const PassBar bars[] = {
+            { "Frustum Cull",    m_gpuTiming.cullingMs,     ImVec4(0.4f, 0.8f, 0.4f, 1.0f) },
+            { "Shadow Pass",     m_gpuTiming.shadowMs,      ImVec4(0.3f, 0.5f, 0.9f, 1.0f) },
+            { "G-Buffer",        m_gpuTiming.gbufferMs,     ImVec4(0.9f, 0.7f, 0.2f, 1.0f) },
+            { "SSAO",            m_gpuTiming.ssaoMs,        ImVec4(0.6f, 0.4f, 0.9f, 1.0f) },
+            { "Bloom",           m_gpuTiming.bloomMs,       ImVec4(1.0f, 0.6f, 0.2f, 1.0f) },
+            { "Deferred Lit.",   m_gpuTiming.deferredMs,    ImVec4(0.9f, 0.3f, 0.3f, 1.0f) },
+            { "Post-Process",    m_gpuTiming.postprocessMs, ImVec4(0.3f, 0.8f, 0.8f, 1.0f) },
+        };
+        float barMax = (gpuTotal > 0.001f) ? gpuTotal : 1.0f;
+        float barWidth = ImGui::GetContentRegionAvail().x - 80.0f;
+        barWidth = (barWidth < 60.0f) ? 60.0f : barWidth;
+        for (const auto& b : bars) {
+            float fraction = b.ms / barMax;
+            ImGui::TextUnformatted(b.name);
+            ImGui::SameLine(80.0f);
+            ImGui::PushStyleColor(ImGuiCol_PlotHistogram, b.color);
+            char barLabel[24];
+            snprintf(barLabel, sizeof(barLabel), "%.2f ms", b.ms);
+            ImGui::ProgressBar(fraction, ImVec2(barWidth, 14.0f), barLabel);
+            ImGui::PopStyleColor();
+        }
     }
 
     // Demo window toggle
