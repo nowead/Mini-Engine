@@ -134,6 +134,13 @@ void WebGPURHIRenderPassEncoder::drawIndexedIndirect(rhi::RHIBuffer* indirectBuf
     wgpuRenderPassEncoderDrawIndexedIndirect(m_encoder, webgpuBuffer->getWGPUBuffer(), indirectOffset);
 }
 
+void WebGPURHIRenderPassEncoder::setPushConstants(rhi::RHIPipelineLayout* /*layout*/,
+                                                  rhi::ShaderStage /*stages*/,
+                                                  uint32_t /*offset*/, uint32_t /*size*/,
+                                                  const void* /*data*/) {
+    // WebGPU has no push constants; callers must use uniform bind groups instead.
+}
+
 void WebGPURHIRenderPassEncoder::end() {
     wgpuRenderPassEncoderEnd(m_encoder);
 }
@@ -181,6 +188,13 @@ void WebGPURHIComputePassEncoder::dispatch(uint32_t workgroupCountX, uint32_t wo
 void WebGPURHIComputePassEncoder::dispatchIndirect(rhi::RHIBuffer* indirectBuffer, uint64_t indirectOffset) {
     auto* webgpuBuffer = static_cast<WebGPURHIBuffer*>(indirectBuffer);
     wgpuComputePassEncoderDispatchWorkgroupsIndirect(m_encoder, webgpuBuffer->getWGPUBuffer(), indirectOffset);
+}
+
+void WebGPURHIComputePassEncoder::setPushConstants(rhi::RHIPipelineLayout* /*layout*/,
+                                                   rhi::ShaderStage /*stages*/,
+                                                   uint32_t /*offset*/, uint32_t /*size*/,
+                                                   const void* /*data*/) {
+    // WebGPU has no push constants; callers must use uniform bind groups instead.
 }
 
 void WebGPURHIComputePassEncoder::end() {

@@ -129,13 +129,7 @@ WebGPURHIRenderPipeline::WebGPURHIRenderPipeline(WebGPURHIDevice* device,
     WGPUDepthStencilState* pDepthStencil = nullptr;
     if (desc.depthStencil) {
         depthStencilState.format = ToWGPUFormat(desc.depthStencil->format);
-#ifdef __EMSCRIPTEN__
-        // emdawnwebgpu: depthWriteEnabled changed from WGPUBool to WGPUOptionalBool
-        depthStencilState.depthWriteEnabled = desc.depthStencil->depthWriteEnabled
-            ? WGPUOptionalBool_True : WGPUOptionalBool_False;
-#else
-        depthStencilState.depthWriteEnabled = desc.depthStencil->depthWriteEnabled;
-#endif
+        depthStencilState.depthWriteEnabled = WGPU_BOOL(desc.depthStencil->depthWriteEnabled);
         depthStencilState.depthCompare = ToWGPUCompareFunc(desc.depthStencil->depthCompare);
 
         // Stencil (simplified - full stencil state can be added if needed)

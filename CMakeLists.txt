@@ -23,6 +23,9 @@ if(EMSCRIPTEN)
     set(RHI_BACKEND_WEBGPU ON CACHE BOOL "" FORCE)
     set(RHI_BACKEND_VULKAN OFF CACHE BOOL "" FORCE)
 
+    # Bundled emdawnwebgpu remote port (Dawn's WebGPU implementation for Emscripten 4.0.10+)
+    set(EMDAWNWEBGPU_PORT "${CMAKE_SOURCE_DIR}/third_party/emdawnwebgpu/emdawnwebgpu.remoteport.py")
+
     # Global WASM optimization flags (prevents wasm-ld "section too large" error on macOS arm64)
     # -ffunction-sections/-fdata-sections: Applied globally to affect all targets including FetchContent deps.
     # Per-target compile_options intentionally repeat these flags for explicit control across build types.
@@ -613,7 +616,7 @@ else()
     )
 
     target_link_options(MiniEngine PRIVATE
-        "SHELL:--use-port=emdawnwebgpu"
+        "SHELL:--use-port=${EMDAWNWEBGPU_PORT}"
         "SHELL:-s USE_GLFW=3"
         "SHELL:-s ALLOW_MEMORY_GROWTH=1"
         "SHELL:-s WASM=1"
@@ -631,7 +634,7 @@ else()
     )
     target_compile_options(MiniEngine PRIVATE
         -O2 -g0 -ffunction-sections -fdata-sections
-        --use-port=emdawnwebgpu
+        --use-port=${EMDAWNWEBGPU_PORT}
     )
 endif()
 
@@ -660,7 +663,7 @@ if(BUILD_TESTS)
             target_link_libraries(${TARGET} PRIVATE rhi::factory glm::glm)
             set_target_properties(${TARGET} PROPERTIES SUFFIX ".html")
             target_link_options(${TARGET} PRIVATE
-                "SHELL:--use-port=emdawnwebgpu"
+                "SHELL:--use-port=${EMDAWNWEBGPU_PORT}"
                 "SHELL:-s USE_GLFW=3"
                 "SHELL:-s ALLOW_MEMORY_GROWTH=1"
                 "SHELL:-s WASM=1"
@@ -674,7 +677,7 @@ if(BUILD_TESTS)
             )
             target_compile_options(${TARGET} PRIVATE
                 -Oz -g0 -ffunction-sections -fdata-sections
-                --use-port=emdawnwebgpu
+                --use-port=${EMDAWNWEBGPU_PORT}
             )
         endif()
     endfunction()
@@ -889,8 +892,9 @@ if(BUILD_TESTS)
     endif()
 
     # ==========================================================================
-    # Portfolio Showcase Demo (Phase 1~4 unified)
+    # Portfolio Showcase Demo (Phase 1~4 unified) — Vulkan/native only
     # ==========================================================================
+    if(NOT EMSCRIPTEN)
     add_executable(showcase_demo
         tests/showcase_demo.cpp
         src/rendering/Renderer.cpp
@@ -954,17 +958,11 @@ if(BUILD_TESTS)
     )
 
     configure_rhi_test(showcase_demo)
-    if(NOT EMSCRIPTEN)
-        target_link_libraries(showcase_demo PRIVATE
-            Stb::stb tinyobjloader::tinyobjloader imgui::imgui)
-    else()
-        target_link_libraries(showcase_demo PRIVATE tinyobjloader imgui::imgui)
-    endif()
+    target_link_libraries(showcase_demo PRIVATE
+        Stb::stb tinyobjloader::tinyobjloader imgui::imgui)
+    add_dependencies(showcase_demo building_shaders)
 
-    # Reuse existing compiled shaders (deferred, building, shadow, post-process, etc.)
-    if(NOT EMSCRIPTEN)
-        add_dependencies(showcase_demo building_shaders)
-    endif()
+    endif() # NOT EMSCRIPTEN (showcase_demo)
 
     # Custom target to run PBR demo
     add_custom_target(run

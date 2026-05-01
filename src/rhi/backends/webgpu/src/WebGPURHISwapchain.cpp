@@ -31,9 +31,10 @@ WebGPURHISwapchain::WebGPURHISwapchain(WebGPURHIDevice* device, const SwapchainD
     auto* window = static_cast<GLFWwindow*>(desc.windowHandle);
 
 #ifdef __EMSCRIPTEN__
+    // Emscripten: Get surface from canvas
     WGPUSurfaceDescriptorFromCanvasHTMLSelector canvasDesc{};
     canvasDesc.chain.sType = WGPUSType_SurfaceDescriptorFromCanvasHTMLSelector;
-    canvasDesc.selector = WGPU_LABEL("canvas");
+    canvasDesc.selector = WGPU_LABEL("canvas"); // Default canvas selector
 
     WGPUSurfaceDescriptor surfaceDesc{};
     surfaceDesc.nextInChain = &canvasDesc.chain;
@@ -86,13 +87,13 @@ WebGPURHISwapchain::~WebGPURHISwapchain() {
 void WebGPURHISwapchain::createSwapchain() {
 #ifdef __EMSCRIPTEN__
     WGPUSurfaceConfiguration config{};
-    config.device      = m_device->getWGPUDevice();
-    config.format      = ToWGPUFormat(m_format);
-    config.usage       = WGPUTextureUsage_RenderAttachment;
-    config.width       = m_width;
-    config.height      = m_height;
+    config.device = m_device->getWGPUDevice();
+    config.format = ToWGPUFormat(m_format);
+    config.usage = WGPUTextureUsage_RenderAttachment;
+    config.width = m_width;
+    config.height = m_height;
+    config.alphaMode = WGPUCompositeAlphaMode_Auto;
     config.presentMode = WGPUPresentMode_Fifo;
-    config.alphaMode   = WGPUCompositeAlphaMode_Auto;
     wgpuSurfaceConfigure(m_surface, &config);
     m_surfaceConfigured = true;
 #else
@@ -101,7 +102,7 @@ void WebGPURHISwapchain::createSwapchain() {
     swapchainDesc.format = ToWGPUFormat(m_format);
     swapchainDesc.width = m_width;
     swapchainDesc.height = m_height;
-    swapchainDesc.presentMode = WGPUPresentMode_Fifo;
+    swapchainDesc.presentMode = WGPUPresentMode_Fifo; // VSync
 
     m_swapchain = wgpuDeviceCreateSwapChain(m_device->getWGPUDevice(), m_surface, &swapchainDesc);
     if (!m_swapchain) {
@@ -126,20 +127,24 @@ void WebGPURHISwapchain::destroySwapchain() {
 #endif
 }
 
-RHITextureView* WebGPURHISwapchain::acquireNextImage(RHISemaphore* /*signalSemaphore*/) {
+RHITextureView* WebGPURHISwapchain::acquireNextImage(RHISemaphore* signalSemaphore) {
+    // WebGPU doesn't use semaphores for swapchain synchronization
 #ifdef __EMSCRIPTEN__
+    // New Surface API: get current texture
     WGPUSurfaceTexture surfaceTexture{};
     wgpuSurfaceGetCurrentTexture(m_surface, &surfaceTexture);
     if (!surfaceTexture.texture ||
         (surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal &&
          surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal)) {
-        // Return nullptr — surface may be outdated after resize. Caller skips the frame.
+        // Return nullptr instead of throwing — the surface may be temporarily outdated
+        // after a resize. RendererBridge::beginFrame() handles nullptr gracefully by
+        // triggering a swapchain recreation on the next frame.
         return nullptr;
     }
 
     WGPUTextureView textureView = wgpuTextureCreateView(surfaceTexture.texture, nullptr);
     if (!textureView) {
-        return nullptr;
+        throw std::runtime_error("Failed to create swapchain texture view");
     }
 
     m_currentTextureView.reset(new WebGPURHITextureView(
@@ -147,9 +152,10 @@ RHITextureView* WebGPURHISwapchain::acquireNextImage(RHISemaphore* /*signalSemap
         textureView,
         m_format,
         rhi::TextureViewDimension::View2D,
-        true // owns the view
+        true // We own the view - we created it
     ));
 #else
+    // Old SwapChain API
     WGPUTextureView textureView = wgpuSwapChainGetCurrentTextureView(m_swapchain);
     if (!textureView) {
         throw std::runtime_error("Failed to acquire swapchain texture view");
@@ -160,32 +166,34 @@ RHITextureView* WebGPURHISwapchain::acquireNextImage(RHISemaphore* /*signalSemap
         textureView,
         m_format,
         rhi::TextureViewDimension::View2D,
-        false // swapchain owns the view
+        false // Don't own the view - swapchain manages it
     ));
 #endif
 
     return m_currentTextureView.get();
 }
 
-void WebGPURHISwapchain::present(RHISemaphore* /*waitSemaphore*/) {
+void WebGPURHISwapchain::present(RHISemaphore* waitSemaphore) {
+    // WebGPU doesn't use semaphores for swapchain synchronization
     m_currentTextureView.reset();
 
 #ifdef __EMSCRIPTEN__
-    // emdawnwebgpu: wgpuSurfacePresent is not supported in browser context
-    // The browser's requestAnimationFrame handles presentation automatically
+    // Emscripten: presentation is automatic via requestAnimationFrame, no explicit call needed
 #else
+    // Native WebGPU (Dawn): explicit present required
     wgpuSwapChainPresent(m_swapchain);
 #endif
 }
 
 void WebGPURHISwapchain::resize(uint32_t width, uint32_t height) {
     if (width == m_width && height == m_height) {
-        return;
+        return; // No change
     }
 
     m_width = width;
     m_height = height;
 
+    // Recreate swapchain with new size
     destroySwapchain();
     createSwapchain();
 }

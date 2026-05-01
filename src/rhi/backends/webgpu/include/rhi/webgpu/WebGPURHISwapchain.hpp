@@ -53,8 +53,10 @@ private:
 
     WebGPURHIDevice* m_device;
     WGPUSurface m_surface = nullptr;
-#ifndef __EMSCRIPTEN__
-    WGPUSwapChain m_swapchain = nullptr;  // Native (Dawn) only
+#ifdef __EMSCRIPTEN__
+    bool m_surfaceConfigured = false;
+#else
+    WGPUSwapChain m_swapchain = nullptr;
 #endif
 
     uint32_t m_width;
@@ -63,9 +65,6 @@ private:
     uint32_t m_bufferCount;
 
     std::unique_ptr<WebGPURHITextureView> m_currentTextureView;
-#ifdef __EMSCRIPTEN__
-    bool m_surfaceConfigured = false;
-#endif
 };
 
 } // namespace WebGPU

@@ -16,6 +16,7 @@ struct ObjectData {
     boundingBoxMax: vec4<f32>,
     colorAndMetallic: vec4<f32>,
     roughnessAOPad: vec4<f32>,
+    texParams: vec4<f32>,   // C++ ObjectData 144 bytes 일치
 }
 
 struct ObjectBuffer {

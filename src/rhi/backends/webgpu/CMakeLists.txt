@@ -47,9 +47,14 @@ else()
         -g0
         -ffunction-sections
         -fdata-sections
-        --use-port=emdawnwebgpu
+        --use-port=${EMDAWNWEBGPU_PORT}
     )
 endif()
 
-target_compile_features(rhi_webgpu PUBLIC cxx_std_20)
+if(EMSCRIPTEN)
+    set_property(TARGET rhi_webgpu PROPERTY CXX_STANDARD 20)
+    set_property(TARGET rhi_webgpu PROPERTY CXX_STANDARD_REQUIRED ON)
+else()
+    target_compile_features(rhi_webgpu PUBLIC cxx_std_20)
+endif()
 target_compile_definitions(rhi_webgpu PUBLIC RHI_BACKEND_WEBGPU)

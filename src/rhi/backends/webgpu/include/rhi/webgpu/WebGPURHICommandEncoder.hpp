@@ -65,6 +65,8 @@ public:
                     uint32_t firstInstance = 0) override;
     void drawIndirect(rhi::RHIBuffer* indirectBuffer, uint64_t indirectOffset) override;
     void drawIndexedIndirect(rhi::RHIBuffer* indirectBuffer, uint64_t indirectOffset) override;
+    void setPushConstants(rhi::RHIPipelineLayout* layout, rhi::ShaderStage stages,
+                          uint32_t offset, uint32_t size, const void* data) override;
     void end() override;
 
 private:
@@ -87,6 +89,8 @@ public:
     void dispatch(uint32_t workgroupCountX, uint32_t workgroupCountY = 1,
                  uint32_t workgroupCountZ = 1) override;
     void dispatchIndirect(rhi::RHIBuffer* indirectBuffer, uint64_t indirectOffset) override;
+    void setPushConstants(rhi::RHIPipelineLayout* layout, rhi::ShaderStage stages,
+                          uint32_t offset, uint32_t size, const void* data) override;
     void end() override;
 
 private:

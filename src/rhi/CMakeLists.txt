@@ -59,12 +59,19 @@ if(RHI_BACKEND_WEBGPU)
     target_compile_definitions(rhi_factory PUBLIC RHI_BACKEND_WEBGPU=1)
 endif()
 
-target_compile_features(rhi_factory PUBLIC cxx_std_20)
+if(EMSCRIPTEN)
+    # target_compile_features needs compiler ID detection which emcmake skips.
+    # set_property directly adds -std=c++20 without querying the feature list.
+    set_property(TARGET rhi_factory PROPERTY CXX_STANDARD 20)
+    set_property(TARGET rhi_factory PROPERTY CXX_STANDARD_REQUIRED ON)
+else()
+    target_compile_features(rhi_factory PUBLIC cxx_std_20)
+endif()
 
 # Optimize for size in WASM builds (prevents "section too large" error)
 if(EMSCRIPTEN)
     target_compile_options(rhi_factory PRIVATE
         -Oz -g0 -ffunction-sections -fdata-sections
-        --use-port=emdawnwebgpu
+        --use-port=${EMDAWNWEBGPU_PORT}
     )
 endif()

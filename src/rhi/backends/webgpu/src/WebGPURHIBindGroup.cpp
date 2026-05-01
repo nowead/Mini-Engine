@@ -40,7 +40,6 @@ WebGPURHIBindGroupLayout::WebGPURHIBindGroupLayout(WebGPURHIDevice* device,
                 break;
 
             case rhi::BindingType::ReadOnlyStorageBuffer:
-                // WebGPU requires ReadOnlyStorage for Vertex-stage SSBO bindings
                 wgpuEntry.buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
                 wgpuEntry.buffer.hasDynamicOffset = entry.hasDynamicOffset;
                 wgpuEntry.buffer.minBindingSize = entry.minBufferBindingSize;

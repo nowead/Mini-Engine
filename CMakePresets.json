@@ -61,6 +61,17 @@
         }
       },
       {
+        "name": "wasm-windows",
+        "displayName": "WebAssembly (Windows + Emscripten)",
+        "description": "WASM build via emsdk. Run through scripts/wasm.ps1 — emcmake sets compiler paths at configure time.",
+        "generator": "Ninja",
+        "binaryDir": "${sourceDir}/build_wasm",
+        "toolchainFile": "${sourceDir}/cmake/EmscriptenToolchain.cmake",
+        "cacheVariables": {
+          "CMAKE_BUILD_TYPE": "Release"
+        }
+      },
+      {
         "name": "linux-default",
         "displayName": "Linux Default Config",
         "description": "Default build for Linux using vcpkg with Clang 18",

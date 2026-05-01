@@ -3,12 +3,34 @@
 set(CMAKE_SYSTEM_NAME Emscripten)
 set(CMAKE_C_COMPILER emcc)
 set(CMAKE_CXX_COMPILER em++)
-set(CMAKE_AR emar CACHE FILEPATH "Emscripten ar")
-set(CMAKE_RANLIB emranlib CACHE FILEPATH "Emscripten ranlib")
-set(EMSCRIPTEN 1)
+set(EMSCRIPTEN ON)
 
-# Note: USE_WEBGPU=1 removed — emdawnwebgpu is now specified per-target via --use-port=emdawnwebgpu
-# Global linker flags here are applied during CMake's compiler test and must not include port flags
+# On Windows, emar/emranlib are .bat wrappers — cmake_link_script (CreateProcess)
+# cannot run .bat files directly, but CMake wraps .bat paths in "cmd /c" automatically.
+# On Unix, use the plain script names.
+if(WIN32 AND DEFINED ENV{EMSDK})
+    set(_em "$ENV{EMSDK}/upstream/emscripten")
+    set(CMAKE_AR     "${_em}/emar.bat"     CACHE FILEPATH "Emscripten ar"     FORCE)
+    set(CMAKE_RANLIB "${_em}/emranlib.bat"  CACHE FILEPATH "Emscripten ranlib" FORCE)
+else()
+    set(CMAKE_AR     emar     CACHE FILEPATH "Emscripten ar")
+    set(CMAKE_RANLIB emranlib CACHE FILEPATH "Emscripten ranlib")
+endif()
+
+# Point CMake to our Platform/Emscripten.cmake so it knows the compiler feature set.
+# Without this, CMake reports "System is unknown" and target_compile_features fails.
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}")
+
+# Cross-compilation: use STATIC_LIBRARY for try_compile so CMake can detect
+# compiler ABI without needing to run (execute) the resulting binary.
+set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+
+# Set C++20 globally as a fallback — CMakeLists.txt also guards with EMSCRIPTEN.
+set(CMAKE_CXX_STANDARD 20 CACHE STRING "" FORCE)
+set(CMAKE_CXX_STANDARD_REQUIRED ON CACHE BOOL "" FORCE)
+
+# Note: emdawnwebgpu is specified per-target via --use-port=emdawnwebgpu
+# Global flags here run during CMake's compiler test and must not include port flags.
 
 # Optimization
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")

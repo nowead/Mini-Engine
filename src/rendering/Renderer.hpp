@@ -435,7 +435,7 @@ private:
     // Phase 1.2: IBL
     std::unique_ptr<rendering::IBLManager> iblManager;
     bool m_iblBarriersEmitted = false;  // Windows: emit UNDEFINED→ShaderReadOnly once per frame set
-    float shadowBias = 0.008f;  // Constant bias to prevent shadow acne (uniform across all surfaces)
+    float shadowBias = 0.0015f; // Slope-scaled bias (building.wgsl: mix 1×–2×); 0.008 caused peter-panning
     float shadowStrength = 0.7f;  // Shadow darkness
     float exposure = 1.0f;      // PBR tone mapping exposure
     float bloomStrength = 0.04f; // Bloom intensity

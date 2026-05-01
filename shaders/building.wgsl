@@ -135,7 +135,9 @@ fn calculateShadow(posLightSpace: vec4<f32>, normal: vec3<f32>, lightDir: vec3<f
     projCoords.x = projCoords.x * 0.5 + 0.5;
     projCoords.y = (-projCoords.y) * 0.5 + 0.5;
 
-    let bias = ubo.shadowBias * 0.01;
+    // Slope-scaled bias: 경사각이 클수록 bias 증가, 최대 2배 제한
+    let cosTheta = clamp(dot(normalize(normal), normalize(lightDir)), 0.0, 1.0);
+    let bias = ubo.shadowBias * mix(2.0, 1.0, cosTheta);
     let currentDepth = projCoords.z;
     let clampedCoords = clamp(projCoords.xy, vec2<f32>(0.0), vec2<f32>(1.0));
     let texelSize = 1.0 / ubo.shadowMapSize;

@@ -57,7 +57,7 @@ void OBJLoader::load(const std::string& filename,
             }
 
             // Vertex deduplication
-            if (!uniqueVertices.contains(vertex)) {
+            if (uniqueVertices.find(vertex) == uniqueVertices.end()) {
                 uniqueVertices[vertex] = static_cast<uint32_t>(vertices.size());
                 vertices.push_back(vertex);
             }

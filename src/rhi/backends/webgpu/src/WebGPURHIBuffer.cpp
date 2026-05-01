@@ -13,11 +13,10 @@ namespace WebGPU {
 // Callback data for async map operations
 struct BufferMapCallbackData {
     bool mapComplete = false;
-    WGPUBufferMapAsyncStatus status = WGPUBufferMapAsyncStatus_Success;
+    WGPUBufferMapAsyncStatus status = WGPUBufferMapAsyncStatus_Unknown;
 };
 
 // Callback for wgpuBufferMapAsync
-// emdawnwebgpu changes signature: (WGPUMapAsyncStatus, WGPUStringView, void*, void*)
 #ifdef __EMSCRIPTEN__
 static void onBufferMapCallback(WGPUMapAsyncStatus status, WGPUStringView /*message*/,
                                 void* userdata1, void* /*userdata2*/) {
@@ -126,12 +125,11 @@ void* WebGPURHIBuffer::mapInternal(WGPUMapModeFlags mode, uint64_t offset, uint6
 
     // Request async map
 #ifdef __EMSCRIPTEN__
-    // emdawnwebgpu: uses WGPUBufferMapCallbackInfo struct
-    WGPUBufferMapCallbackInfo mapCallbackInfo{};
-    mapCallbackInfo.mode      = WGPUCallbackMode_AllowSpontaneous;
-    mapCallbackInfo.callback  = onBufferMapCallback;
-    mapCallbackInfo.userdata1 = &callbackData;
-    wgpuBufferMapAsync(m_buffer, mode, offset, size, mapCallbackInfo);
+    WGPUBufferMapCallbackInfo callbackInfo{};
+    callbackInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+    callbackInfo.callback = onBufferMapCallback;
+    callbackInfo.userdata1 = &callbackData;
+    wgpuBufferMapAsync(m_buffer, mode, offset, size, callbackInfo);
 #else
     wgpuBufferMapAsync(m_buffer, mode, offset, size, onBufferMapCallback, &callbackData);
 #endif

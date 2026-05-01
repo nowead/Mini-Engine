@@ -10,49 +10,30 @@
 #endif
 
 // =============================================================================
-// Emscripten Version Comparison Macros
+// emdawnwebgpu API Compatibility (Emscripten only)
 // =============================================================================
+// emdawnwebgpu removed the 'Flags' suffix from bitfield typedefs and renamed
+// WGPUBufferMapAsyncStatus to WGPUMapAsyncStatus. These aliases restore the
+// old names so the rest of the codebase compiles unchanged.
+// Labels changed from const char* to WGPUStringView; WGPU_LABEL() handles this.
 #ifdef __EMSCRIPTEN__
-    #define EMSCRIPTEN_VERSION_LESS_THAN(major, minor, tiny) \
-        ((__EMSCRIPTEN_major__ < (major)) || \
-         ((__EMSCRIPTEN_major__ == (major)) && (__EMSCRIPTEN_minor__ < (minor))) || \
-         ((__EMSCRIPTEN_major__ == (major)) && (__EMSCRIPTEN_minor__ == (minor)) && (__EMSCRIPTEN_tiny__ < (tiny))))
-
-    #define EMSCRIPTEN_VERSION_AT_LEAST(major, minor, tiny) \
-        (!EMSCRIPTEN_VERSION_LESS_THAN(major, minor, tiny))
-
-    // =========================================================================
-    // emdawnwebgpu API Compatibility Layer
-    // =========================================================================
-    // emdawnwebgpu removes the `Flags` suffix from bitfield typedefs
+    // Bitfield typedefs: 'Flags' suffix removed in emdawnwebgpu
     typedef WGPUBufferUsage    WGPUBufferUsageFlags;
     typedef WGPUTextureUsage   WGPUTextureUsageFlags;
     typedef WGPUShaderStage    WGPUShaderStageFlags;
     typedef WGPUColorWriteMask WGPUColorWriteMaskFlags;
     typedef WGPUMapMode        WGPUMapModeFlags;
 
-    // emdawnwebgpu renames WGPUBufferMapAsyncStatus → WGPUMapAsyncStatus
+    // WGPUBufferMapAsyncStatus renamed to WGPUMapAsyncStatus
     typedef WGPUMapAsyncStatus WGPUBufferMapAsyncStatus;
     #define WGPUBufferMapAsyncStatus_Unknown WGPUMapAsyncStatus_Error
     #define WGPUBufferMapAsyncStatus_Success WGPUMapAsyncStatus_Success
 
-    // emdawnwebgpu renames WGPUShaderModuleWGSLDescriptor → WGPUShaderSourceWGSL
+    // WGPUShaderModuleWGSLDescriptor renamed to WGPUShaderSourceWGSL
     typedef WGPUShaderSourceWGSL WGPUShaderModuleWGSLDescriptor;
     #define WGPUSType_ShaderModuleWGSLDescriptor WGPUSType_ShaderSourceWGSL
 
-    // emdawnwebgpu removes WGPUErrorType_DeviceLost and WGPUDeviceLostReason_Undefined
-    #define WGPUErrorType_DeviceLost       WGPUErrorType_Unknown
-    #define WGPUDeviceLostReason_Undefined WGPUDeviceLostReason_Unknown
-
-    // emdawnwebgpu renames WGPUImageCopyBuffer/Texture
-    typedef WGPUTexelCopyBufferInfo  WGPUImageCopyBuffer;
-    typedef WGPUTexelCopyTextureInfo WGPUImageCopyTexture;
-
-    // emdawnwebgpu removes WGPUQueueWorkDoneStatus_Unknown
-    #define WGPUQueueWorkDoneStatus_Unknown WGPUQueueWorkDoneStatus_Error
-
-    // WGPUStringView helper — all label/string fields changed from const char* to WGPUStringView
-    #include <cstring>
+    // label / entryPoint / code: const char* -> WGPUStringView
     inline WGPUStringView wgpuStr(const char* s) {
         return s ? WGPUStringView{s, WGPU_STRLEN} : WGPUStringView{nullptr, 0};
     }
@@ -64,13 +45,40 @@
     }
     #define WGPU_BOOL(v) wgpuBoolOpt(v)
 
-    // WGPUSurfaceDescriptorFromCanvasHTMLSelector renamed in emdawnwebgpu
+    // WGPUImageCopyBuffer/Texture renamed to WGPUTexelCopyBufferInfo/TextureInfo
+    typedef WGPUTexelCopyBufferInfo  WGPUImageCopyBuffer;
+    typedef WGPUTexelCopyTextureInfo WGPUImageCopyTexture;
+
+    // WGPUQueueWorkDoneStatus_Unknown removed
+    #define WGPUQueueWorkDoneStatus_Unknown WGPUQueueWorkDoneStatus_Error
+
+    // WGPUSurfaceDescriptorFromCanvasHTMLSelector renamed
     typedef WGPUEmscriptenSurfaceSourceCanvasHTMLSelector WGPUSurfaceDescriptorFromCanvasHTMLSelector;
     #define WGPUSType_SurfaceDescriptorFromCanvasHTMLSelector WGPUSType_EmscriptenSurfaceSourceCanvasHTMLSelector
+
+    // WGPUErrorType_DeviceLost removed in emdawnwebgpu
+    #define WGPUErrorType_DeviceLost WGPUErrorType_Unknown
+
+    // WGPUDeviceLostReason_Undefined renamed to WGPUDeviceLostReason_Unknown
+    #define WGPUDeviceLostReason_Undefined WGPUDeviceLostReason_Unknown
 #else
-    // Native build: keep const char* assignment compatible via identity macro
     #define WGPU_LABEL(s) (s)
     #define WGPU_BOOL(v)  (v)
+#endif
+
+// =============================================================================
+// Emscripten Version Comparison Macros
+// =============================================================================
+// WebGPU API changed between Emscripten 3.1.50 and 3.1.60.
+// These macros simplify conditional compilation for API compatibility.
+#ifdef __EMSCRIPTEN__
+    #define EMSCRIPTEN_VERSION_LESS_THAN(major, minor, tiny) \
+        ((__EMSCRIPTEN_major__ < (major)) || \
+         ((__EMSCRIPTEN_major__ == (major)) && (__EMSCRIPTEN_minor__ < (minor))) || \
+         ((__EMSCRIPTEN_major__ == (major)) && (__EMSCRIPTEN_minor__ == (minor)) && (__EMSCRIPTEN_tiny__ < (tiny))))
+
+    #define EMSCRIPTEN_VERSION_AT_LEAST(major, minor, tiny) \
+        (!EMSCRIPTEN_VERSION_LESS_THAN(major, minor, tiny))
 #endif
 
 #include <stdexcept>
