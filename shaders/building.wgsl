@@ -3,25 +3,43 @@
 
 const PI: f32 = 3.14159265359;
 
+// Must match C++ UniformBufferObject (Vertex.hpp) exactly.
+// MAX_POINT_LIGHTS = 32; PointLight = 32 bytes each.
+struct PointLight {
+    position:  vec3<f32>,
+    radius:    f32,
+    color:     vec3<f32>,
+    intensity: f32,
+}
+
 struct UniformBufferObject {
-    model: mat4x4<f32>,
-    view: mat4x4<f32>,
-    proj: mat4x4<f32>,
-    sunDirection: vec3<f32>,
-    sunIntensity: f32,
-    sunColor: vec3<f32>,
+    model:            mat4x4<f32>,           // offset   0
+    view:             mat4x4<f32>,           // offset  64
+    proj:             mat4x4<f32>,           // offset 128
+    invView:          mat4x4<f32>,           // offset 192 — for world-pos reconstruction
+    invProj:          mat4x4<f32>,           // offset 256 — for world-pos reconstruction
+    sunDirection:     vec3<f32>,             // offset 320
+    sunIntensity:     f32,
+    sunColor:         vec3<f32>,             // offset 336
     ambientIntensity: f32,
-    cameraPos: vec3<f32>,
-    exposure: f32,
-    // Shadow mapping
-    lightSpaceMatrix: mat4x4<f32>,
-    shadowMapSize: vec2<f32>,
-    shadowBias: f32,
-    shadowStrength: f32,
+    cameraPos:        vec3<f32>,             // offset 352
+    exposure:         f32,
+    // Phase 3 CSM: 4-cascade shadow maps
+    lightSpaceMatrices: array<mat4x4<f32>, 4>, // offset 368
+    cascadeSplits:    vec4<f32>,             // offset 624
+    shadowMapSize:    vec2<f32>,             // offset 640
+    shadowBias:       f32,
+    shadowStrength:   f32,
+    // Phase 4: dynamic point lights
+    pointLights:      array<PointLight, 32>, // offset 656
+    numPointLights:   u32,                   // offset 1680
+    debugCascades:    f32,
+    debugView:        i32,
+    _pad2:            f32,
 }
 
 @group(0) @binding(0) var<uniform> ubo: UniformBufferObject;
-@group(0) @binding(1) var shadowMapTex: texture_depth_2d;
+@group(0) @binding(1) var shadowMapTex: texture_depth_2d_array;
 @group(0) @binding(2) var shadowMapSampler: sampler;
 // IBL textures
 @group(0) @binding(3) var irradianceMap: texture_cube<f32>;
@@ -83,7 +101,7 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     output.color = obj.colorAndMetallic.rgb;
     output.normal = input.normal;
     output.worldPos = worldPos;
-    output.posLightSpace = ubo.lightSpaceMatrix * worldPos4;
+    output.posLightSpace = ubo.lightSpaceMatrices[0] * worldPos4;
     output.metallic = obj.colorAndMetallic.a;
     output.roughness = obj.roughnessAOPad.r;
     output.ao = obj.roughnessAOPad.g;
@@ -129,33 +147,40 @@ fn fresnelSchlickRoughness(cosTheta: f32, F0: vec3<f32>, roughness: f32) -> vec3
 // Shadow Calculation
 // =============================================================================
 
-fn calculateShadow(posLightSpace: vec4<f32>, normal: vec3<f32>, lightDir: vec3<f32>) -> f32 {
-    var projCoords = posLightSpace.xyz / posLightSpace.w;
+fn calculateShadow(worldPos: vec3<f32>, normal: vec3<f32>, lightDir: vec3<f32>) -> f32 {
+    // CSM cascade selection: pick cascade based on view-space depth
+    let viewZ = -(ubo.view * vec4<f32>(worldPos, 1.0)).z;
+    var cascadeIdx: i32 = 3;
+    if (viewZ < ubo.cascadeSplits.x) { cascadeIdx = 0; }
+    else if (viewZ < ubo.cascadeSplits.y) { cascadeIdx = 1; }
+    else if (viewZ < ubo.cascadeSplits.z) { cascadeIdx = 2; }
 
+    let posLS4 = ubo.lightSpaceMatrices[cascadeIdx] * vec4<f32>(worldPos, 1.0);
+    var projCoords = posLS4.xyz / posLS4.w;
     projCoords.x = projCoords.x * 0.5 + 0.5;
     projCoords.y = (-projCoords.y) * 0.5 + 0.5;
 
-    // Slope-scaled bias: 경사각이 클수록 bias 증가, 최대 2배 제한
+    // Slope-scaled bias
     let cosTheta = clamp(dot(normalize(normal), normalize(lightDir)), 0.0, 1.0);
     let bias = ubo.shadowBias * mix(2.0, 1.0, cosTheta);
     let currentDepth = projCoords.z;
     let clampedCoords = clamp(projCoords.xy, vec2<f32>(0.0), vec2<f32>(1.0));
     let texelSize = 1.0 / ubo.shadowMapSize;
-
-    var shadow: f32 = 0.0;
+    let layer = cascadeIdx;
 
     // Unrolled PCF 3x3
-    let d_m1_m1 = textureSample(shadowMapTex, shadowMapSampler, clampedCoords + vec2<f32>(-1.0, -1.0) * texelSize);
-    let d_0_m1 = textureSample(shadowMapTex, shadowMapSampler, clampedCoords + vec2<f32>(0.0, -1.0) * texelSize);
-    let d_p1_m1 = textureSample(shadowMapTex, shadowMapSampler, clampedCoords + vec2<f32>(1.0, -1.0) * texelSize);
-    let d_m1_0 = textureSample(shadowMapTex, shadowMapSampler, clampedCoords + vec2<f32>(-1.0, 0.0) * texelSize);
-    let d_0_0 = textureSample(shadowMapTex, shadowMapSampler, clampedCoords);
-    let d_p1_0 = textureSample(shadowMapTex, shadowMapSampler, clampedCoords + vec2<f32>(1.0, 0.0) * texelSize);
-    let d_m1_p1 = textureSample(shadowMapTex, shadowMapSampler, clampedCoords + vec2<f32>(-1.0, 1.0) * texelSize);
-    let d_0_p1 = textureSample(shadowMapTex, shadowMapSampler, clampedCoords + vec2<f32>(0.0, 1.0) * texelSize);
-    let d_p1_p1 = textureSample(shadowMapTex, shadowMapSampler, clampedCoords + vec2<f32>(1.0, 1.0) * texelSize);
+    let d_m1_m1 = textureSample(shadowMapTex, shadowMapSampler, clampedCoords + vec2<f32>(-1.0, -1.0) * texelSize, layer);
+    let d_0_m1  = textureSample(shadowMapTex, shadowMapSampler, clampedCoords + vec2<f32>( 0.0, -1.0) * texelSize, layer);
+    let d_p1_m1 = textureSample(shadowMapTex, shadowMapSampler, clampedCoords + vec2<f32>( 1.0, -1.0) * texelSize, layer);
+    let d_m1_0  = textureSample(shadowMapTex, shadowMapSampler, clampedCoords + vec2<f32>(-1.0,  0.0) * texelSize, layer);
+    let d_0_0   = textureSample(shadowMapTex, shadowMapSampler, clampedCoords, layer);
+    let d_p1_0  = textureSample(shadowMapTex, shadowMapSampler, clampedCoords + vec2<f32>( 1.0,  0.0) * texelSize, layer);
+    let d_m1_p1 = textureSample(shadowMapTex, shadowMapSampler, clampedCoords + vec2<f32>(-1.0,  1.0) * texelSize, layer);
+    let d_0_p1  = textureSample(shadowMapTex, shadowMapSampler, clampedCoords + vec2<f32>( 0.0,  1.0) * texelSize, layer);
+    let d_p1_p1 = textureSample(shadowMapTex, shadowMapSampler, clampedCoords + vec2<f32>( 1.0,  1.0) * texelSize, layer);
 
     let compDepth = currentDepth - bias;
+    var shadow: f32 = 0.0;
     shadow += select(0.0, 1.0, compDepth > d_m1_m1);
     shadow += select(0.0, 1.0, compDepth > d_0_m1);
     shadow += select(0.0, 1.0, compDepth > d_p1_m1);
@@ -170,7 +195,6 @@ fn calculateShadow(posLightSpace: vec4<f32>, normal: vec3<f32>, lightDir: vec3<f
     let outsideFrustum = projCoords.z > 1.0 || projCoords.z < 0.0 ||
                          projCoords.x < 0.0 || projCoords.x > 1.0 ||
                          projCoords.y < 0.0 || projCoords.y > 1.0;
-
     return select(shadow * ubo.shadowStrength, 0.0, outsideFrustum);
 }
 
@@ -237,7 +261,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let ambient = mix(fallbackAmbient, iblAmbient, step(0.001, iblStrength)) * ubo.ambientIntensity;
 
     // Shadow
-    let shadow = calculateShadow(input.posLightSpace, N, L);
+    let shadow = calculateShadow(input.worldPos, N, L);
 
     // Final color — output HDR; tonemapping handled by separate tonemap pass
     var color = ambient + (1.0 - shadow) * Lo;

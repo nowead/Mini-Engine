@@ -1,8 +1,10 @@
-// Tonemap pass: HDR render target → swapchain (ACES filmic + gamma correction)
+// Tonemap pass: HDR + bloom + SSAO → LDR (ACES filmic + gamma correction)
 // WebGPU/WASM path — fullscreen triangle, no vertex buffer
 
-@group(0) @binding(0) var hdrTexture: texture_2d<f32>;
-@group(0) @binding(1) var hdrSampler: sampler;
+@group(0) @binding(0) var hdrTexture:   texture_2d<f32>;
+@group(0) @binding(1) var bloomTexture: texture_2d<f32>;
+@group(0) @binding(2) var hdrSampler:   sampler;
+@group(0) @binding(3) var ssaoTexture:  texture_2d<f32>;
 
 struct VertexOutput {
     @builtin(position) pos: vec4<f32>,
@@ -33,12 +35,19 @@ fn ACESFilm(x: vec3<f32>) -> vec3<f32> {
     return clamp((x * (a * x + b)) / (x * (c * x + d) + e), vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
+const BLOOM_STRENGTH: f32 = 0.04;
+const AO_STRENGTH:    f32 = 0.6;
+
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    let hdr = textureSample(hdrTexture, hdrSampler, input.uv).rgb;
+    let hdr   = textureSample(hdrTexture,   hdrSampler, input.uv).rgb;
+    let bloom = textureSample(bloomTexture, hdrSampler, input.uv).rgb;
+    let ao    = textureSample(ssaoTexture,  hdrSampler, input.uv).r;
 
-    // ACES filmic tone mapping
-    let ldr = ACESFilm(hdr);
+    // Apply SSAO: darken ambient by AO factor (ao=1 means no occlusion, ao=0 means fully occluded)
+    let aoFactor  = mix(1.0, ao, AO_STRENGTH);
+    let composite = hdr * aoFactor + bloom * BLOOM_STRENGTH;
+    let ldr       = ACESFilm(composite);
 
     // Gamma correction (WebGPU swapchain is BGRA8Unorm — no automatic sRGB conversion)
     let gamma = pow(ldr, vec3<f32>(1.0 / 2.2));

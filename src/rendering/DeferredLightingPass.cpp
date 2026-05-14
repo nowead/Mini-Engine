@@ -1,4 +1,3 @@
-#ifndef __EMSCRIPTEN__
 #include "DeferredLightingPass.hpp"
 #include "src/utils/FileUtils.hpp"
 #include <iostream>
@@ -41,36 +40,76 @@ bool DeferredLightingPass::initialize(
 }
 
 bool DeferredLightingPass::createPipeline(void* nativeRenderPass) {
-    auto loadSpv = [&](const char* path, rhi::ShaderStage stage, const char* label) {
-        auto raw = FileUtils::readFile(path);
-        if (raw.empty()) { std::cerr << "[DeferredLightingPass] Failed to load " << path << "\n"; return std::unique_ptr<rhi::RHIShader>{}; }
+#ifdef __EMSCRIPTEN__
+    {
+        auto raw = FileUtils::readFile("shaders/deferred_lighting.wgsl");
+        if (raw.empty()) { std::cerr << "[DeferredLightingPass] Failed to load deferred_lighting.wgsl\n"; return false; }
         std::vector<uint8_t> code(raw.begin(), raw.end());
-        rhi::ShaderSource src(rhi::ShaderLanguage::SPIRV, code, stage, "main");
-        return m_device->createShader(rhi::ShaderDesc(src, label));
-    };
-
-    m_vertexShader   = loadSpv("shaders/deferred_lighting.vert.spv", rhi::ShaderStage::Vertex,   "DeferredLightingVS");
-    m_fragmentShader = loadSpv("shaders/deferred_lighting.frag.spv", rhi::ShaderStage::Fragment, "DeferredLightingFS");
+        rhi::ShaderSource vsSrc(rhi::ShaderLanguage::WGSL, code, rhi::ShaderStage::Vertex,   "vs_main");
+        rhi::ShaderSource fsSrc(rhi::ShaderLanguage::WGSL, code, rhi::ShaderStage::Fragment, "fs_main");
+        m_vertexShader   = m_device->createShader(rhi::ShaderDesc(vsSrc, "DeferredLightingVS"));
+        m_fragmentShader = m_device->createShader(rhi::ShaderDesc(fsSrc, "DeferredLightingFS"));
+    }
+#else
+    {
+        auto loadSpv = [&](const char* path, rhi::ShaderStage stage, const char* label) {
+            auto raw = FileUtils::readFile(path);
+            if (raw.empty()) { std::cerr << "[DeferredLightingPass] Failed to load " << path << "\n"; return std::unique_ptr<rhi::RHIShader>{}; }
+            std::vector<uint8_t> code(raw.begin(), raw.end());
+            rhi::ShaderSource src(rhi::ShaderLanguage::SPIRV, code, stage, "main");
+            return m_device->createShader(rhi::ShaderDesc(src, label));
+        };
+        m_vertexShader   = loadSpv("shaders/deferred_lighting.vert.spv", rhi::ShaderStage::Vertex,   "DeferredLightingVS");
+        m_fragmentShader = loadSpv("shaders/deferred_lighting.frag.spv", rhi::ShaderStage::Fragment, "DeferredLightingFS");
+    }
+#endif
     if (!m_vertexShader || !m_fragmentShader) return false;
 
-    // Bind group layout: 12 bindings in set 0
+    // Bind group layout: 12 bindings in set 0.
+    // Depth textures (bindings 4, 6) need DepthTexture type on WebGPU (texture_depth_2d / _2d_array).
+    // Shadow CSM (binding 6) is a 2D array; cubemaps (8, 9) need ViewCube dimension.
     rhi::BindGroupLayoutDesc layoutDesc;
     using S = rhi::ShaderStage;
     using T = rhi::BindingType;
-    layoutDesc.entries = {
-        rhi::BindGroupLayoutEntry(0,  S::Fragment, T::UniformBuffer),       // UBO
-        rhi::BindGroupLayoutEntry(1,  S::Fragment, T::SampledTexture),      // gBuffer0
-        rhi::BindGroupLayoutEntry(2,  S::Fragment, T::SampledTexture),      // gBuffer1
-        rhi::BindGroupLayoutEntry(3,  S::Fragment, T::SampledTexture),      // gBuffer2
-        rhi::BindGroupLayoutEntry(4,  S::Fragment, T::SampledTexture),      // depthTex
-        rhi::BindGroupLayoutEntry(5,  S::Fragment, T::Sampler),             // gbufferSampler
-        rhi::BindGroupLayoutEntry(6,  S::Fragment, T::SampledTexture),      // shadowCsmArray
-        rhi::BindGroupLayoutEntry(7,  S::Fragment, T::Sampler),             // shadowSampler
-        rhi::BindGroupLayoutEntry(8,  S::Fragment, T::SampledTexture),      // irradianceCube
-        rhi::BindGroupLayoutEntry(9,  S::Fragment, T::SampledTexture),      // prefilteredCube
-        rhi::BindGroupLayoutEntry(10, S::Fragment, T::SampledTexture),      // brdfLUT
-        rhi::BindGroupLayoutEntry(11, S::Fragment, T::Sampler),             // iblSampler
+    using D = rhi::TextureViewDimension;
+
+    auto entry = [](uint32_t b, S s, T t, D dim = D::View2D) {
+        rhi::BindGroupLayoutEntry e(b, s, t);
+        e.textureViewDimension = dim;
+        return e;
     };
+
+#ifdef __EMSCRIPTEN__
+    layoutDesc.entries = {
+        entry(0,  S::Fragment, T::UniformBuffer),
+        entry(1,  S::Fragment, T::SampledTexture),
+        entry(2,  S::Fragment, T::SampledTexture),
+        entry(3,  S::Fragment, T::SampledTexture),
+        entry(4,  S::Fragment, T::DepthTexture),                           // texture_depth_2d
+        entry(5,  S::Fragment, T::NonFilteringSampler),                    // gbufferSampler (nearest)
+        entry(6,  S::Fragment, T::DepthTexture,  D::View2DArray),          // texture_depth_2d_array
+        entry(7,  S::Fragment, T::NonFilteringSampler),                    // shadowSampler (nearest) — depth+textureSample requires non-filtering
+        entry(8,  S::Fragment, T::SampledTexture, D::ViewCube),            // irradiance cube
+        entry(9,  S::Fragment, T::SampledTexture, D::ViewCube),            // prefiltered cube
+        entry(10, S::Fragment, T::SampledTexture),
+        entry(11, S::Fragment, T::Sampler),                                // iblSampler (linear)
+    };
+#else
+    layoutDesc.entries = {
+        entry(0,  S::Fragment, T::UniformBuffer),
+        entry(1,  S::Fragment, T::SampledTexture),
+        entry(2,  S::Fragment, T::SampledTexture),
+        entry(3,  S::Fragment, T::SampledTexture),
+        entry(4,  S::Fragment, T::SampledTexture),                 // depth as sampled on Vulkan
+        entry(5,  S::Fragment, T::Sampler),
+        entry(6,  S::Fragment, T::SampledTexture, D::View2DArray), // CSM array
+        entry(7,  S::Fragment, T::Sampler),
+        entry(8,  S::Fragment, T::SampledTexture, D::ViewCube),
+        entry(9,  S::Fragment, T::SampledTexture, D::ViewCube),
+        entry(10, S::Fragment, T::SampledTexture),
+        entry(11, S::Fragment, T::Sampler),
+    };
+#endif
     layoutDesc.label = "DeferredLightingBGLayout";
 
     m_bindGroupLayout = m_device->createBindGroupLayout(layoutDesc);
@@ -151,5 +190,3 @@ bool DeferredLightingPass::createBindGroups(
 }
 
 } // namespace rendering
-
-#endif // !__EMSCRIPTEN__

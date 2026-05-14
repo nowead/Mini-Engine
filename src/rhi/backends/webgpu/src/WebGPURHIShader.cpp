@@ -2,6 +2,7 @@
 #include <rhi/webgpu/WebGPURHIDevice.hpp>
 #include <stdexcept>
 #include <cstring>
+#include <string>
 
 // Tint for SPIR-V → WGSL conversion (native only)
 #ifndef __EMSCRIPTEN__
@@ -58,6 +59,34 @@ WebGPURHIShader::WebGPURHIShader(WebGPURHIDevice* device, const ShaderDesc& desc
     if (!m_shaderModule) {
         throw std::runtime_error("Failed to create WebGPU shader module");
     }
+
+#ifdef __EMSCRIPTEN__
+    // Async callback to capture WGSL compilation messages (errors, warnings)
+    struct CompInfo { std::string label; };
+    auto* ci = new CompInfo{(desc.label && desc.label[0]) ? std::string(desc.label) : std::string("(unnamed)")};
+    WGPUCompilationInfoCallbackInfo ciInfo{};
+    ciInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+    ciInfo.callback = [](WGPUCompilationInfoRequestStatus /*status*/,
+                         WGPUCompilationInfo const* info,
+                         void* ud1, void* /*ud2*/) {
+        auto* c = static_cast<CompInfo*>(ud1);
+        for (size_t i = 0; i < info->messageCount; ++i) {
+            const auto& msg = info->messages[i];
+            const char* t = (msg.type == WGPUCompilationMessageType_Error)   ? "ERROR"   :
+                            (msg.type == WGPUCompilationMessageType_Warning) ? "WARNING" : "INFO";
+            printf("[Shader '%s'] %s line %llu: %.*s\n",
+                   c->label.c_str(), t,
+                   (unsigned long long)msg.lineNum,
+                   (int)msg.message.length, msg.message.data);
+        }
+        if (info->messageCount == 0) {
+            printf("[Shader '%s'] WGSL OK\n", c->label.c_str());
+        }
+        delete c;
+    };
+    ciInfo.userdata1 = ci;
+    wgpuShaderModuleGetCompilationInfo(m_shaderModule, ciInfo);
+#endif
 }
 
 WebGPURHIShader::~WebGPURHIShader() {

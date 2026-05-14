@@ -1,16 +1,25 @@
 #pragma once
-#ifndef __EMSCRIPTEN__
 
 #include <rhi/RHI.hpp>
 #include <memory>
 
-// Forward-declare raw Vulkan handles used for Linux native render pass and bindless set
-typedef struct VkRenderPass_T*        VkRenderPass;
-typedef struct VkFramebuffer_T*       VkFramebuffer;
+// Vulkan-only forward declarations for Linux native render pass and bindless set.
+// On WebGPU/EMSCRIPTEN these are stubbed to void* so the interface compiles unchanged;
+// the parameters always default to nullptr and the code paths that use them are guarded.
+#ifndef __EMSCRIPTEN__
+typedef struct VkRenderPass_T*          VkRenderPass;
+typedef struct VkFramebuffer_T*         VkFramebuffer;
 typedef struct VkDescriptorSetLayout_T* VkDescriptorSetLayout;
-typedef struct VkDescriptorSet_T*     VkDescriptorSet;
+typedef struct VkDescriptorSet_T*       VkDescriptorSet;
 #ifndef VK_NULL_HANDLE
 #define VK_NULL_HANDLE nullptr
+#endif
+#else
+using VkDescriptorSetLayout = void*;
+using VkDescriptorSet       = void*;
+#ifndef VK_NULL_HANDLE
+#define VK_NULL_HANDLE nullptr
+#endif
 #endif
 
 namespace rendering {
@@ -24,9 +33,10 @@ namespace rendering {
  *   GBuffer2 (RGBA8Unorm):  AO + padding
  *
  * Shares bind group layouts with the building forward pipeline
- * (set 0 = UBO + shadow/IBL textures, set 1 = SSBO).
- * The G-Buffer shaders only access binding 0 (UBO) from set 0, but
- * the extra descriptor bindings are harmless.
+ * (set 0 = UBO, set 1 = SSBO + visible indices).
+ *
+ * On WebGPU: loads gbuffer.wgsl; bindless parameters are ignored (always null).
+ * On Vulkan: loads gbuffer.{vert,frag}.spv; supports optional bindless set 2.
  */
 class GBufferPass {
 public:
@@ -38,10 +48,10 @@ public:
 
     /**
      * @param width, height        Render resolution
-     * @param buildingBGLayout     set 0 bind group layout (UBO+textures, shared with building pipeline)
-     * @param ssboLayout           set 1 bind group layout (SSBO)
+     * @param buildingBGLayout     set 0 bind group layout (UBO, shared with building pipeline)
+     * @param ssboLayout           set 1 bind group layout (SSBO + visible indices)
      * @param depthView            Depth texture view to use as depth attachment
-     * @param bindlessLayout       Phase 4: set 2 VkDescriptorSetLayout for bindless textures (null = disabled)
+     * @param bindlessLayout       Vulkan-only: set 2 VkDescriptorSetLayout for bindless (null = disabled)
      */
     bool initialize(uint32_t width, uint32_t height,
                     rhi::RHIBindGroupLayout* buildingBGLayout,
@@ -65,8 +75,7 @@ public:
 
     /**
      * @brief Record the G-Buffer pass into the given encoder.
-     * Begins the MRT render pass, draws instanced geometry, and ends the pass.
-     * @param bindlessSet  Phase 4: VkDescriptorSet for bindless texture array (null = disabled)
+     * @param bindlessSet  Vulkan-only: VkDescriptorSet for bindless texture array (null = disabled)
      */
     void execute(rhi::RHICommandEncoder* encoder,
                  rhi::RHIBindGroup* bindGroup0,
@@ -89,16 +98,16 @@ private:
     void destroyLinuxFramebuffer();
 #endif
 
-    rhi::RHIDevice* m_device;
-    rhi::RHITextureView* m_depthView = nullptr;
-    bool m_initialized = false;
+    rhi::RHIDevice*      m_device;
+    rhi::RHITextureView* m_depthView    = nullptr;
+    bool                 m_initialized  = false;
 
-    // Phase 4: bindless set bound at draw time as set 2 (null when bindless disabled)
+#ifndef __EMSCRIPTEN__
     VkDescriptorSetLayout m_bindlessLayout = VK_NULL_HANDLE;
-
 #ifdef __linux__
-    VkRenderPass m_nativeRenderPass = VK_NULL_HANDLE;
+    VkRenderPass  m_nativeRenderPass  = VK_NULL_HANDLE;
     VkFramebuffer m_nativeFramebuffer = VK_NULL_HANDLE;
+#endif
 #endif
 
     // G-Buffer textures
@@ -118,5 +127,3 @@ private:
 };
 
 } // namespace rendering
-
-#endif // !__EMSCRIPTEN__

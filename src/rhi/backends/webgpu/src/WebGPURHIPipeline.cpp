@@ -203,10 +203,26 @@ WebGPURHIRenderPipeline::WebGPURHIRenderPipeline(WebGPURHIDevice* device,
     pipelineDesc.multisample = multisampleState;
     pipelineDesc.fragment = pFragment;
 
+    wgpuDevicePushErrorScope(m_device->getWGPUDevice(), WGPUErrorFilter_Validation);
     m_pipeline = wgpuDeviceCreateRenderPipeline(m_device->getWGPUDevice(), &pipelineDesc);
     if (!m_pipeline) {
         throw std::runtime_error("Failed to create WebGPU render pipeline");
     }
+    struct ErrCtx { const char* label; };
+    auto* ctx = new ErrCtx{(desc.label && desc.label[0]) ? desc.label : "(unnamed)"};
+    WGPUPopErrorScopeCallbackInfo cbInfo{};
+    cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+    cbInfo.callback = [](WGPUPopErrorScopeStatus /*status*/, WGPUErrorType type,
+                         WGPUStringView msg, void* ud1, void* /*ud2*/) {
+        auto* c = static_cast<ErrCtx*>(ud1);
+        if (type != WGPUErrorType_NoError) {
+            fprintf(stderr, "[RenderPipeline '%s'] creation ERROR (type=%d): %.*s\n",
+                    c->label, (int)type, (int)msg.length, msg.data);
+        }
+        delete c;
+    };
+    cbInfo.userdata1 = ctx;
+    wgpuDevicePopErrorScope(m_device->getWGPUDevice(), cbInfo);
 }
 
 WebGPURHIRenderPipeline::~WebGPURHIRenderPipeline() {

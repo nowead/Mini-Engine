@@ -1,5 +1,4 @@
 #pragma once
-#ifndef __EMSCRIPTEN__
 
 #include <rhi/RHI.hpp>
 #include <memory>
@@ -107,5 +106,3 @@ private:
 };
 
 } // namespace rendering
-
-#endif // !__EMSCRIPTEN__

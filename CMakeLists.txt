@@ -186,6 +186,9 @@ if(NOT EMSCRIPTEN)
         # Phase 1.2: IBL (Image Based Lighting)
         src/rendering/IBLManager.cpp
         src/rendering/IBLManager.hpp
+        # WebGPU Push Constant Emulator (no-op on Vulkan builds)
+        src/rendering/PushConstantEmulator.cpp
+        src/rendering/PushConstantEmulator.hpp
         # Phase 4.1: GPU Profiling
         src/utils/GpuProfiler.cpp
         src/utils/GpuProfiler.hpp
@@ -385,15 +388,6 @@ if(NOT EMSCRIPTEN)
         COMMENT "Compiling tonemap.vert.glsl -> SPIR-V"
     )
 
-    add_custom_command(
-        OUTPUT ${BUILDING_SHADER_DIR}/tonemap.frag.spv
-        COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=fragment
-                -o ${BUILDING_SHADER_DIR}/tonemap.frag.spv
-                ${BUILDING_SHADER_DIR}/tonemap.frag.glsl
-        DEPENDS ${BUILDING_SHADER_DIR}/tonemap.frag.glsl
-        COMMENT "Compiling tonemap.frag.glsl -> SPIR-V"
-    )
-
     # Post-process: combined tonemap+FXAA+bloom composite pass
     add_custom_command(
         OUTPUT ${BUILDING_SHADER_DIR}/postprocess.frag.spv
@@ -498,7 +492,6 @@ if(NOT EMSCRIPTEN)
         ${BUILDING_SHADER_DIR}/prefilter_env.comp.spv
         ${BUILDING_SHADER_DIR}/frustum_cull.comp.spv
         ${BUILDING_SHADER_DIR}/tonemap.vert.spv
-        ${BUILDING_SHADER_DIR}/tonemap.frag.spv
         ${BUILDING_SHADER_DIR}/postprocess.frag.spv
         ${BUILDING_SHADER_DIR}/bloom_threshold.comp.spv
         ${BUILDING_SHADER_DIR}/bloom_blur.comp.spv
@@ -576,6 +569,14 @@ else()
         # Phase 1.2: IBL (Image Based Lighting)
         src/rendering/IBLManager.cpp
         src/rendering/IBLManager.hpp
+        # WebGPU Push Constant Emulator (no-op on Vulkan builds)
+        src/rendering/PushConstantEmulator.cpp
+        src/rendering/PushConstantEmulator.hpp
+        # Phase 3: Deferred Rendering
+        src/rendering/GBufferPass.cpp
+        src/rendering/GBufferPass.hpp
+        src/rendering/DeferredLightingPass.cpp
+        src/rendering/DeferredLightingPass.hpp
     )
 
     target_include_directories(MiniEngine BEFORE PRIVATE
@@ -603,6 +604,14 @@ else()
         COMMAND ${CMAKE_COMMAND} -E make_directory ${MINIENGINE_SHADER_DIR}
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${CMAKE_CURRENT_SOURCE_DIR}/shaders/building.wgsl
+            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/gbuffer.wgsl
+            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/deferred_lighting.wgsl
+            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/bloom_prefilter.wgsl
+            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/bloom_blur.wgsl
+            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/ssao.wgsl
+            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/ssao_blur.wgsl
+            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/tonemap.wgsl
+            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/fxaa.wgsl
             ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shadow.wgsl
             ${CMAKE_CURRENT_SOURCE_DIR}/shaders/skybox.wgsl
             ${CMAKE_CURRENT_SOURCE_DIR}/shaders/particle.wgsl
@@ -941,6 +950,9 @@ if(BUILD_TESTS)
         src/rendering/ShadowRenderer.hpp
         src/rendering/IBLManager.cpp
         src/rendering/IBLManager.hpp
+        # WebGPU Push Constant Emulator (no-op on Vulkan builds)
+        src/rendering/PushConstantEmulator.cpp
+        src/rendering/PushConstantEmulator.hpp
         src/utils/GpuProfiler.cpp
         src/utils/GpuProfiler.hpp
         src/rendering/graph/RenderGraph.cpp

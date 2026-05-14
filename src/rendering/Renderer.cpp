@@ -86,8 +86,16 @@ Renderer::Renderer(GLFWwindow* window,
 
 #ifdef __EMSCRIPTEN__
     // Post-process pipelines must be created after HDR render target (bind groups reference texture views)
-    createTonemapPipeline();
+    createBloomPipelineWGSL();  // creates bloom textures + render pipelines (needed by tonemap bind group)
+    createSSAOPipelineWGSL();   // creates SSAO textures + render pipelines (needed by tonemap bind group)
+    createTonemapPipeline();    // binds HDR + bloom + SSAO → LDR (ACES + gamma)
     createFXAAPipeline();
+    printf("[DIAG] bloom=%s ssao=%s tonemap=%s fxaa=%s ldrView=%s\n",
+        (wgslBloomPrefilterPipeline ? "OK" : "NULL"),
+        (wgslSSAOPipeline           ? "OK" : "NULL"),
+        (tonemapPipeline            ? "OK" : "NULL"),
+        (fxaaPipeline               ? "OK" : "NULL"),
+        (ldrColorView               ? "OK" : "NULL"));
 #else
     // Vulkan: create compute resources first so postprocess bind group has all views
     createBloomPipeline();   // creates bloomTextureView
@@ -95,15 +103,15 @@ Renderer::Renderer(GLFWwindow* window,
     createPostProcessPipeline(); // bind group binds bloom + ssao (both now available)
 #endif
 
-    // Phase 4.1: GPU Profiler
-#ifndef __EMSCRIPTEN__
-    // Phase 4: Bindless texture manager (must be before GBufferPass so the layout is ready)
-    createBindlessResources();
-
     // Phase 3: G-Buffer + Deferred Lighting (created after shadow + IBL are ready)
     createGBufferPass();
     createDeferredLightingPass();
 
+#ifndef __EMSCRIPTEN__
+    // Phase 4: Bindless texture manager (Vulkan bindless — not available on WebGPU)
+    createBindlessResources();
+
+    // Phase 4.1: GPU Profiler (Vulkan-only)
     {
         auto* vulkanDevice = dynamic_cast<RHI::Vulkan::VulkanRHIDevice*>(rhiBridge->getDevice());
         if (vulkanDevice) {
@@ -188,11 +196,25 @@ void Renderer::handleFramebufferResize(int width, int height) {
     createHDRRenderTarget();
 
 #ifdef __EMSCRIPTEN__
+    if (gBufferPass && gBufferPass->isInitialized() && rhiDepthImageView) {
+        gBufferPass->resize(static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+                            rhiDepthImageView.get());
+        createDeferredLightingPass();
+    }
+    createBloomPipelineWGSL();
+    createSSAOPipelineWGSL();
+
     if (tonemapBindGroupLayout && hdrColorView && hdrSampler) {
+        rhi::RHITextureView* bv   = bloomTextureView ? bloomTextureView.get() : hdrColorView.get();
+        rhi::RHITextureView* ssao = ssaoBlurView     ? ssaoBlurView.get()     : hdrColorView.get();
         rhi::BindGroupDesc bindGroupDesc;
         bindGroupDesc.layout = tonemapBindGroupLayout.get();
-        bindGroupDesc.entries.push_back(rhi::BindGroupEntry::TextureView(0, hdrColorView.get()));
-        bindGroupDesc.entries.push_back(rhi::BindGroupEntry::Sampler(1, hdrSampler.get()));
+        bindGroupDesc.entries = {
+            rhi::BindGroupEntry::TextureView(0, hdrColorView.get()),
+            rhi::BindGroupEntry::TextureView(1, bv),
+            rhi::BindGroupEntry::Sampler    (2, hdrSampler.get()),
+            rhi::BindGroupEntry::TextureView(3, ssao),
+        };
         bindGroupDesc.label = "Tonemap Bind Group";
         tonemapBindGroup = rhiBridge->getDevice()->createBindGroup(bindGroupDesc);
     }
@@ -260,11 +282,26 @@ void Renderer::recreateSwapchain() {
     createHDRRenderTarget();
 
 #ifdef __EMSCRIPTEN__
+    if (gBufferPass && gBufferPass->isInitialized() && rhiDepthImageView) {
+        gBufferPass->resize(static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+                            rhiDepthImageView.get());
+        createDeferredLightingPass();
+    }
+    // Bloom + SSAO textures are resolution-dependent — recreate at new half-res size
+    createBloomPipelineWGSL();
+    createSSAOPipelineWGSL();
+
     if (tonemapBindGroupLayout && hdrColorView && hdrSampler) {
+        rhi::RHITextureView* bv   = bloomTextureView ? bloomTextureView.get() : hdrColorView.get();
+        rhi::RHITextureView* ssao = ssaoBlurView     ? ssaoBlurView.get()     : hdrColorView.get();
         rhi::BindGroupDesc bindGroupDesc;
         bindGroupDesc.layout = tonemapBindGroupLayout.get();
-        bindGroupDesc.entries.push_back(rhi::BindGroupEntry::TextureView(0, hdrColorView.get()));
-        bindGroupDesc.entries.push_back(rhi::BindGroupEntry::Sampler(1, hdrSampler.get()));
+        bindGroupDesc.entries = {
+            rhi::BindGroupEntry::TextureView(0, hdrColorView.get()),
+            rhi::BindGroupEntry::TextureView(1, bv),
+            rhi::BindGroupEntry::Sampler    (2, hdrSampler.get()),
+            rhi::BindGroupEntry::TextureView(3, ssao),
+        };
         bindGroupDesc.label = "Tonemap Bind Group";
         tonemapBindGroup = rhiBridge->getDevice()->createBindGroup(bindGroupDesc);
     }
@@ -372,12 +409,14 @@ void Renderer::createRHIBindGroups() {
     uboEntry.type = rhi::BindingType::UniformBuffer;
     layoutDesc.entries.push_back(uboEntry);
 
-    // Binding 1: Combined image sampler
+#ifndef __EMSCRIPTEN__
+    // Binding 1: Combined image sampler (Vulkan legacy path only — not used on WebGPU)
     rhi::BindGroupLayoutEntry samplerEntry;
     samplerEntry.binding = 1;
     samplerEntry.visibility = rhi::ShaderStage::Fragment;
     samplerEntry.type = rhi::BindingType::SampledTexture;
     layoutDesc.entries.push_back(samplerEntry);
+#endif
 
     layoutDesc.label = "RHI Main Bind Group Layout";
     rhiBindGroupLayout = rhiDevice->createBindGroupLayout(layoutDesc);
@@ -686,11 +725,12 @@ void Renderer::createBuildingPipeline() {
     uboEntry.type = rhi::BindingType::UniformBuffer;
     buildingLayoutDesc.entries.push_back(uboEntry);
 
-    // Binding 1: Shadow map texture (fragment only) - depth texture for shadow mapping
+    // Binding 1: Shadow map texture (CSM 2D array, fragment only)
     rhi::BindGroupLayoutEntry shadowTexEntry;
     shadowTexEntry.binding = 1;
     shadowTexEntry.visibility = rhi::ShaderStage::Fragment;
     shadowTexEntry.type = rhi::BindingType::DepthTexture;
+    shadowTexEntry.textureViewDimension = rhi::TextureViewDimension::View2DArray;
     buildingLayoutDesc.entries.push_back(shadowTexEntry);
 
     // Binding 2: Shadow sampler (fragment only) - non-filtering for depth texture
@@ -1189,6 +1229,7 @@ void Renderer::createBindlessResources() {
 
     LOG_INFO("Renderer") << "Bindless resources ready (" << bindlessTextureManager->isAvailable() << ")";
 }
+#endif  // !__EMSCRIPTEN__
 
 void Renderer::createGBufferPass() {
     if (!rhiBridge || !rhiBridge->isReady()) return;
@@ -1198,10 +1239,13 @@ void Renderer::createGBufferPass() {
     uint32_t W = rhiBridge->getSwapchain()->getWidth();
     uint32_t H = rhiBridge->getSwapchain()->getHeight();
 
-    // Phase 4: pass the bindless descriptor set layout (null when unavailable → disabled)
+#ifndef __EMSCRIPTEN__
     VkDescriptorSetLayout bindlessLayout = VK_NULL_HANDLE;
     if (bindlessTextureManager && bindlessTextureManager->isAvailable())
         bindlessLayout = bindlessTextureManager->getVkDescriptorSetLayout();
+#else
+    VkDescriptorSetLayout bindlessLayout = nullptr;
+#endif
 
     gBufferPass = std::make_unique<rendering::GBufferPass>(device);
     if (!gBufferPass->initialize(W, H,
@@ -1259,7 +1303,6 @@ void Renderer::createDeferredLightingPass() {
         LOG_INFO("Renderer") << "DeferredLightingPass initialized";
     }
 }
-#endif // !__EMSCRIPTEN__
 
 // ============================================================================
 
@@ -1522,9 +1565,321 @@ void Renderer::createHDRRenderTarget() {
 }
 
 // ============================================================================
-// Tonemap Pipeline Creation (WebGPU only)
+// Bloom Render Pipelines (WebGPU only)
 // ============================================================================
 #ifdef __EMSCRIPTEN__
+
+void Renderer::createBloomPipelineWGSL() {
+    if (!rhiBridge || !rhiBridge->isReady() || !hdrColorView || !hdrSampler) return;
+    auto* device = rhiBridge->getDevice();
+
+    uint32_t bW = std::max(1u, rhiBridge->getSwapchain()->getWidth()  / 2);
+    uint32_t bH = std::max(1u, rhiBridge->getSwapchain()->getHeight() / 2);
+
+    // Half-res RGBA16Float bloom textures (render target + sampled)
+    rhi::TextureDesc td;
+    td.size   = rhi::Extent3D(bW, bH, 1);
+    td.format = rhi::TextureFormat::RGBA16Float;
+    td.usage  = rhi::TextureUsage::Sampled | rhi::TextureUsage::RenderTarget;
+    td.mipLevelCount = 1; td.arrayLayerCount = 1;
+    td.label = "BloomTexture";
+    bloomTexture = device->createTexture(td);
+    td.label = "BloomPingTexture";
+    bloomPingTexture = device->createTexture(td);
+    if (!bloomTexture || !bloomPingTexture) {
+        LOG_ERROR("Renderer") << "[WebGPU Bloom] Failed to create bloom textures";
+        return;
+    }
+
+    rhi::TextureViewDesc vd;
+    vd.format    = rhi::TextureFormat::RGBA16Float;
+    vd.dimension = rhi::TextureViewDimension::View2D;
+    vd.label = "BloomTextureView";
+    bloomTextureView = bloomTexture->createView(vd);
+    vd.label = "BloomPingView";
+    bloomPingView = bloomPingTexture->createView(vd);
+
+    rhi::SamplerDesc sd;
+    sd.magFilter    = rhi::FilterMode::Linear;
+    sd.minFilter    = rhi::FilterMode::Linear;
+    sd.addressModeU = rhi::AddressMode::ClampToEdge;
+    sd.addressModeV = rhi::AddressMode::ClampToEdge;
+    bloomSampler = device->createSampler(sd);
+
+    if (!bloomTextureView || !bloomPingView || !bloomSampler) {
+        LOG_ERROR("Renderer") << "[WebGPU Bloom] Failed to create bloom views/sampler";
+        return;
+    }
+
+    // Shared bind group layout: {SampledTexture(0), Sampler(1)}
+    rhi::BindGroupLayoutDesc layoutDesc;
+    layoutDesc.entries = {
+        rhi::BindGroupLayoutEntry(0, rhi::ShaderStage::Fragment, rhi::BindingType::SampledTexture),
+        rhi::BindGroupLayoutEntry(1, rhi::ShaderStage::Fragment, rhi::BindingType::Sampler),
+    };
+    layoutDesc.label = "WGSLBloomLayout";
+    wgslBloomLayout = device->createBindGroupLayout(layoutDesc);
+    if (!wgslBloomLayout) { LOG_ERROR("Renderer") << "[WebGPU Bloom] Layout creation failed"; return; }
+
+    rhi::PipelineLayoutDesc plDesc;
+    plDesc.bindGroupLayouts = { wgslBloomLayout.get() };
+    plDesc.label = "WGSLBloomPipelineLayout";
+    wgslBloomPipelineLayout = device->createPipelineLayout(plDesc);
+    if (!wgslBloomPipelineLayout) { LOG_ERROR("Renderer") << "[WebGPU Bloom] Pipeline layout failed"; return; }
+
+    // RGBA16Float color target (half-res)
+    rhi::ColorTargetState bloomCT;
+    bloomCT.format = rhi::TextureFormat::RGBA16Float;
+    bloomCT.blend.blendEnabled = false;
+
+    // Helper: create a fullscreen render pipeline from a WGSL file + entry point
+    auto makeBloomPipeline = [&](const char* path, const char* fsEntry, const char* label)
+        -> std::unique_ptr<rhi::RHIRenderPipeline>
+    {
+        auto raw = FileUtils::readFile(path);
+        if (raw.empty()) { LOG_ERROR("Renderer") << "[WebGPU Bloom] Failed to load " << path; return {}; }
+        std::vector<uint8_t> code(raw.begin(), raw.end());
+        auto vs = device->createShader(rhi::ShaderDesc(
+            rhi::ShaderSource(rhi::ShaderLanguage::WGSL, code, rhi::ShaderStage::Vertex, "vs_main"), label));
+        auto fs = device->createShader(rhi::ShaderDesc(
+            rhi::ShaderSource(rhi::ShaderLanguage::WGSL, code, rhi::ShaderStage::Fragment, fsEntry), label));
+        if (!vs || !fs) return {};
+        rhi::RenderPipelineDesc pd;
+        pd.label          = label;
+        pd.layout         = wgslBloomPipelineLayout.get();
+        pd.vertexShader   = vs.get();
+        pd.fragmentShader = fs.get();
+        pd.primitive.topology  = rhi::PrimitiveTopology::TriangleList;
+        pd.primitive.cullMode  = rhi::CullMode::None;
+        pd.primitive.frontFace = rhi::FrontFace::CounterClockwise;
+        pd.colorTargets = { bloomCT };
+        pd.depthStencil = nullptr;
+        return device->createRenderPipeline(pd);
+    };
+
+    wgslBloomPrefilterPipeline = makeBloomPipeline("shaders/bloom_prefilter.wgsl", "fs_main",       "BloomPrefilter");
+    wgslBloomBlurHPipeline     = makeBloomPipeline("shaders/bloom_blur.wgsl",      "fs_horizontal", "BloomBlurH");
+    wgslBloomBlurVPipeline     = makeBloomPipeline("shaders/bloom_blur.wgsl",      "fs_vertical",   "BloomBlurV");
+
+    if (!wgslBloomPrefilterPipeline || !wgslBloomBlurHPipeline || !wgslBloomBlurVPipeline) {
+        LOG_ERROR("Renderer") << "[WebGPU Bloom] Pipeline creation failed";
+        return;
+    }
+
+    // Bind groups
+    auto makeBG = [&](rhi::RHITextureView* tex, rhi::RHISampler* samp, const char* lbl)
+        -> std::unique_ptr<rhi::RHIBindGroup>
+    {
+        rhi::BindGroupDesc d;
+        d.layout = wgslBloomLayout.get();
+        d.entries = {
+            rhi::BindGroupEntry::TextureView(0, tex),
+            rhi::BindGroupEntry::Sampler(1, samp),
+        };
+        d.label = lbl;
+        return device->createBindGroup(d);
+    };
+
+    wgslBloomPrefilterBG = makeBG(hdrColorView.get(), hdrSampler.get(), "BloomPrefilterBG");
+    wgslBloomBlurBGs[0]  = makeBG(bloomTextureView.get(), bloomSampler.get(), "BloomBlurBG_H");
+    wgslBloomBlurBGs[1]  = makeBG(bloomPingView.get(),    bloomSampler.get(), "BloomBlurBG_V");
+
+    LOG_INFO("Renderer") << "[WebGPU Bloom] Initialized " << bW << "x" << bH;
+}
+
+// ============================================================================
+// SSAO Render Pipelines (WebGPU — render-pass based, R8Unorm color attachment)
+// ============================================================================
+
+void Renderer::createSSAOPipelineWGSL() {
+    if (!rhiBridge || !rhiBridge->isReady() || !rhiDepthImageView || !hdrSampler) return;
+    auto* device   = rhiBridge->getDevice();
+    auto* swapchain = rhiBridge->getSwapchain();
+    if (!swapchain) return;
+
+    uint32_t ssaoW = std::max(1u, swapchain->getWidth()  / 2);
+    uint32_t ssaoH = std::max(1u, swapchain->getHeight() / 2);
+
+    // Half-res R8Unorm SSAO textures (RenderTarget + Sampled — R8Unorm storage not supported in WebGPU)
+    auto makeSSAOTex = [&](const char* lbl) {
+        rhi::TextureDesc d;
+        d.format = rhi::TextureFormat::R8Unorm;
+        d.size   = rhi::Extent3D(ssaoW, ssaoH, 1);
+        d.usage  = rhi::TextureUsage::RenderTarget | rhi::TextureUsage::Sampled;
+        d.label  = lbl;
+        return device->createTexture(d);
+    };
+    ssaoTexture     = makeSSAOTex("SSAO Texture");
+    ssaoBlurTexture = makeSSAOTex("SSAO Blur Texture");
+    if (!ssaoTexture || !ssaoBlurTexture) {
+        LOG_ERROR("Renderer") << "[WebGPU SSAO] Failed to create SSAO textures"; return;
+    }
+
+    rhi::TextureViewDesc vd;
+    vd.format    = rhi::TextureFormat::R8Unorm;
+    vd.dimension = rhi::TextureViewDimension::View2D;
+    vd.label = "SSAOTextureView";
+    ssaoTextureView = ssaoTexture->createView(vd);
+    vd.label = "SSAOBlurView";
+    ssaoBlurView    = ssaoBlurTexture->createView(vd);
+
+    // All three filters must be Nearest for WebGPU to classify this as a non-filtering sampler
+    // (required when sampling depth textures via textureSampleLevel in SSAO).
+    rhi::SamplerDesc sd;
+    sd.magFilter = sd.minFilter = rhi::FilterMode::Nearest;
+    sd.mipmapFilter = rhi::MipmapMode::Nearest;
+    sd.addressModeU = sd.addressModeV = rhi::AddressMode::ClampToEdge;
+    ssaoSampler = device->createSampler(sd);
+
+    if (!ssaoTextureView || !ssaoBlurView || !ssaoSampler) {
+        LOG_ERROR("Renderer") << "[WebGPU SSAO] Failed to create SSAO views/sampler"; return;
+    }
+
+    // Uniform buffers
+    {
+        rhi::BufferDesc bd;
+        bd.size = 96;  // sizeof(SSAOParams): mat4(64) + 8×f32(32)
+        bd.usage = rhi::BufferUsage::Uniform | rhi::BufferUsage::MapWrite;
+        bd.mappedAtCreation = false;
+        bd.label = "SSAOParamsUBO";
+        wgslSSAOParamsUBO = device->createBuffer(bd);
+        bd.size = 32;  // sizeof(SSAOBlurParams): 8×f32
+        bd.label = "SSAOBlurParamsUBO";
+        wgslSSAOBlurParamsUBO = device->createBuffer(bd);
+    }
+    if (!wgslSSAOParamsUBO || !wgslSSAOBlurParamsUBO) {
+        LOG_ERROR("Renderer") << "[WebGPU SSAO] Failed to create UBOs"; return;
+    }
+
+    using S = rhi::ShaderStage;
+    using T = rhi::BindingType;
+
+    // ---- SSAO pass layout: depth, sampler, uniform ----
+    {
+        rhi::BindGroupLayoutDesc ld;
+        ld.label = "WGSLSSAOLayout";
+        ld.entries = {
+            rhi::BindGroupLayoutEntry(0, S::Fragment, T::DepthTexture),
+            rhi::BindGroupLayoutEntry(1, S::Fragment, T::NonFilteringSampler),
+            rhi::BindGroupLayoutEntry(2, S::Fragment, T::UniformBuffer),
+        };
+        wgslSSAOLayout = device->createBindGroupLayout(ld);
+    }
+    if (!wgslSSAOLayout) { LOG_ERROR("Renderer") << "[WebGPU SSAO] Layout failed"; return; }
+
+    {
+        rhi::PipelineLayoutDesc pld;
+        pld.bindGroupLayouts = { wgslSSAOLayout.get() };
+        pld.label = "WGSLSSAOPipelineLayout";
+        wgslSSAOPipelineLayout = device->createPipelineLayout(pld);
+    }
+    if (!wgslSSAOPipelineLayout) { LOG_ERROR("Renderer") << "[WebGPU SSAO] Pipeline layout failed"; return; }
+
+    {
+        rhi::BindGroupDesc bd;
+        bd.layout = wgslSSAOLayout.get();
+        bd.label  = "WGSLSSAOBindGroup";
+        bd.entries = {
+            rhi::BindGroupEntry::TextureView(0, rhiDepthImageView.get()),
+            rhi::BindGroupEntry::Sampler(1, ssaoSampler.get()),
+            rhi::BindGroupEntry::Buffer(2, wgslSSAOParamsUBO.get(), 0, 96),
+        };
+        wgslSSAOBG = device->createBindGroup(bd);
+    }
+    if (!wgslSSAOBG) { LOG_ERROR("Renderer") << "[WebGPU SSAO] Bind group failed"; return; }
+
+    // SSAO pipeline (depth → R8Unorm AO)
+    {
+        auto raw = FileUtils::readFile("shaders/ssao.wgsl");
+        if (raw.empty()) { LOG_ERROR("Renderer") << "[WebGPU SSAO] Failed to load ssao.wgsl"; return; }
+        std::vector<uint8_t> code(raw.begin(), raw.end());
+        auto vs = device->createShader(rhi::ShaderDesc(
+            rhi::ShaderSource(rhi::ShaderLanguage::WGSL, code, rhi::ShaderStage::Vertex, "vs_main"), "SSAO_VS"));
+        auto fs = device->createShader(rhi::ShaderDesc(
+            rhi::ShaderSource(rhi::ShaderLanguage::WGSL, code, rhi::ShaderStage::Fragment, "fs_main"), "SSAO_FS"));
+        if (!vs || !fs) { LOG_ERROR("Renderer") << "[WebGPU SSAO] Shader creation failed"; return; }
+        rhi::RenderPipelineDesc pd;
+        pd.label          = "SSAOPipeline";
+        pd.layout         = wgslSSAOPipelineLayout.get();
+        pd.vertexShader   = vs.get();
+        pd.fragmentShader = fs.get();
+        pd.primitive.topology  = rhi::PrimitiveTopology::TriangleList;
+        pd.primitive.cullMode  = rhi::CullMode::None;
+        pd.primitive.frontFace = rhi::FrontFace::CounterClockwise;
+        rhi::ColorTargetState ct; ct.format = rhi::TextureFormat::R8Unorm; ct.blend.blendEnabled = false;
+        pd.colorTargets   = { ct };
+        pd.depthStencil   = nullptr;
+        wgslSSAOPipeline  = device->createRenderPipeline(pd);
+    }
+    if (!wgslSSAOPipeline) { LOG_ERROR("Renderer") << "[WebGPU SSAO] Pipeline creation failed"; return; }
+
+    // ---- SSAO blur pass layout: aoTex(sampled), depth(DepthTexture), sampler, uniform ----
+    {
+        rhi::BindGroupLayoutDesc ld;
+        ld.label = "WGSLSSAOBlurLayout";
+        ld.entries = {
+            rhi::BindGroupLayoutEntry(0, S::Fragment, T::SampledTexture),
+            rhi::BindGroupLayoutEntry(1, S::Fragment, T::DepthTexture),
+            rhi::BindGroupLayoutEntry(2, S::Fragment, T::NonFilteringSampler),
+            rhi::BindGroupLayoutEntry(3, S::Fragment, T::UniformBuffer),
+        };
+        wgslSSAOBlurLayout = device->createBindGroupLayout(ld);
+    }
+    if (!wgslSSAOBlurLayout) { LOG_ERROR("Renderer") << "[WebGPU SSAO] Blur layout failed"; return; }
+
+    {
+        rhi::PipelineLayoutDesc pld;
+        pld.bindGroupLayouts = { wgslSSAOBlurLayout.get() };
+        pld.label = "WGSLSSAOBlurPipelineLayout";
+        wgslSSAOBlurPipelineLayout = device->createPipelineLayout(pld);
+    }
+    if (!wgslSSAOBlurPipelineLayout) { LOG_ERROR("Renderer") << "[WebGPU SSAO] Blur pipeline layout failed"; return; }
+
+    {
+        rhi::BindGroupDesc bd;
+        bd.layout = wgslSSAOBlurLayout.get();
+        bd.label  = "WGSLSSAOBlurBindGroup";
+        bd.entries = {
+            rhi::BindGroupEntry::TextureView(0, ssaoTextureView.get()),
+            rhi::BindGroupEntry::TextureView(1, rhiDepthImageView.get()),
+            rhi::BindGroupEntry::Sampler(2, ssaoSampler.get()),
+            rhi::BindGroupEntry::Buffer(3, wgslSSAOBlurParamsUBO.get(), 0, 32),
+        };
+        wgslSSAOBlurBG = device->createBindGroup(bd);
+    }
+    if (!wgslSSAOBlurBG) { LOG_ERROR("Renderer") << "[WebGPU SSAO] Blur bind group failed"; return; }
+
+    // SSAO blur pipeline (AO + depth → blurred R8Unorm AO)
+    {
+        auto raw = FileUtils::readFile("shaders/ssao_blur.wgsl");
+        if (raw.empty()) { LOG_ERROR("Renderer") << "[WebGPU SSAO] Failed to load ssao_blur.wgsl"; return; }
+        std::vector<uint8_t> code(raw.begin(), raw.end());
+        auto vs = device->createShader(rhi::ShaderDesc(
+            rhi::ShaderSource(rhi::ShaderLanguage::WGSL, code, rhi::ShaderStage::Vertex, "vs_main"), "SSAOBlur_VS"));
+        auto fs = device->createShader(rhi::ShaderDesc(
+            rhi::ShaderSource(rhi::ShaderLanguage::WGSL, code, rhi::ShaderStage::Fragment, "fs_main"), "SSAOBlur_FS"));
+        if (!vs || !fs) { LOG_ERROR("Renderer") << "[WebGPU SSAO] Blur shader creation failed"; return; }
+        rhi::RenderPipelineDesc pd;
+        pd.label          = "SSAOBlurPipeline";
+        pd.layout         = wgslSSAOBlurPipelineLayout.get();
+        pd.vertexShader   = vs.get();
+        pd.fragmentShader = fs.get();
+        pd.primitive.topology  = rhi::PrimitiveTopology::TriangleList;
+        pd.primitive.cullMode  = rhi::CullMode::None;
+        pd.primitive.frontFace = rhi::FrontFace::CounterClockwise;
+        rhi::ColorTargetState ct; ct.format = rhi::TextureFormat::R8Unorm; ct.blend.blendEnabled = false;
+        pd.colorTargets        = { ct };
+        pd.depthStencil        = nullptr;
+        wgslSSAOBlurPipeline   = device->createRenderPipeline(pd);
+    }
+    if (!wgslSSAOBlurPipeline) { LOG_ERROR("Renderer") << "[WebGPU SSAO] Blur pipeline creation failed"; return; }
+
+    LOG_INFO("Renderer") << "[WebGPU SSAO] Initialized " << ssaoW << "x" << ssaoH;
+}
+
+// ============================================================================
+// Tonemap Pipeline Creation (WebGPU only)
+// ============================================================================
 
 void Renderer::createTonemapPipeline() {
     if (!rhiBridge || !rhiBridge->isReady() || !hdrColorView || !hdrSampler) {
@@ -1552,21 +1907,16 @@ void Renderer::createTonemapPipeline() {
         return;
     }
 
-    // Bind group layout: binding 0 = HDR texture, binding 1 = sampler
+    // Bind group layout: 0=HDR, 1=bloom, 2=sampler, 3=SSAO
     rhi::BindGroupLayoutDesc layoutDesc;
-
-    rhi::BindGroupLayoutEntry texEntry;
-    texEntry.binding = 0;
-    texEntry.visibility = rhi::ShaderStage::Fragment;
-    texEntry.type = rhi::BindingType::SampledTexture;
-    layoutDesc.entries.push_back(texEntry);
-
-    rhi::BindGroupLayoutEntry samplerEntry;
-    samplerEntry.binding = 1;
-    samplerEntry.visibility = rhi::ShaderStage::Fragment;
-    samplerEntry.type = rhi::BindingType::Sampler;
-    layoutDesc.entries.push_back(samplerEntry);
-
+    using S = rhi::ShaderStage;
+    using T = rhi::BindingType;
+    layoutDesc.entries = {
+        rhi::BindGroupLayoutEntry(0, S::Fragment, T::SampledTexture),  // hdrTexture
+        rhi::BindGroupLayoutEntry(1, S::Fragment, T::SampledTexture),  // bloomTexture
+        rhi::BindGroupLayoutEntry(2, S::Fragment, T::Sampler),         // hdrSampler
+        rhi::BindGroupLayoutEntry(3, S::Fragment, T::SampledTexture),  // ssaoBlurTexture
+    };
     layoutDesc.label = "Tonemap Bind Group Layout";
     tonemapBindGroupLayout = rhiDevice->createBindGroupLayout(layoutDesc);
 
@@ -1575,11 +1925,17 @@ void Renderer::createTonemapPipeline() {
         return;
     }
 
-    // Bind group: HDR texture view + sampler
+    // Bind group: HDR + bloom + sampler + SSAO (fall back to HDR white if not yet ready)
+    rhi::RHITextureView* bloomView = bloomTextureView ? bloomTextureView.get() : hdrColorView.get();
+    rhi::RHITextureView* ssaoView  = ssaoBlurView     ? ssaoBlurView.get()     : hdrColorView.get();
     rhi::BindGroupDesc bindGroupDesc;
     bindGroupDesc.layout = tonemapBindGroupLayout.get();
-    bindGroupDesc.entries.push_back(rhi::BindGroupEntry::TextureView(0, hdrColorView.get()));
-    bindGroupDesc.entries.push_back(rhi::BindGroupEntry::Sampler(1, hdrSampler.get()));
+    bindGroupDesc.entries = {
+        rhi::BindGroupEntry::TextureView(0, hdrColorView.get()),
+        rhi::BindGroupEntry::TextureView(1, bloomView),
+        rhi::BindGroupEntry::Sampler    (2, hdrSampler.get()),
+        rhi::BindGroupEntry::TextureView(3, ssaoView),
+    };
     bindGroupDesc.label = "Tonemap Bind Group";
     tonemapBindGroup = rhiDevice->createBindGroup(bindGroupDesc);
 
@@ -2783,7 +3139,7 @@ void Renderer::drawFrame() {
 #endif
     colorAttachment.loadOp = rhi::LoadOp::Clear;
     colorAttachment.storeOp = rhi::StoreOp::Store;
-    colorAttachment.clearValue = rhi::ClearColorValue(0.01f, 0.01f, 0.03f, 1.0f);  // Dark blue background
+    colorAttachment.clearValue = rhi::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
     renderPassDesc.colorAttachments.push_back(colorAttachment);
 
     // Depth attachment (if available)
@@ -2894,8 +3250,52 @@ void Renderer::drawFrame() {
         pendingInstancedData.reset();
     }
 #else
-    // EMSCRIPTEN: forward rendering path (G-Buffer not used on WebGPU)
+    // WebGPU: G-Buffer pass (deferred geometry)
+    if (gBufferPass && gBufferPass->isInitialized()
+        && pendingInstancedData && pendingInstancedData->instanceCount > 0) {
+        auto* mesh         = pendingInstancedData->mesh;
+        auto* objectBuffer = pendingInstancedData->objectBuffer;
+        uint32_t gW = rhiBridge->getSwapchain()->getWidth();
+        uint32_t gH = rhiBridge->getSwapchain()->getHeight();
+        if (mesh && mesh->hasData() && objectBuffer) {
+            rhi::RHIBindGroup* bg0 = (frameIndex < buildingBindGroups.size())
+                                     ? buildingBindGroups[frameIndex].get() : nullptr;
+            gBufferPass->execute(encoder.get(),
+                                 bg0,
+                                 ssboBindGroups[frameIndex].get(),
+                                 mesh->getVertexBuffer(),
+                                 mesh->getIndexBuffer(),
+                                 indirectDrawBuffers[frameIndex].get(),
+                                 gW, gH,
+                                 nullptr);  // no bindless on WebGPU
+        }
+    }
     if (pendingInstancedData) pendingInstancedData.reset();
+
+    // WebGPU: Deferred Lighting pass (G-Buffers → HDR)
+    if (deferredLightingPass && deferredLightingPass->isInitialized()
+        && gBufferPass && gBufferPass->isInitialized()) {
+        uint32_t dlW = rhiBridge->getSwapchain()->getWidth();
+        uint32_t dlH = rhiBridge->getSwapchain()->getHeight();
+        rhi::RenderPassDesc dlDesc;
+        dlDesc.width  = dlW;
+        dlDesc.height = dlH;
+        dlDesc.label  = "DeferredLighting";
+        rhi::RenderPassColorAttachment dlColor;
+        dlColor.view     = hdrColorView.get();
+        dlColor.loadOp   = rhi::LoadOp::Load;
+        dlColor.storeOp  = rhi::StoreOp::Store;
+        dlDesc.colorAttachments.push_back(dlColor);
+        auto dlPass = encoder->beginRenderPass(dlDesc);
+        if (dlPass) {
+            dlPass->setViewport(0.0f, 0.0f, float(dlW), float(dlH), 0.0f, 1.0f);
+            dlPass->setScissorRect(0, 0, dlW, dlH);
+            dlPass->setPipeline(deferredLightingPass->getPipeline());
+            dlPass->setBindGroup(0, deferredLightingPass->getBindGroup(frameIndex));
+            dlPass->draw(3);  // Fullscreen triangle
+            dlPass->end();
+        }
+    }
 #endif
 
     // Phase 4.1: GPU Profiling — end main render pass timer
@@ -2908,7 +3308,122 @@ void Renderer::drawFrame() {
 #endif
 
 #ifdef __EMSCRIPTEN__
-    // Tonemap pass (WebGPU): HDR offscreen → LDR intermediate (ACES + gamma correction)
+    // SSAO pass (WebGPU): depth → half-res R8Unorm AO, then bilateral blur
+    if (wgslSSAOPipeline && wgslSSAOBlurPipeline && ssaoTextureView && ssaoBlurView) {
+        auto ssaoSize = ssaoTexture ? ssaoTexture->getSize() : rhi::Extent3D{1, 1, 1};
+        uint32_t sW = ssaoSize.width;
+        uint32_t sH = ssaoSize.height;
+
+        // Update SSAOParams UBO each frame (projection matrix + camera params)
+        {
+            struct alignas(16) SSAOParams {
+                glm::mat4 projection;
+                float radius, bias, near, far, invW, invH, pad0, pad1;
+            };
+            SSAOParams pc{};
+            pc.projection = projectionMatrix;
+            pc.radius = 0.5f; pc.bias = 0.025f;
+            pc.near   = 0.1f; pc.far  = 1000.0f;
+            pc.invW   = 1.0f / static_cast<float>(sW);
+            pc.invH   = 1.0f / static_cast<float>(sH);
+            wgslSSAOParamsUBO->write(&pc, sizeof(pc));
+        }
+
+        // Update SSAOBlurParams UBO
+        {
+            struct SSAOBlurParams { float invW, invH, near, far, depthThreshold, pad0, pad1, pad2; };
+            SSAOBlurParams bp{};
+            bp.invW = 1.0f / static_cast<float>(sW);
+            bp.invH = 1.0f / static_cast<float>(sH);
+            bp.near = 0.1f; bp.far = 1000.0f;
+            bp.depthThreshold = 0.05f;
+            wgslSSAOBlurParamsUBO->write(&bp, sizeof(bp));
+        }
+
+        // 1. SSAO pass: depth → ssaoTexture (raw AO)
+        {
+            rhi::RenderPassDesc pd;
+            pd.width = sW; pd.height = sH; pd.label = "SSAO";
+            rhi::RenderPassColorAttachment ca;
+            ca.view = ssaoTextureView.get();
+            ca.loadOp = rhi::LoadOp::Clear; ca.storeOp = rhi::StoreOp::Store;
+            ca.clearValue = rhi::ClearColorValue(1.0f, 0.0f, 0.0f, 1.0f);  // 1.0 = no occlusion
+            pd.colorAttachments.push_back(ca);
+            auto pass = encoder->beginRenderPass(pd);
+            if (pass) {
+                pass->setViewport(0, 0, float(sW), float(sH), 0, 1);
+                pass->setScissorRect(0, 0, sW, sH);
+                pass->setPipeline(wgslSSAOPipeline.get());
+                pass->setBindGroup(0, wgslSSAOBG.get());
+                pass->draw(3);
+                pass->end();
+            }
+        }
+
+        // 2. SSAO blur pass: ssaoTexture + depth → ssaoBlurTexture (bilateral filtered AO)
+        {
+            rhi::RenderPassDesc pd;
+            pd.width = sW; pd.height = sH; pd.label = "SSAOBlur";
+            rhi::RenderPassColorAttachment ca;
+            ca.view = ssaoBlurView.get();
+            ca.loadOp = rhi::LoadOp::Clear; ca.storeOp = rhi::StoreOp::Store;
+            ca.clearValue = rhi::ClearColorValue(1.0f, 0.0f, 0.0f, 1.0f);
+            pd.colorAttachments.push_back(ca);
+            auto pass = encoder->beginRenderPass(pd);
+            if (pass) {
+                pass->setViewport(0, 0, float(sW), float(sH), 0, 1);
+                pass->setScissorRect(0, 0, sW, sH);
+                pass->setPipeline(wgslSSAOBlurPipeline.get());
+                pass->setBindGroup(0, wgslSSAOBlurBG.get());
+                pass->draw(3);
+                pass->end();
+            }
+        }
+    }
+
+    // Bloom passes (WebGPU): prefilter HDR → half-res, then 2× separable Gaussian blur
+    if (wgslBloomPrefilterPipeline && bloomTextureView && bloomPingView) {
+        auto bloomSize = bloomTexture ? bloomTexture->getSize() : rhi::Extent3D{1, 1, 1};
+        uint32_t bW = bloomSize.width;
+        uint32_t bH = bloomSize.height;
+
+        auto runBloomPass = [&](rhi::RHIRenderPipeline* pipeline,
+                                rhi::RHITextureView*    target,
+                                rhi::RHIBindGroup*      bg,
+                                const char*             label) {
+            rhi::RenderPassDesc pd;
+            pd.width = bW; pd.height = bH; pd.label = label;
+            rhi::RenderPassColorAttachment ca;
+            ca.view = target;
+            ca.loadOp = rhi::LoadOp::Clear;
+            ca.storeOp = rhi::StoreOp::Store;
+            ca.clearValue = rhi::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
+            pd.colorAttachments.push_back(ca);
+            auto pass = encoder->beginRenderPass(pd);
+            if (pass) {
+                pass->setViewport(0, 0, float(bW), float(bH), 0, 1);
+                pass->setScissorRect(0, 0, bW, bH);
+                pass->setPipeline(pipeline);
+                pass->setBindGroup(0, bg);
+                pass->draw(3);
+                pass->end();
+            }
+        };
+
+        // 1. Prefilter: HDR → bloomTexture
+        runBloomPass(wgslBloomPrefilterPipeline.get(), bloomTextureView.get(),
+                     wgslBloomPrefilterBG.get(), "BloomPrefilter");
+
+        // 2. Two iterations of separable blur: bloom → ping (H), ping → bloom (V)
+        for (int i = 0; i < 2; ++i) {
+            runBloomPass(wgslBloomBlurHPipeline.get(), bloomPingView.get(),
+                         wgslBloomBlurBGs[0].get(), "BloomBlurH");
+            runBloomPass(wgslBloomBlurVPipeline.get(), bloomTextureView.get(),
+                         wgslBloomBlurBGs[1].get(), "BloomBlurV");
+        }
+    }
+
+    // Tonemap pass (WebGPU): HDR + bloom → LDR intermediate (ACES + gamma correction)
     if (tonemapPipeline && tonemapBindGroup && hdrColorView && ldrColorView) {
         rhi::RenderPassDesc tonemapPassDesc;
         tonemapPassDesc.width = rhiBridge->getSwapchain()->getWidth();

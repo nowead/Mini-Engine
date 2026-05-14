@@ -13,9 +13,9 @@
 #include "src/rendering/SkyboxRenderer.hpp"
 #include "src/rendering/ShadowRenderer.hpp"
 #include "src/rendering/IBLManager.hpp"
-#ifndef __EMSCRIPTEN__
 #include "src/rendering/GBufferPass.hpp"
 #include "src/rendering/DeferredLightingPass.hpp"
+#ifndef __EMSCRIPTEN__
 #include "src/rendering/BindlessTextureManager.hpp"
 #endif
 
@@ -281,12 +281,27 @@ private:
     std::unique_ptr<rhi::RHITextureView> hdrColorView;
     std::unique_ptr<rhi::RHISampler> hdrSampler;
 
+    // Bloom textures — shared between Vulkan (compute) and WebGPU (render) paths
+    std::unique_ptr<rhi::RHITexture>     bloomTexture;       // half-res RGBA16Float
+    std::unique_ptr<rhi::RHITextureView> bloomTextureView;
+    std::unique_ptr<rhi::RHITexture>     bloomPingTexture;   // ping-pong buffer
+    std::unique_ptr<rhi::RHITextureView> bloomPingView;
+    std::unique_ptr<rhi::RHISampler>     bloomSampler;
+
+    // SSAO textures — shared between Vulkan (compute) and WebGPU (render) paths
+    std::unique_ptr<rhi::RHITexture>     ssaoTexture;        // half-res R8Unorm raw AO
+    std::unique_ptr<rhi::RHITextureView> ssaoTextureView;
+    std::unique_ptr<rhi::RHITexture>     ssaoBlurTexture;    // half-res R8Unorm blurred AO
+    std::unique_ptr<rhi::RHITextureView> ssaoBlurView;
+    std::unique_ptr<rhi::RHISampler>     ssaoSampler;
+
 #ifdef __EMSCRIPTEN__
     // LDR Intermediate Target (RGBA8Unorm — tonemap writes here, FXAA reads from here)
     std::unique_ptr<rhi::RHITexture> ldrColorTexture;
     std::unique_ptr<rhi::RHITextureView> ldrColorView;
 
-    // Tonemap Pipeline (HDR → LDR intermediate: ACES + gamma) — WebGPU path
+    // Tonemap Pipeline (HDR + Bloom + SSAO → LDR: ACES + gamma) — WebGPU path
+    // bindings: 0=hdrTexture, 1=bloomTexture, 2=sampler, 3=ssaoBlurTexture
     std::unique_ptr<rhi::RHIShader> tonemapVertexShader;
     std::unique_ptr<rhi::RHIShader> tonemapFragmentShader;
     std::unique_ptr<rhi::RHIBindGroupLayout> tonemapBindGroupLayout;
@@ -301,22 +316,36 @@ private:
     std::unique_ptr<rhi::RHIBindGroup> fxaaBindGroup;
     std::unique_ptr<rhi::RHIPipelineLayout> fxaaPipelineLayout;
     std::unique_ptr<rhi::RHIRenderPipeline> fxaaPipeline;
+
+    // Bloom render pipelines — WebGPU path (prefilter + separable Gaussian blur)
+    std::unique_ptr<rhi::RHIBindGroupLayout>             wgslBloomLayout;
+    std::unique_ptr<rhi::RHIPipelineLayout>              wgslBloomPipelineLayout;
+    std::unique_ptr<rhi::RHIBindGroup>                   wgslBloomPrefilterBG;
+    std::unique_ptr<rhi::RHIRenderPipeline>              wgslBloomPrefilterPipeline;
+    std::array<std::unique_ptr<rhi::RHIBindGroup>, 2>    wgslBloomBlurBGs;
+    std::unique_ptr<rhi::RHIRenderPipeline>              wgslBloomBlurHPipeline;
+    std::unique_ptr<rhi::RHIRenderPipeline>              wgslBloomBlurVPipeline;
+
+    // SSAO render pipelines — WebGPU path
+    std::unique_ptr<rhi::RHIBuffer>          wgslSSAOParamsUBO;     // SSAOParams (96 bytes)
+    std::unique_ptr<rhi::RHIBindGroupLayout> wgslSSAOLayout;
+    std::unique_ptr<rhi::RHIBindGroup>       wgslSSAOBG;
+    std::unique_ptr<rhi::RHIPipelineLayout>  wgslSSAOPipelineLayout;
+    std::unique_ptr<rhi::RHIRenderPipeline>  wgslSSAOPipeline;
+
+    std::unique_ptr<rhi::RHIBuffer>          wgslSSAOBlurParamsUBO; // SSAOBlurParams (32 bytes)
+    std::unique_ptr<rhi::RHIBindGroupLayout> wgslSSAOBlurLayout;
+    std::unique_ptr<rhi::RHIBindGroup>       wgslSSAOBlurBG;
+    std::unique_ptr<rhi::RHIPipelineLayout>  wgslSSAOBlurPipelineLayout;
+    std::unique_ptr<rhi::RHIRenderPipeline>  wgslSSAOBlurPipeline;
 #else
     // Combined Tonemap+FXAA Post-Process Pipeline — Vulkan path (SPIR-V)
-    // Reads: hdrColorTexture + bloomTexture → writes: swapchain
     std::unique_ptr<rhi::RHIShader> postprocessVertexShader;
     std::unique_ptr<rhi::RHIShader> postprocessFragmentShader;
     std::unique_ptr<rhi::RHIBindGroupLayout> postprocessBindGroupLayout;
     std::unique_ptr<rhi::RHIBindGroup> postprocessBindGroup;
     std::unique_ptr<rhi::RHIPipelineLayout> postprocessPipelineLayout;
     std::unique_ptr<rhi::RHIRenderPipeline> postprocessPipeline;
-
-    // Bloom Resources — Vulkan path
-    std::unique_ptr<rhi::RHITexture> bloomTexture;       // half-res RGBA16Float (storage)
-    std::unique_ptr<rhi::RHITextureView> bloomTextureView;
-    std::unique_ptr<rhi::RHITexture> bloomPingTexture;   // second buffer for ping-pong blur
-    std::unique_ptr<rhi::RHITextureView> bloomPingView;
-    std::unique_ptr<rhi::RHISampler> bloomSampler;
 
     // Bloom threshold compute pipeline
     std::unique_ptr<rhi::RHIShader> bloomThresholdShader;
@@ -330,15 +359,7 @@ private:
     std::unique_ptr<rhi::RHIBindGroupLayout> bloomBlurLayout;
     std::unique_ptr<rhi::RHIPipelineLayout> bloomBlurPipelineLayout;
     std::unique_ptr<rhi::RHIComputePipeline> bloomBlurPipeline;
-    // Bind groups: [ping→pong, pong→ping] for alternating passes
     std::array<std::unique_ptr<rhi::RHIBindGroup>, 2> bloomBlurBindGroups;
-
-    // SSAO Resources — Vulkan path
-    std::unique_ptr<rhi::RHITexture> ssaoTexture;       // R8Unorm, full-res
-    std::unique_ptr<rhi::RHITextureView> ssaoTextureView;
-    std::unique_ptr<rhi::RHITexture> ssaoBlurTexture;   // R8Unorm, full-res (blurred)
-    std::unique_ptr<rhi::RHITextureView> ssaoBlurView;
-    std::unique_ptr<rhi::RHISampler> ssaoSampler;
 
     // SSAO compute pipeline
     std::unique_ptr<rhi::RHIShader> ssaoShader;
@@ -446,13 +467,13 @@ private:
     int   debugView      = 0;    // 0=normal, 1-6=GBuffer channels, 7=SSAO, 8=bloom
     float shadowSceneRadius = 200.0f;  // Orthographic projection half-extent for shadows
 
-#ifndef __EMSCRIPTEN__
-    std::unique_ptr<class GpuProfiler> gpuProfiler;
-    rendergraph::RenderGraph m_renderGraph;
-
     // Phase 3: Deferred Rendering
     std::unique_ptr<rendering::GBufferPass>          gBufferPass;
     std::unique_ptr<rendering::DeferredLightingPass> deferredLightingPass;
+
+#ifndef __EMSCRIPTEN__
+    std::unique_ptr<class GpuProfiler> gpuProfiler;
+    rendergraph::RenderGraph m_renderGraph;
 
     // Phase 4: Bindless texture registry + 3 solid-color material textures
     std::unique_ptr<rendering::BindlessTextureManager> bindlessTextureManager;
@@ -473,15 +494,17 @@ private:
     void createSkyboxRenderer();    // Phase 3.3: Skybox rendering
     void createShadowRenderer();    // Phase 3.3: Shadow mapping (CSM)
     void createIBL();               // Phase 1.2: IBL initialization
-#ifndef __EMSCRIPTEN__
     void createGBufferPass();           // Phase 3: G-Buffer geometry pass
     void createDeferredLightingPass();  // Phase 3: Deferred lighting
+#ifndef __EMSCRIPTEN__
     void createBindlessResources();     // Phase 4: Bindless texture manager + material textures
 #endif
     void createCullingPipeline();   // Phase 2.2: GPU frustum culling
     void createHDRRenderTarget();   // HDR offscreen texture (all platforms)
 #ifdef __EMSCRIPTEN__
-    void createTonemapPipeline();   // ACES tonemap post-process pass (WebGPU)
+    void createBloomPipelineWGSL(); // Bloom render pipelines (WebGPU)
+    void createSSAOPipelineWGSL();  // SSAO render pipelines (WebGPU)
+    void createTonemapPipeline();   // ACES + bloom + SSAO tonemap pass (WebGPU)
     void createFXAAPipeline();      // FXAA anti-aliasing pass (WebGPU)
 #else
     void createPostProcessPipeline();       // Combined tonemap+FXAA (Vulkan)
