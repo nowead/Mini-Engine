@@ -40,6 +40,8 @@ docs/
 
 → **[current/README.md](current/README.md)**
 
+- [WEBGPU_SHOWCASE_PLAN.md](current/webgpu-showcase/WEBGPU_SHOWCASE_PLAN.md) — WebGPU 쇼케이스 격상 계획 (Emscripten bindings + HTML overlay)
+
 ---
 
 ## 거시적 방향

@@ -4,23 +4,28 @@
 
 ---
 
-## WebGPU Deferred Rendering Porting
+## WebGPU Showcase 격상
 
-**목표**: Vulkan showcase_demo와 동등한 시각적 결과물을 WebGPU/WASM에서 구현
+**목표**: 네이티브 수준으로 완성된 WebGPU 렌더링 파이프라인을 쇼케이스를 통해 인터랙티브하게 시연
 
 | 문서 | 설명 |
-|---|---|
-| [WEBGPU_DEFERRED_PORTING_PLAN.md](webgpu-deferred/WEBGPU_DEFERRED_PORTING_PLAN.md) | Phase 0~6 구현 계획 |
-| [DEFERRED_RENDERING_TROUBLESHOOTING.md](webgpu-deferred/DEFERRED_RENDERING_TROUBLESHOOTING.md) | 포팅 중 발생한 이슈 및 해결 기록 |
+| --- | --- |
+| [WEBGPU_SHOWCASE_PLAN.md](webgpu-showcase/WEBGPU_SHOWCASE_PLAN.md) | WebGPU UI/인터랙션 격상 구현 계획 |
 
 ### 진행 상황
 
-| Phase | 내용 | 상태 |
-|---|---|---|
-| 0 | Push Constant Emulator | ✅ 완료 |
-| 1 | G-Buffer WGSL + GBufferPass 활성화 | ✅ 완료 |
-| 2 | Deferred Lighting WGSL + DeferredLightingPass 활성화 | ✅ 완료 |
-| 3 | Bloom 렌더패스 | ✅ 완료 |
-| 4 | SSAO 컴퓨트 | ✅ 완료 |
-| 5 | 통합 PostProcess Pass | ✅ 완료 |
-| 6 | 가드 정리 & 프레임 루프 통합 | ✅ 완료 |
+| 작업 | 내용 | 상태 |
+| --- | --- | --- |
+| 1 | Emscripten bindings — Renderer setter를 JS에 노출 | 🔄 예정 |
+| 2 | HTML overlay UI — Debug view, Post-process, 조명 패널 | 🔄 예정 |
+| 3 | WGSL DeferredLighting — CSM cascade 색상 오버레이 | 🔄 예정 |
+| 4 | 씬에 동적 점 광원 배치 (도로 교차점 가로등) | 🔄 예정 |
+| 5 | WebGPU timestamp-query 기반 GPU 타이밍 표시 | 🔄 예정 |
+
+---
+
+## 완료된 작업 → archive
+
+| 폴더 | 내용 |
+| --- | --- |
+| [archive/refactoring/webgpu-deferred/](../archive/refactoring/webgpu-deferred/) | WebGPU Deferred Rendering 포팅 (Phase 0–6 완료) |
