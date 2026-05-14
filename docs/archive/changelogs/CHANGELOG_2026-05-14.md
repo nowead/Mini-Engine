@@ -1,18 +1,20 @@
 # 변경 이력 — 2026-05-14
 
-> 작업 범위: 미사용 셰이더 정리 · 문서 구조 재편 · WebGPU 후처리 파이프라인 단일 패스 통합
+> 작업 범위: 미사용 셰이더 정리 · 문서 구조 재편 · WebGPU 후처리 파이프라인 단일 패스 통합 · GBufferPass/DeferredLightingPass 플랫폼 분기 정리
 
 ---
 
 ## 1. 개요
 
-세 가지 작업으로 구성:
+네 가지 작업으로 구성:
 
 1. **미사용 셰이더 제거** — 런타임에서 참조하지 않는 `tonemap.frag.glsl` / `tonemap.frag.spv` 파일과 CMakeLists.txt 빌드 항목 제거.
 
 2. **문서 구조 재편** — 진행 중인 문서가 완료된 아카이브 폴더에 묻혀 있던 문제를 해결하기 위해 `docs/`를 `current/`, `roadmap/`, `guides/`, `archive/` 4개 폴더로 재구성.
 
 3. **WebGPU 후처리 파이프라인 단일 패스 통합** — WebGPU 경로에서 Tonemap과 FXAA를 각각 별도 렌더 패스로 처리하던 구조를, SSAO 합성·Bloom 합성·ACES 톤맵·FXAA를 모두 수행하는 단일 셰이더(`postprocess.wgsl`)로 교체. LDR 중간 버퍼(`ldrColorTexture`) 제거.
+
+4. **GBufferPass/DeferredLightingPass 플랫폼 분기 정리** — `drawFrame()`에서 GBufferPass 실행을 감싸던 `#ifndef __EMSCRIPTEN__` / `#else` / `#endif` 외부 분기를 제거하고 Vulkan·WebGPU 공통 경로로 통합. DeferredLightingPass 인라인 실행은 `#ifdef __EMSCRIPTEN__` 단독 블록으로 명시적으로 분리.
 
 ---
 
@@ -216,7 +218,105 @@ if (wgslPostprocessPipeline && ...) {
 
 ---
 
-## 5. 수정된 파일 목록
+## 5. GBufferPass/DeferredLightingPass 플랫폼 분기 정리
+
+### 5.1 배경
+
+Phase 0~5 포팅이 완료된 시점에서 `drawFrame()`에는 GBufferPass 실행 블록이 Vulkan과 WebGPU 경로로 이분되어 있었음:
+
+```cpp
+#ifndef __EMSCRIPTEN__
+    // Vulkan: bindless 포함 GBufferPass 실행
+    ...
+    pendingInstancedData.reset();
+#else
+    // WebGPU: bindless 없이 GBufferPass 실행
+    ...
+    // WebGPU 전용: DeferredLightingPass 인라인 실행
+    ...
+#endif
+```
+
+두 경로의 GBufferPass 실행 로직은 bindless descriptor set 조회 여부를 제외하면 동일한 구조였고, 이 외부 분기가 코드를 불필요하게 이중화하고 있었음.
+
+### 5.2 변경 내용
+
+**`drawFrame()` GBufferPass 통합:**
+
+```cpp
+// 통합 이후: 플랫폼 무관 공통 경로
+if (gBufferPass && gBufferPass->isInitialized() && ...) {
+    VkDescriptorSet bindlessSet = VK_NULL_HANDLE;
+#ifndef __EMSCRIPTEN__
+    if (bindlessTextureManager && bindlessTextureManager->isAvailable())
+        bindlessSet = bindlessTextureManager->getVkDescriptorSet();
+#endif
+    gBufferPass->execute(..., bindlessSet);
+}
+if (pendingInstancedData) pendingInstancedData.reset();
+```
+
+bindless descriptor set 조회만 `#ifndef __EMSCRIPTEN__` 내부 분기로 유지하고, 나머지 실행 경로는 단일화.
+
+**`drawFrame()` DeferredLightingPass 분리:**
+
+DeferredLightingPass는 WebGPU에서 인라인 순차 실행, Vulkan에서 하단 RenderGraph를 통해 실행하는 구조적 차이가 있어 완전한 통합이 불가. WebGPU 인라인 실행 블록을 `#ifdef __EMSCRIPTEN__` 단독 블록으로 명시적 분리하여 의도를 명확히 함:
+
+```cpp
+#ifdef __EMSCRIPTEN__
+    // Deferred Lighting pass — WebGPU sequential path
+    // (Vulkan executes this via RenderGraph in the section below)
+    if (deferredLightingPass && ...) { ... }
+#endif
+```
+
+**`createGBufferPass()` 단순화:**
+
+```cpp
+// 이전: #ifndef / #else / #endif 3단 구조
+#ifndef __EMSCRIPTEN__
+    VkDescriptorSetLayout bindlessLayout = VK_NULL_HANDLE;
+    if (...) bindlessLayout = ...;
+#else
+    VkDescriptorSetLayout bindlessLayout = nullptr;
+#endif
+
+// 이후: 공통 선언 + #ifndef 단일 블록
+VkDescriptorSetLayout bindlessLayout = VK_NULL_HANDLE;
+#ifndef __EMSCRIPTEN__
+    if (...) bindlessLayout = ...;
+#endif
+```
+
+**`GBufferPass.cpp` 로그 통합:**
+
+`initialize()` 완료 로그의 `#ifndef`/`#else`/`#endif`를 제거. WebGPU에서도 `bindlessLayout`이 항상 null이므로 동일한 조건 출력식 재사용:
+
+```cpp
+// 이전: 플랫폼별 별도 문자열
+#ifndef __EMSCRIPTEN__
+    std::cout << "[GBufferPass] Initialized " << w << "x" << h
+              << (bindlessLayout ? " (bindless enabled)" : " (bindless disabled)") << "\n";
+#else
+    std::cout << "[GBufferPass] Initialized " << w << "x" << h << " (WebGPU)\n";
+#endif
+
+// 이후: 단일 출력
+std::cout << "[GBufferPass] Initialized " << w << "x" << h
+          << (bindlessLayout ? " (bindless enabled)" : " (bindless disabled)") << "\n";
+```
+
+### 5.3 효과
+
+| 항목 | 이전 | 이후 |
+| --- | --- | --- |
+| GBufferPass 실행 블록 수 | 2 (Vulkan/WebGPU 각각) | 1 (공통 + 내부 분기) |
+| DeferredLightingPass 위치 | `#else` 내부에 암묵적 내포 | `#ifdef __EMSCRIPTEN__` 명시적 독립 블록 |
+| createGBufferPass 분기 구조 | `#ifndef`/`#else`/`#endif` | `#ifndef`/`#endif` |
+
+---
+
+## 6. 수정된 파일 목록
 
 | 파일 | 변경 내용 |
 | --- | --- |
@@ -225,9 +325,10 @@ if (wgslPostprocessPipeline && ...) {
 | `shaders/postprocess.wgsl` | **신규** — 통합 후처리 셰이더 |
 | `CMakeLists.txt` | `tonemap.frag.spv` 빌드 커맨드 및 의존 항목 제거 |
 | `src/rendering/Renderer.hpp` | WebGPU 후처리 멤버 교체, 함수 선언 교체 |
-| `src/rendering/Renderer.cpp` | `createPostProcessPipelineWGSL()` 추가, 기존 tonemap/fxaa 파이프라인 생성 함수 제거, drawFrame 후처리 통합 |
+| `src/rendering/Renderer.cpp` | 후처리 통합, GBufferPass 분기 제거, createGBufferPass 단순화 |
+| `src/rendering/GBufferPass.cpp` | initialize() 로그 메세지 플랫폼 분기 제거 |
 | `docs/README.md` | 새 구조 기반 네비게이션 인덱스로 교체 |
-| `docs/current/README.md` | **신규** — 현재 작업 진행 상황 인덱스 |
+| `docs/current/README.md` | **신규** → 진행 상황 인덱스 (Phase 5·6 완료 반영) |
 | `docs/current/webgpu-deferred/` | `WEBGPU_DEFERRED_PORTING_PLAN.md`, `DEFERRED_RENDERING_TROUBLESHOOTING.md` 이동 |
 | `docs/roadmap/` | SHOWCASE_ROADMAP, CAREER_ROADMAP, OPTIMIZATION 문서 이동 |
 | `docs/guides/` | BUILD_GUIDE, WebGPU 관련 가이드 이동 |

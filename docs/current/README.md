@@ -22,5 +22,5 @@
 | 2 | Deferred Lighting WGSL + DeferredLightingPass 활성화 | ✅ 완료 |
 | 3 | Bloom 렌더패스 | ✅ 완료 |
 | 4 | SSAO 컴퓨트 | ✅ 완료 |
-| 5 | 통합 PostProcess Pass | 🔄 예정 |
-| 6 | 가드 정리 & 프레임 루프 통합 | 🔄 예정 |
+| 5 | 통합 PostProcess Pass | ✅ 완료 |
+| 6 | 가드 정리 & 프레임 루프 통합 | ✅ 완료 |

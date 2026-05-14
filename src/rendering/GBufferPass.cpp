@@ -52,12 +52,8 @@ bool GBufferPass::initialize(uint32_t width, uint32_t height,
     }
 
     m_initialized = true;
-#ifndef __EMSCRIPTEN__
     std::cout << "[GBufferPass] Initialized " << width << "x" << height
               << (bindlessLayout ? " (bindless enabled)" : " (bindless disabled)") << "\n";
-#else
-    std::cout << "[GBufferPass] Initialized " << width << "x" << height << " (WebGPU)\n";
-#endif
     return true;
 }
 

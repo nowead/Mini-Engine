@@ -1222,12 +1222,10 @@ void Renderer::createGBufferPass() {
     uint32_t W = rhiBridge->getSwapchain()->getWidth();
     uint32_t H = rhiBridge->getSwapchain()->getHeight();
 
-#ifndef __EMSCRIPTEN__
     VkDescriptorSetLayout bindlessLayout = VK_NULL_HANDLE;
+#ifndef __EMSCRIPTEN__
     if (bindlessTextureManager && bindlessTextureManager->isAvailable())
         bindlessLayout = bindlessTextureManager->getVkDescriptorSetLayout();
-#else
-    VkDescriptorSetLayout bindlessLayout = nullptr;
 #endif
 
     gBufferPass = std::make_unique<rendering::GBufferPass>(device);
@@ -3078,23 +3076,21 @@ void Renderer::drawFrame() {
         renderPass->end();
     }
 
-    // Phase 3: G-Buffer pass (geometry → G-Buffers + depth, before render graph)
-#ifndef __EMSCRIPTEN__
+    // G-Buffer pass — geometry to G-Buffers + depth (Vulkan + WebGPU)
     if (gBufferPass && gBufferPass->isInitialized()
         && pendingInstancedData && pendingInstancedData->instanceCount > 0) {
         auto* mesh         = pendingInstancedData->mesh;
         auto* objectBuffer = pendingInstancedData->objectBuffer;
         uint32_t W = rhiBridge->getSwapchain()->getWidth();
         uint32_t H = rhiBridge->getSwapchain()->getHeight();
-
         if (mesh && mesh->hasData() && objectBuffer) {
             rhi::RHIBindGroup* bg0 = (frameIndex < buildingBindGroups.size())
                                      ? buildingBindGroups[frameIndex].get() : nullptr;
-            // Phase 4: pass bindless descriptor set (null when unavailable → shader uses procedural albedo)
             VkDescriptorSet bindlessSet = VK_NULL_HANDLE;
+#ifndef __EMSCRIPTEN__
             if (bindlessTextureManager && bindlessTextureManager->isAvailable())
                 bindlessSet = bindlessTextureManager->getVkDescriptorSet();
-
+#endif
             gBufferPass->execute(encoder.get(),
                                  bg0,
                                  ssboBindGroups[frameIndex].get(),
@@ -3104,32 +3100,12 @@ void Renderer::drawFrame() {
                                  W, H,
                                  bindlessSet);
         }
-        pendingInstancedData.reset();
-    }
-#else
-    // WebGPU: G-Buffer pass (deferred geometry)
-    if (gBufferPass && gBufferPass->isInitialized()
-        && pendingInstancedData && pendingInstancedData->instanceCount > 0) {
-        auto* mesh         = pendingInstancedData->mesh;
-        auto* objectBuffer = pendingInstancedData->objectBuffer;
-        uint32_t gW = rhiBridge->getSwapchain()->getWidth();
-        uint32_t gH = rhiBridge->getSwapchain()->getHeight();
-        if (mesh && mesh->hasData() && objectBuffer) {
-            rhi::RHIBindGroup* bg0 = (frameIndex < buildingBindGroups.size())
-                                     ? buildingBindGroups[frameIndex].get() : nullptr;
-            gBufferPass->execute(encoder.get(),
-                                 bg0,
-                                 ssboBindGroups[frameIndex].get(),
-                                 mesh->getVertexBuffer(),
-                                 mesh->getIndexBuffer(),
-                                 indirectDrawBuffers[frameIndex].get(),
-                                 gW, gH,
-                                 nullptr);  // no bindless on WebGPU
-        }
     }
     if (pendingInstancedData) pendingInstancedData.reset();
 
-    // WebGPU: Deferred Lighting pass (G-Buffers → HDR)
+#ifdef __EMSCRIPTEN__
+    // Deferred Lighting pass — WebGPU sequential path
+    // (Vulkan executes this via RenderGraph in the section below)
     if (deferredLightingPass && deferredLightingPass->isInitialized()
         && gBufferPass && gBufferPass->isInitialized()) {
         uint32_t dlW = rhiBridge->getSwapchain()->getWidth();
