@@ -45,6 +45,25 @@ public:
      */
     void run();
 
+#ifdef __EMSCRIPTEN__
+    void wasm_setDebugView(int v)        { if (renderer) renderer->setDebugView(v); }
+    void wasm_setBloomStrength(float s)   { if (renderer) renderer->setBloomStrength(s); }
+    void wasm_setAOStrength(float s)      { if (renderer) renderer->setAOStrength(s); }
+    void wasm_setTonemapEnabled(bool on)  { if (renderer) renderer->setTonemapEnabled(on); }
+    void wasm_setFXAAEnabled(bool on)     { if (renderer) renderer->setFXAAEnabled(on); }
+    void wasm_setDebugCascades(bool on)   { if (renderer) renderer->setDebugCascades(on); }
+    void wasm_setSunIntensity(float i)    { if (renderer) renderer->setSunIntensity(i); }
+    void wasm_setExposure(float e)        { if (renderer) renderer->setExposure(e); }
+    void wasm_setPointLightCount(int n);
+
+    float wasm_getPassTimeGBuffer()     const { return renderer ? renderer->getPassTimeGBuffer()     : 0.f; }
+    float wasm_getPassTimeDeferred()    const { return renderer ? renderer->getPassTimeDeferred()    : 0.f; }
+    float wasm_getPassTimeSSAO()        const { return renderer ? renderer->getPassTimeSSAO()        : 0.f; }
+    float wasm_getPassTimeBloom()       const { return renderer ? renderer->getPassTimeBloom()       : 0.f; }
+    float wasm_getPassTimePostProcess() const { return renderer ? renderer->getPassTimePostProcess() : 0.f; }
+    float wasm_getPassTimeTotal()       const { return renderer ? renderer->getPassTimeTotal()       : 0.f; }
+#endif
+
 private:
     // Window configuration
     static constexpr uint32_t WINDOW_WIDTH = 1280;
@@ -92,6 +111,9 @@ private:
     bool m_pendingResize = false;
     int  m_pendingWidth  = 0;
     int  m_pendingHeight = 0;
+
+    // Pre-built street light list — a subset is sent to the renderer based on UI control
+    std::vector<PointLight> streetLights;
 #endif
 
     // Initialization

@@ -3076,6 +3076,12 @@ void Renderer::drawFrame() {
         renderPass->end();
     }
 
+#ifdef __EMSCRIPTEN__
+    using _Clock = std::chrono::high_resolution_clock;
+    auto _tFrame = _Clock::now();
+    auto _tPass  = _tFrame;
+#endif
+
     // G-Buffer pass — geometry to G-Buffers + depth (Vulkan + WebGPU)
     if (gBufferPass && gBufferPass->isInitialized()
         && pendingInstancedData && pendingInstancedData->instanceCount > 0) {
@@ -3104,6 +3110,9 @@ void Renderer::drawFrame() {
     if (pendingInstancedData) pendingInstancedData.reset();
 
 #ifdef __EMSCRIPTEN__
+    m_passTimeGBuffer = std::chrono::duration<float, std::milli>(_Clock::now() - _tPass).count();
+    _tPass = _Clock::now();
+
     // Deferred Lighting pass — WebGPU sequential path
     // (Vulkan executes this via RenderGraph in the section below)
     if (deferredLightingPass && deferredLightingPass->isInitialized()
@@ -3129,6 +3138,8 @@ void Renderer::drawFrame() {
             dlPass->end();
         }
     }
+    m_passTimeDeferred = std::chrono::duration<float, std::milli>(_Clock::now() - _tPass).count();
+    _tPass = _Clock::now();
 #endif
 
     // Phase 4.1: GPU Profiling — end main render pass timer
@@ -3213,6 +3224,8 @@ void Renderer::drawFrame() {
             }
         }
     }
+    m_passTimeSSAO = std::chrono::duration<float, std::milli>(_Clock::now() - _tPass).count();
+    _tPass = _Clock::now();
 
     // Bloom passes (WebGPU): prefilter HDR → half-res, then 2× separable Gaussian blur
     if (wgslBloomPrefilterPipeline && bloomTextureView && bloomPingView) {
@@ -3255,6 +3268,8 @@ void Renderer::drawFrame() {
                          wgslBloomBlurBGs[1].get(), "BloomBlurV");
         }
     }
+    m_passTimeBloom = std::chrono::duration<float, std::milli>(_Clock::now() - _tPass).count();
+    _tPass = _Clock::now();
 
     // PostProcess pass (WebGPU): HDR + Bloom + SSAO → ACES + FXAA → swapchain
     if (wgslPostprocessPipeline && wgslPostprocessBG && hdrColorView && swapchainView) {
@@ -3303,6 +3318,7 @@ void Renderer::drawFrame() {
             pass->end();
         }
     }
+    m_passTimePostProcess = std::chrono::duration<float, std::milli>(_Clock::now() - _tPass).count();
 #endif  // __EMSCRIPTEN__
 
 #ifndef __EMSCRIPTEN__
@@ -3621,6 +3637,9 @@ void Renderer::drawFrame() {
 
     // Finish command buffer
     auto commandBuffer = encoder->finish();
+#ifdef __EMSCRIPTEN__
+    m_passTimeTotal = std::chrono::duration<float, std::milli>(_Clock::now() - _tFrame).count();
+#endif
 
     // Step 4: Submit command buffer with synchronization
     if (commandBuffer) {

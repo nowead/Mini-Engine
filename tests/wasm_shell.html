@@ -98,6 +98,151 @@
         #fullscreenBtn:hover {
             opacity: 1;
         }
+
+        /* Debug Control Panel */
+        #controlPanel {
+            position: fixed;
+            top: 16px;
+            left: 16px;
+            z-index: 20;
+            background: rgba(8, 10, 18, 0.88);
+            border: 1px solid rgba(74, 158, 255, 0.25);
+            border-radius: 8px;
+            color: #c0c8d8;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-size: 11px;
+            min-width: 210px;
+            -webkit-user-select: none;
+            user-select: none;
+            -webkit-backdrop-filter: blur(6px);
+            backdrop-filter: blur(6px);
+            overflow: hidden;
+        }
+
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 12px;
+            background: rgba(74, 158, 255, 0.08);
+            border-bottom: 1px solid rgba(74, 158, 255, 0.15);
+            cursor: pointer;
+            color: #4a9eff;
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: 0.03em;
+        }
+
+        .panel-header:hover {
+            background: rgba(74, 158, 255, 0.14);
+        }
+
+        #panelBody {
+            padding: 8px 12px 10px;
+        }
+
+        .section-label {
+            color: #4a9eff;
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            margin: 10px 0 5px;
+            padding-bottom: 3px;
+            border-bottom: 1px solid rgba(74, 158, 255, 0.15);
+        }
+
+        .section-label:first-child {
+            margin-top: 2px;
+        }
+
+        .radio-group {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 2px 4px;
+            margin-bottom: 2px;
+        }
+
+        .radio-group label {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            cursor: pointer;
+            padding: 2px 0;
+            white-space: nowrap;
+        }
+
+        .radio-group label:hover {
+            color: #fff;
+        }
+
+        .toggle {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            padding: 3px 0;
+        }
+
+        .toggle:hover {
+            color: #fff;
+        }
+
+        .slider-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 3px 0;
+        }
+
+        .slider-row span:first-child {
+            min-width: 58px;
+        }
+
+        .slider-row input[type=range] {
+            flex: 1;
+            height: 3px;
+            accent-color: #4a9eff;
+            cursor: pointer;
+        }
+
+        .slider-row .val {
+            min-width: 32px;
+            text-align: right;
+            color: #8af;
+            font-variant-numeric: tabular-nums;
+        }
+
+        input[type=checkbox], input[type=radio] {
+            accent-color: #4a9eff;
+            cursor: pointer;
+        }
+
+        .timing-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 2px 0;
+            color: #8a9ab8;
+        }
+
+        .t-val {
+            color: #4aefb8;
+            font-variant-numeric: tabular-nums;
+            min-width: 48px;
+            text-align: right;
+        }
+
+        .timing-label-note {
+            font-size: 9px;
+            color: #444;
+            font-weight: 400;
+        }
+
+        .timing-total {
+            border-top: 1px solid rgba(74, 158, 255, 0.15);
+            margin-top: 3px;
+            padding-top: 4px;
+        }
     </style>
 </head>
 <body>
@@ -110,7 +255,72 @@
         <div id="statusText">Loading...</div>
     </div>
 
-    <button id="fullscreenBtn" title="Toggle Fullscreen (F)">&#x26F6;</button>
+    <button id="fullscreenBtn" type="button" title="Toggle Fullscreen (F)">&#x26F6;</button>
+
+    <div id="controlPanel">
+        <div class="panel-header" id="panelToggle">
+            <span>&#9881; Debug Controls</span>
+            <span id="panelChevron">&#9660;</span>
+        </div>
+        <div id="panelBody">
+            <div class="section-label">G-Buffer View</div>
+            <div class="radio-group">
+                <label><input type="radio" name="debugView" value="0" checked> Normal</label>
+                <label><input type="radio" name="debugView" value="1"> Normals</label>
+                <label><input type="radio" name="debugView" value="2"> Albedo</label>
+                <label><input type="radio" name="debugView" value="3"> Metallic</label>
+                <label><input type="radio" name="debugView" value="4"> Roughness</label>
+                <label><input type="radio" name="debugView" value="5"> AO</label>
+                <label><input type="radio" name="debugView" value="6"> Depth</label>
+                <label><input type="radio" name="debugView" value="7"> SSAO</label>
+                <label><input type="radio" name="debugView" value="8"> Bloom</label>
+            </div>
+
+            <div class="section-label">Post-Process</div>
+            <label class="toggle"><input type="checkbox" id="tonemapEnabled" checked> Tonemap (ACES)</label>
+            <label class="toggle"><input type="checkbox" id="fxaaEnabled" checked> FXAA</label>
+            <div class="slider-row">
+                <span>Exposure</span>
+                <input type="range" id="exposure" aria-label="Exposure" min="0.1" max="5.0" step="0.1" value="1.0">
+                <span class="val" id="exposureVal">1.0</span>
+            </div>
+            <div class="slider-row">
+                <span>Bloom</span>
+                <input type="range" id="bloomStrength" aria-label="Bloom Strength" min="0" max="1.0" step="0.01" value="0.04">
+                <span class="val" id="bloomVal">0.04</span>
+            </div>
+            <div class="slider-row">
+                <span>SSAO</span>
+                <input type="range" id="aoStrength" aria-label="SSAO Strength" min="0" max="2.0" step="0.05" value="0.6">
+                <span class="val" id="aoVal">0.60</span>
+            </div>
+
+            <div class="section-label">Lighting</div>
+            <div class="slider-row">
+                <span>Sun</span>
+                <input type="range" id="sunIntensity" aria-label="Sun Intensity" min="0" max="10.0" step="0.1" value="1.5">
+                <span class="val" id="sunVal">1.5</span>
+            </div>
+            <div class="slider-row">
+                <span>Street Lights</span>
+                <input type="range" id="pointLightCount" aria-label="Street Light Count" min="0" max="9" step="1" value="9">
+                <span class="val" id="plVal">9</span>
+            </div>
+
+            <div class="section-label">Debug</div>
+            <label class="toggle"><input type="checkbox" id="debugCascades"> CSM Cascades</label>
+
+            <div class="section-label">Pass Timings <span class="timing-label-note">(CPU ms)</span></div>
+            <div class="timing-row"><span>G-Buffer</span>     <span class="t-val" id="tGBuffer">—</span></div>
+            <div class="timing-row"><span>Deferred</span>     <span class="t-val" id="tDeferred">—</span></div>
+            <div class="timing-row"><span>SSAO</span>         <span class="t-val" id="tSSAO">—</span></div>
+            <div class="timing-row"><span>Bloom</span>        <span class="t-val" id="tBloom">—</span></div>
+            <div class="timing-row"><span>Post-Process</span> <span class="t-val" id="tPostProcess">—</span></div>
+            <div class="timing-row timing-total">
+                <span>Total</span> <span class="t-val" id="tTotal">—</span>
+            </div>
+        </div>
+    </div>
 
     <script type="text/javascript">
         var overlay = document.getElementById('overlay');
@@ -137,7 +347,80 @@
             }
         });
 
+        // Panel collapse toggle
+        var panelBody = document.getElementById('panelBody');
+        var panelChevron = document.getElementById('panelChevron');
+        document.getElementById('panelToggle').addEventListener('click', function() {
+            var collapsed = panelBody.style.display === 'none';
+            panelBody.style.display = collapsed ? '' : 'none';
+            panelChevron.innerHTML = collapsed ? '&#9660;' : '&#9658;';
+        });
+
+        // Helper: update a slider value display and call Module function
+        function bindSlider(id, valId, digits, fn) {
+            var el = document.getElementById(id);
+            var valEl = document.getElementById(valId);
+            el.addEventListener('input', function() {
+                var v = parseFloat(this.value);
+                valEl.textContent = v.toFixed(digits);
+                if (typeof Module[fn] === 'function') Module[fn](v);
+            });
+        }
+
+        function wireControls() {
+            // G-Buffer view radios
+            document.querySelectorAll('input[name="debugView"]').forEach(function(r) {
+                r.addEventListener('change', function() {
+                    Module.setDebugView(parseInt(this.value, 10));
+                });
+            });
+
+            // Post-process toggles
+            document.getElementById('tonemapEnabled').addEventListener('change', function() {
+                Module.setTonemapEnabled(this.checked);
+            });
+            document.getElementById('fxaaEnabled').addEventListener('change', function() {
+                Module.setFXAAEnabled(this.checked);
+            });
+
+            // Post-process sliders
+            bindSlider('exposure',     'exposureVal', 1, 'setExposure');
+            bindSlider('bloomStrength','bloomVal',    2, 'setBloomStrength');
+            bindSlider('aoStrength',   'aoVal',       2, 'setAOStrength');
+
+            // Lighting sliders
+            bindSlider('sunIntensity', 'sunVal', 1, 'setSunIntensity');
+
+            // Street lights
+            var plEl = document.getElementById('pointLightCount');
+            var plVal = document.getElementById('plVal');
+            plEl.addEventListener('input', function() {
+                var n = parseInt(this.value, 10);
+                plVal.textContent = n;
+                Module.setPointLightCount(n);
+            });
+
+            // Debug CSM cascades
+            document.getElementById('debugCascades').addEventListener('change', function() {
+                Module.setDebugCascades(this.checked);
+            });
+
+            // Pass timing poller — updates every 500 ms
+            function updateTimings() {
+                document.getElementById('tGBuffer').textContent     = Module.getPassTimeGBuffer().toFixed(2) + ' ms';
+                document.getElementById('tDeferred').textContent    = Module.getPassTimeDeferred().toFixed(2) + ' ms';
+                document.getElementById('tSSAO').textContent        = Module.getPassTimeSSAO().toFixed(2) + ' ms';
+                document.getElementById('tBloom').textContent       = Module.getPassTimeBloom().toFixed(2) + ' ms';
+                document.getElementById('tPostProcess').textContent = Module.getPassTimePostProcess().toFixed(2) + ' ms';
+                document.getElementById('tTotal').textContent       = Module.getPassTimeTotal().toFixed(2) + ' ms';
+            }
+            setInterval(updateTimings, 500);
+        }
+
         var Module = {
+            onRuntimeInitialized: function() {
+                wireControls();
+            },
             canvas: canvas,
 
             preRun: [],

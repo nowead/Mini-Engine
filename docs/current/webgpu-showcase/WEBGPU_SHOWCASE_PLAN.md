@@ -1,7 +1,7 @@
 # WebGPU Showcase 격상 계획
 
 **작성일**: 2026-05-14
-**상태**: 진행 예정
+**상태**: Task 1–5 완료
 **선행 작업**: WebGPU Deferred Rendering 포팅 (Phase 0–6) 완료
 
 ---

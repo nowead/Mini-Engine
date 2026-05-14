@@ -577,6 +577,9 @@ else()
         src/rendering/GBufferPass.hpp
         src/rendering/DeferredLightingPass.cpp
         src/rendering/DeferredLightingPass.hpp
+        # WASM/JS bindings
+        src/wasm/WASMBindings.hpp
+        src/wasm/WASMBindings.cpp
     )
 
     target_include_directories(MiniEngine BEFORE PRIVATE
@@ -610,8 +613,7 @@ else()
             ${CMAKE_CURRENT_SOURCE_DIR}/shaders/bloom_blur.wgsl
             ${CMAKE_CURRENT_SOURCE_DIR}/shaders/ssao.wgsl
             ${CMAKE_CURRENT_SOURCE_DIR}/shaders/ssao_blur.wgsl
-            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/tonemap.wgsl
-            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/fxaa.wgsl
+            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess.wgsl
             ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shadow.wgsl
             ${CMAKE_CURRENT_SOURCE_DIR}/shaders/skybox.wgsl
             ${CMAKE_CURRENT_SOURCE_DIR}/shaders/particle.wgsl
@@ -638,6 +640,7 @@ else()
         "SHELL:-s DISABLE_EXCEPTION_CATCHING=0"
         "SHELL:-s ERROR_ON_UNDEFINED_SYMBOLS=0"
         "SHELL:-O2"
+        "SHELL:--bind"
         "SHELL:--preload-file ${CMAKE_CURRENT_BINARY_DIR}/shaders@/shaders"
         "SHELL:--shell-file ${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm_shell.html"
     )

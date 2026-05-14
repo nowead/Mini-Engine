@@ -16,11 +16,11 @@
 
 | 작업 | 내용 | 상태 |
 | --- | --- | --- |
-| 1 | Emscripten bindings — Renderer setter를 JS에 노출 | 🔄 예정 |
-| 2 | HTML overlay UI — Debug view, Post-process, 조명 패널 | 🔄 예정 |
-| 3 | WGSL DeferredLighting — CSM cascade 색상 오버레이 | 🔄 예정 |
-| 4 | 씬에 동적 점 광원 배치 (도로 교차점 가로등) | 🔄 예정 |
-| 5 | WebGPU timestamp-query 기반 GPU 타이밍 표시 | 🔄 예정 |
+| 1 | Emscripten bindings — Renderer setter를 JS에 노출 | ✅ 완료 |
+| 2 | HTML overlay UI — Debug view, Post-process, 조명 패널 | ✅ 완료 |
+| 3 | WGSL DeferredLighting — CSM cascade 색상 오버레이 | ✅ 완료 (셰이더 기구현) |
+| 4 | 씬에 동적 점 광원 배치 (도로 교차점 가로등) | ✅ 완료 |
+| 5 | CPU-side 패스 타이밍 표시 (HTML 패널 실시간 폴링) | ✅ 완료 |
 
 ---
 

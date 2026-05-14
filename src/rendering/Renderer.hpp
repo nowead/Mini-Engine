@@ -199,6 +199,16 @@ public:
     void setDebugView(int v) { debugView = v; }
     int  getDebugView() const { return debugView; }
 
+#ifdef __EMSCRIPTEN__
+    // CPU-side pass recording times (milliseconds), updated every drawFrame()
+    float getPassTimeGBuffer()     const { return m_passTimeGBuffer; }
+    float getPassTimeDeferred()    const { return m_passTimeDeferred; }
+    float getPassTimeSSAO()        const { return m_passTimeSSAO; }
+    float getPassTimeBloom()       const { return m_passTimeBloom; }
+    float getPassTimePostProcess() const { return m_passTimePostProcess; }
+    float getPassTimeTotal()       const { return m_passTimeTotal; }
+#endif
+
     /**
      * @brief Set dynamic point lights for the deferred lighting pass (Phase 4 showcase).
      *        Clamped to MAX_POINT_LIGHTS (32). Call once per frame before drawFrame().
@@ -455,6 +465,14 @@ private:
     bool  debugCascades  = false;// CSM cascade color debug
     int   debugView      = 0;    // 0=normal, 1-6=GBuffer channels, 7=SSAO, 8=bloom
     float shadowSceneRadius = 200.0f;  // Orthographic projection half-extent for shadows
+#ifdef __EMSCRIPTEN__
+    float m_passTimeGBuffer     = 0.0f;
+    float m_passTimeDeferred    = 0.0f;
+    float m_passTimeSSAO        = 0.0f;
+    float m_passTimeBloom       = 0.0f;
+    float m_passTimePostProcess = 0.0f;
+    float m_passTimeTotal       = 0.0f;
+#endif
 
     // Phase 3: Deferred Rendering
     std::unique_ptr<rendering::GBufferPass>          gBufferPass;

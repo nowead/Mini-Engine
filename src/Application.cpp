@@ -151,8 +151,36 @@ void Application::initGameLogic() {
                 mockDataGen->registerTicker(ticker, initialPrice);
             }
         }
+
+#ifdef __EMSCRIPTEN__
+        // Place street lights at intersections between building rows/columns
+        int intervals = gridSize - 1;
+        for (int ix = 0; ix < intervals; ++ix) {
+            for (int iz = 0; iz < intervals; ++iz) {
+                PointLight pl;
+                pl.position  = glm::vec3(startX + (ix + 0.5f) * spacing,
+                                         10.0f,
+                                         startZ + (iz + 0.5f) * spacing);
+                pl.radius    = 25.0f;
+                pl.color     = glm::vec3(1.0f, 0.75f, 0.35f);
+                pl.intensity = 3.0f;
+                streetLights.push_back(pl);
+            }
+        }
+        renderer->setPointLights(streetLights);
+#endif
     }
 }
+
+#ifdef __EMSCRIPTEN__
+void Application::wasm_setPointLightCount(int n) {
+    if (!renderer) return;
+    int total = static_cast<int>(streetLights.size());
+    int count = n < 0 ? 0 : (n > total ? total : n);
+    renderer->setPointLights(std::vector<PointLight>(streetLights.begin(),
+                                                      streetLights.begin() + count));
+}
+#endif
 
 void Application::mainLoop() {
     // Native: Traditional game loop
