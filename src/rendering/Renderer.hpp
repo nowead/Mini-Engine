@@ -296,26 +296,15 @@ private:
     std::unique_ptr<rhi::RHISampler>     ssaoSampler;
 
 #ifdef __EMSCRIPTEN__
-    // LDR Intermediate Target (RGBA8Unorm — tonemap writes here, FXAA reads from here)
-    std::unique_ptr<rhi::RHITexture> ldrColorTexture;
-    std::unique_ptr<rhi::RHITextureView> ldrColorView;
-
-    // Tonemap Pipeline (HDR + Bloom + SSAO → LDR: ACES + gamma) — WebGPU path
-    // bindings: 0=hdrTexture, 1=bloomTexture, 2=sampler, 3=ssaoBlurTexture
-    std::unique_ptr<rhi::RHIShader> tonemapVertexShader;
-    std::unique_ptr<rhi::RHIShader> tonemapFragmentShader;
-    std::unique_ptr<rhi::RHIBindGroupLayout> tonemapBindGroupLayout;
-    std::unique_ptr<rhi::RHIBindGroup> tonemapBindGroup;
-    std::unique_ptr<rhi::RHIPipelineLayout> tonemapPipelineLayout;
-    std::unique_ptr<rhi::RHIRenderPipeline> tonemapPipeline;
-
-    // FXAA Pipeline (LDR intermediate → swapchain: anti-aliasing) — WebGPU path
-    std::unique_ptr<rhi::RHIShader> fxaaVertexShader;
-    std::unique_ptr<rhi::RHIShader> fxaaFragmentShader;
-    std::unique_ptr<rhi::RHIBindGroupLayout> fxaaBindGroupLayout;
-    std::unique_ptr<rhi::RHIBindGroup> fxaaBindGroup;
-    std::unique_ptr<rhi::RHIPipelineLayout> fxaaPipelineLayout;
-    std::unique_ptr<rhi::RHIRenderPipeline> fxaaPipeline;
+    // Unified PostProcess Pipeline (HDR + Bloom + SSAO → ACES + FXAA → swapchain) — WebGPU path
+    // bindings: 0=hdrTexture, 1=bloomTexture, 2=ssaoTexture, 3=sampler, 4=params UBO
+    std::unique_ptr<rhi::RHIShader>          wgslPostprocessVertexShader;
+    std::unique_ptr<rhi::RHIShader>          wgslPostprocessFragmentShader;
+    std::unique_ptr<rhi::RHIBuffer>          wgslPostprocessParamsUBO;  // PostProcessParams (32 bytes)
+    std::unique_ptr<rhi::RHIBindGroupLayout> wgslPostprocessLayout;
+    std::unique_ptr<rhi::RHIBindGroup>       wgslPostprocessBG;
+    std::unique_ptr<rhi::RHIPipelineLayout>  wgslPostprocessPipelineLayout;
+    std::unique_ptr<rhi::RHIRenderPipeline>  wgslPostprocessPipeline;
 
     // Bloom render pipelines — WebGPU path (prefilter + separable Gaussian blur)
     std::unique_ptr<rhi::RHIBindGroupLayout>             wgslBloomLayout;
@@ -504,8 +493,7 @@ private:
 #ifdef __EMSCRIPTEN__
     void createBloomPipelineWGSL(); // Bloom render pipelines (WebGPU)
     void createSSAOPipelineWGSL();  // SSAO render pipelines (WebGPU)
-    void createTonemapPipeline();   // ACES + bloom + SSAO tonemap pass (WebGPU)
-    void createFXAAPipeline();      // FXAA anti-aliasing pass (WebGPU)
+    void createPostProcessPipelineWGSL(); // Unified postprocess pass (WebGPU)
 #else
     void createPostProcessPipeline();       // Combined tonemap+FXAA (Vulkan)
     void createBloomPipeline();             // Bloom compute (Vulkan)

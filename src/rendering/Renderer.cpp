@@ -86,16 +86,13 @@ Renderer::Renderer(GLFWwindow* window,
 
 #ifdef __EMSCRIPTEN__
     // Post-process pipelines must be created after HDR render target (bind groups reference texture views)
-    createBloomPipelineWGSL();  // creates bloom textures + render pipelines (needed by tonemap bind group)
-    createSSAOPipelineWGSL();   // creates SSAO textures + render pipelines (needed by tonemap bind group)
-    createTonemapPipeline();    // binds HDR + bloom + SSAO → LDR (ACES + gamma)
-    createFXAAPipeline();
-    printf("[DIAG] bloom=%s ssao=%s tonemap=%s fxaa=%s ldrView=%s\n",
+    createBloomPipelineWGSL();        // creates bloom textures + render pipelines
+    createSSAOPipelineWGSL();         // creates SSAO textures + render pipelines
+    createPostProcessPipelineWGSL();  // unified SSAO+Bloom+ACES+FXAA → swapchain
+    printf("[DIAG] bloom=%s ssao=%s postprocess=%s\n",
         (wgslBloomPrefilterPipeline ? "OK" : "NULL"),
         (wgslSSAOPipeline           ? "OK" : "NULL"),
-        (tonemapPipeline            ? "OK" : "NULL"),
-        (fxaaPipeline               ? "OK" : "NULL"),
-        (ldrColorView               ? "OK" : "NULL"));
+        (wgslPostprocessPipeline    ? "OK" : "NULL"));
 #else
     // Vulkan: create compute resources first so postprocess bind group has all views
     createBloomPipeline();   // creates bloomTextureView
@@ -204,27 +201,20 @@ void Renderer::handleFramebufferResize(int width, int height) {
     createBloomPipelineWGSL();
     createSSAOPipelineWGSL();
 
-    if (tonemapBindGroupLayout && hdrColorView && hdrSampler) {
+    if (wgslPostprocessLayout && hdrColorView && hdrSampler) {
         rhi::RHITextureView* bv   = bloomTextureView ? bloomTextureView.get() : hdrColorView.get();
         rhi::RHITextureView* ssao = ssaoBlurView     ? ssaoBlurView.get()     : hdrColorView.get();
-        rhi::BindGroupDesc bindGroupDesc;
-        bindGroupDesc.layout = tonemapBindGroupLayout.get();
-        bindGroupDesc.entries = {
+        rhi::BindGroupDesc bd;
+        bd.layout = wgslPostprocessLayout.get();
+        bd.entries = {
             rhi::BindGroupEntry::TextureView(0, hdrColorView.get()),
             rhi::BindGroupEntry::TextureView(1, bv),
-            rhi::BindGroupEntry::Sampler    (2, hdrSampler.get()),
-            rhi::BindGroupEntry::TextureView(3, ssao),
+            rhi::BindGroupEntry::TextureView(2, ssao),
+            rhi::BindGroupEntry::Sampler    (3, hdrSampler.get()),
+            rhi::BindGroupEntry::Buffer     (4, wgslPostprocessParamsUBO.get(), 0, 32),
         };
-        bindGroupDesc.label = "Tonemap Bind Group";
-        tonemapBindGroup = rhiBridge->getDevice()->createBindGroup(bindGroupDesc);
-    }
-    if (fxaaBindGroupLayout && ldrColorView && hdrSampler) {
-        rhi::BindGroupDesc bindGroupDesc;
-        bindGroupDesc.layout = fxaaBindGroupLayout.get();
-        bindGroupDesc.entries.push_back(rhi::BindGroupEntry::TextureView(0, ldrColorView.get()));
-        bindGroupDesc.entries.push_back(rhi::BindGroupEntry::Sampler(1, hdrSampler.get()));
-        bindGroupDesc.label = "FXAA Bind Group";
-        fxaaBindGroup = rhiBridge->getDevice()->createBindGroup(bindGroupDesc);
+        bd.label = "PostProcess Bind Group";
+        wgslPostprocessBG = rhiBridge->getDevice()->createBindGroup(bd);
     }
 #else
     recreatePostProcessResources();
@@ -291,27 +281,20 @@ void Renderer::recreateSwapchain() {
     createBloomPipelineWGSL();
     createSSAOPipelineWGSL();
 
-    if (tonemapBindGroupLayout && hdrColorView && hdrSampler) {
+    if (wgslPostprocessLayout && hdrColorView && hdrSampler) {
         rhi::RHITextureView* bv   = bloomTextureView ? bloomTextureView.get() : hdrColorView.get();
         rhi::RHITextureView* ssao = ssaoBlurView     ? ssaoBlurView.get()     : hdrColorView.get();
-        rhi::BindGroupDesc bindGroupDesc;
-        bindGroupDesc.layout = tonemapBindGroupLayout.get();
-        bindGroupDesc.entries = {
+        rhi::BindGroupDesc bd;
+        bd.layout = wgslPostprocessLayout.get();
+        bd.entries = {
             rhi::BindGroupEntry::TextureView(0, hdrColorView.get()),
             rhi::BindGroupEntry::TextureView(1, bv),
-            rhi::BindGroupEntry::Sampler    (2, hdrSampler.get()),
-            rhi::BindGroupEntry::TextureView(3, ssao),
+            rhi::BindGroupEntry::TextureView(2, ssao),
+            rhi::BindGroupEntry::Sampler    (3, hdrSampler.get()),
+            rhi::BindGroupEntry::Buffer     (4, wgslPostprocessParamsUBO.get(), 0, 32),
         };
-        bindGroupDesc.label = "Tonemap Bind Group";
-        tonemapBindGroup = rhiBridge->getDevice()->createBindGroup(bindGroupDesc);
-    }
-    if (fxaaBindGroupLayout && ldrColorView && hdrSampler) {
-        rhi::BindGroupDesc bindGroupDesc;
-        bindGroupDesc.layout = fxaaBindGroupLayout.get();
-        bindGroupDesc.entries.push_back(rhi::BindGroupEntry::TextureView(0, ldrColorView.get()));
-        bindGroupDesc.entries.push_back(rhi::BindGroupEntry::Sampler(1, hdrSampler.get()));
-        bindGroupDesc.label = "FXAA Bind Group";
-        fxaaBindGroup = rhiBridge->getDevice()->createBindGroup(bindGroupDesc);
+        bd.label = "PostProcess Bind Group";
+        wgslPostprocessBG = rhiBridge->getDevice()->createBindGroup(bd);
     }
 #else
     recreatePostProcessResources();
@@ -1528,22 +1511,7 @@ void Renderer::createHDRRenderTarget() {
     hdrSampler = rhiDevice->createSampler(samplerDesc);
 
 #ifdef __EMSCRIPTEN__
-    // Create RGBA8Unorm LDR intermediate texture (tonemap writes here; FXAA reads from here)
-    rhi::TextureDesc ldrDesc;
-    ldrDesc.size = rhi::Extent3D(width, height, 1);
-    ldrDesc.format = rhi::TextureFormat::RGBA8Unorm;
-    ldrDesc.usage = rhi::TextureUsage::RenderTarget | rhi::TextureUsage::Sampled;
-    ldrDesc.label = "LDR Intermediate Target";
-    ldrColorTexture = rhiDevice->createTexture(ldrDesc);
-
-    if (ldrColorTexture) {
-        rhi::TextureViewDesc viewDesc;
-        viewDesc.format = rhi::TextureFormat::RGBA8Unorm;
-        viewDesc.dimension = rhi::TextureViewDimension::View2D;
-        ldrColorView = ldrColorTexture->createView(viewDesc);
-    } else {
-        LOG_ERROR("Renderer") << "Failed to create LDR intermediate texture";
-    }
+    // WebGPU: no LDR intermediate buffer — postprocess.wgsl writes directly to swapchain
 #else
     // Vulkan: create HDR + post-process render passes and framebuffers on Linux
 #ifdef __linux__
@@ -1881,197 +1849,90 @@ void Renderer::createSSAOPipelineWGSL() {
 // Tonemap Pipeline Creation (WebGPU only)
 // ============================================================================
 
-void Renderer::createTonemapPipeline() {
-    if (!rhiBridge || !rhiBridge->isReady() || !hdrColorView || !hdrSampler) {
-        return;
+void Renderer::createPostProcessPipelineWGSL() {
+    if (!rhiBridge || !rhiBridge->isReady() || !hdrColorView || !hdrSampler) return;
+
+    auto* device = rhiBridge->getDevice();
+
+    auto raw = FileUtils::readFile("shaders/postprocess.wgsl");
+    if (raw.empty()) { LOG_ERROR("Renderer") << "Failed to read postprocess.wgsl"; return; }
+    std::vector<uint8_t> code(raw.begin(), raw.end());
+
+    rhi::ShaderSource vs(rhi::ShaderLanguage::WGSL, code, rhi::ShaderStage::Vertex,   "vs_main");
+    rhi::ShaderSource fs(rhi::ShaderLanguage::WGSL, code, rhi::ShaderStage::Fragment, "fs_main");
+    wgslPostprocessVertexShader   = device->createShader(rhi::ShaderDesc(vs, "PostProcessVS"));
+    wgslPostprocessFragmentShader = device->createShader(rhi::ShaderDesc(fs, "PostProcessFS"));
+    if (!wgslPostprocessVertexShader || !wgslPostprocessFragmentShader) {
+        LOG_ERROR("Renderer") << "Failed to create postprocess shaders"; return;
     }
 
-    auto* rhiDevice = rhiBridge->getDevice();
-
-    // Load WGSL shader (single file contains both vertex and fragment entry points)
-    auto wgslCodeRaw = FileUtils::readFile("shaders/tonemap.wgsl");
-    if (wgslCodeRaw.empty()) {
-        LOG_ERROR("Renderer") << "Failed to read tonemap.wgsl";
-        return;
+    // Params UBO: 32 bytes (bloomStr, exposure, aoStr, debugView, fxaaOn, tonemapOn, texelW, texelH)
+    {
+        rhi::BufferDesc bd;
+        bd.size  = 32;
+        bd.usage = rhi::BufferUsage::Uniform | rhi::BufferUsage::CopyDst;
+        bd.label = "PostProcessParamsUBO";
+        wgslPostprocessParamsUBO = device->createBuffer(bd);
     }
-    std::vector<uint8_t> wgslCode(wgslCodeRaw.begin(), wgslCodeRaw.end());
+    if (!wgslPostprocessParamsUBO) { LOG_ERROR("Renderer") << "Failed to create postprocess UBO"; return; }
 
-    rhi::ShaderSource vertSource(rhi::ShaderLanguage::WGSL, wgslCode, rhi::ShaderStage::Vertex, "vs_main");
-    tonemapVertexShader = rhiDevice->createShader(rhi::ShaderDesc(vertSource, "TonemapVertexShader"));
-
-    rhi::ShaderSource fragSource(rhi::ShaderLanguage::WGSL, wgslCode, rhi::ShaderStage::Fragment, "fs_main");
-    tonemapFragmentShader = rhiDevice->createShader(rhi::ShaderDesc(fragSource, "TonemapFragmentShader"));
-
-    if (!tonemapVertexShader || !tonemapFragmentShader) {
-        LOG_ERROR("Renderer") << "Failed to create tonemap shaders";
-        return;
-    }
-
-    // Bind group layout: 0=HDR, 1=bloom, 2=sampler, 3=SSAO
-    rhi::BindGroupLayoutDesc layoutDesc;
-    using S = rhi::ShaderStage;
-    using T = rhi::BindingType;
-    layoutDesc.entries = {
-        rhi::BindGroupLayoutEntry(0, S::Fragment, T::SampledTexture),  // hdrTexture
-        rhi::BindGroupLayoutEntry(1, S::Fragment, T::SampledTexture),  // bloomTexture
-        rhi::BindGroupLayoutEntry(2, S::Fragment, T::Sampler),         // hdrSampler
-        rhi::BindGroupLayoutEntry(3, S::Fragment, T::SampledTexture),  // ssaoBlurTexture
+    // Bind group layout: 0=hdr, 1=bloom, 2=ssao, 3=sampler, 4=params UBO
+    using S = rhi::ShaderStage; using T = rhi::BindingType;
+    rhi::BindGroupLayoutDesc ld;
+    ld.entries = {
+        rhi::BindGroupLayoutEntry(0, S::Fragment, T::SampledTexture),   // hdrTexture
+        rhi::BindGroupLayoutEntry(1, S::Fragment, T::SampledTexture),   // bloomTexture
+        rhi::BindGroupLayoutEntry(2, S::Fragment, T::SampledTexture),   // ssaoTexture
+        rhi::BindGroupLayoutEntry(3, S::Fragment, T::Sampler),          // hdrSampler
+        rhi::BindGroupLayoutEntry(4, S::Fragment, T::UniformBuffer),    // params UBO
     };
-    layoutDesc.label = "Tonemap Bind Group Layout";
-    tonemapBindGroupLayout = rhiDevice->createBindGroupLayout(layoutDesc);
+    ld.label = "PostProcess Layout";
+    wgslPostprocessLayout = device->createBindGroupLayout(ld);
+    if (!wgslPostprocessLayout) { LOG_ERROR("Renderer") << "PostProcess layout failed"; return; }
 
-    if (!tonemapBindGroupLayout) {
-        LOG_ERROR("Renderer") << "Failed to create tonemap bind group layout";
-        return;
-    }
-
-    // Bind group: HDR + bloom + sampler + SSAO (fall back to HDR white if not yet ready)
-    rhi::RHITextureView* bloomView = bloomTextureView ? bloomTextureView.get() : hdrColorView.get();
-    rhi::RHITextureView* ssaoView  = ssaoBlurView     ? ssaoBlurView.get()     : hdrColorView.get();
-    rhi::BindGroupDesc bindGroupDesc;
-    bindGroupDesc.layout = tonemapBindGroupLayout.get();
-    bindGroupDesc.entries = {
+    // Bind group
+    rhi::RHITextureView* bv   = bloomTextureView ? bloomTextureView.get() : hdrColorView.get();
+    rhi::RHITextureView* ssao = ssaoBlurView     ? ssaoBlurView.get()     : hdrColorView.get();
+    rhi::BindGroupDesc bd;
+    bd.layout = wgslPostprocessLayout.get();
+    bd.entries = {
         rhi::BindGroupEntry::TextureView(0, hdrColorView.get()),
-        rhi::BindGroupEntry::TextureView(1, bloomView),
-        rhi::BindGroupEntry::Sampler    (2, hdrSampler.get()),
-        rhi::BindGroupEntry::TextureView(3, ssaoView),
+        rhi::BindGroupEntry::TextureView(1, bv),
+        rhi::BindGroupEntry::TextureView(2, ssao),
+        rhi::BindGroupEntry::Sampler    (3, hdrSampler.get()),
+        rhi::BindGroupEntry::Buffer     (4, wgslPostprocessParamsUBO.get(), 0, 32),
     };
-    bindGroupDesc.label = "Tonemap Bind Group";
-    tonemapBindGroup = rhiDevice->createBindGroup(bindGroupDesc);
+    bd.label = "PostProcess BG";
+    wgslPostprocessBG = device->createBindGroup(bd);
+    if (!wgslPostprocessBG) { LOG_ERROR("Renderer") << "PostProcess bind group failed"; return; }
 
     // Pipeline layout
-    rhi::PipelineLayoutDesc pipelineLayoutDesc;
-    pipelineLayoutDesc.bindGroupLayouts.push_back(tonemapBindGroupLayout.get());
-    tonemapPipelineLayout = rhiBridge->createPipelineLayout(pipelineLayoutDesc);
+    rhi::PipelineLayoutDesc pld;
+    pld.bindGroupLayouts = { wgslPostprocessLayout.get() };
+    wgslPostprocessPipelineLayout = rhiBridge->createPipelineLayout(pld);
+    if (!wgslPostprocessPipelineLayout) { LOG_ERROR("Renderer") << "PostProcess pipeline layout failed"; return; }
 
-    if (!tonemapPipelineLayout) {
-        LOG_ERROR("Renderer") << "Failed to create tonemap pipeline layout";
-        return;
-    }
+    // Pipeline: fullscreen triangle, writes directly to swapchain
+    rhi::RenderPipelineDesc pd;
+    pd.vertexShader   = wgslPostprocessVertexShader.get();
+    pd.fragmentShader = wgslPostprocessFragmentShader.get();
+    pd.layout         = wgslPostprocessPipelineLayout.get();
+    pd.primitive.topology  = rhi::PrimitiveTopology::TriangleList;
+    pd.primitive.cullMode  = rhi::CullMode::None;
+    pd.primitive.frontFace = rhi::FrontFace::Clockwise;
 
-    // Pipeline — fullscreen triangle (no vertex buffer, no depth test)
-    rhi::RenderPipelineDesc pipelineDesc;
-    pipelineDesc.vertexShader = tonemapVertexShader.get();
-    pipelineDesc.fragmentShader = tonemapFragmentShader.get();
-    pipelineDesc.layout = tonemapPipelineLayout.get();
+    rhi::ColorTargetState ct;
+    auto* sc = rhiBridge->getSwapchain();
+    ct.format = sc ? sc->getFormat() : rhi::TextureFormat::BGRA8Unorm;
+    ct.blend.blendEnabled = false;
+    pd.colorTargets.push_back(ct);
+    pd.label = "PostProcess Pipeline";
 
-    pipelineDesc.primitive.topology = rhi::PrimitiveTopology::TriangleList;
-    pipelineDesc.primitive.cullMode = rhi::CullMode::None;
-    pipelineDesc.primitive.frontFace = rhi::FrontFace::Clockwise;
-
-    // Color target: RGBA8Unorm intermediate (FXAA reads from here)
-    rhi::ColorTargetState colorTarget;
-    colorTarget.format = rhi::TextureFormat::RGBA8Unorm;
-    colorTarget.blend.blendEnabled = false;
-    pipelineDesc.colorTargets.push_back(colorTarget);
-
-    pipelineDesc.label = "Tonemap Pipeline";
-
-    tonemapPipeline = rhiBridge->createRenderPipeline(pipelineDesc);
-
-    if (tonemapPipeline) {
-        LOG_INFO("Renderer") << "Tonemap pipeline created successfully";
+    wgslPostprocessPipeline = rhiBridge->createRenderPipeline(pd);
+    if (wgslPostprocessPipeline) {
+        LOG_INFO("Renderer") << "PostProcess pipeline created successfully";
     } else {
-        LOG_ERROR("Renderer") << "Failed to create tonemap pipeline";
-    }
-}
-
-// ============================================================================
-// FXAA Pipeline Creation (WebGPU only)
-// ============================================================================
-
-void Renderer::createFXAAPipeline() {
-    if (!rhiBridge || !rhiBridge->isReady() || !ldrColorView || !hdrSampler) {
-        return;
-    }
-
-    auto* rhiDevice = rhiBridge->getDevice();
-
-    // Load WGSL shader
-    auto wgslCodeRaw = FileUtils::readFile("shaders/fxaa.wgsl");
-    if (wgslCodeRaw.empty()) {
-        LOG_ERROR("Renderer") << "Failed to read fxaa.wgsl";
-        return;
-    }
-    std::vector<uint8_t> wgslCode(wgslCodeRaw.begin(), wgslCodeRaw.end());
-
-    rhi::ShaderSource vertSource(rhi::ShaderLanguage::WGSL, wgslCode, rhi::ShaderStage::Vertex, "vs_main");
-    fxaaVertexShader = rhiDevice->createShader(rhi::ShaderDesc(vertSource, "FXAAVertexShader"));
-
-    rhi::ShaderSource fragSource(rhi::ShaderLanguage::WGSL, wgslCode, rhi::ShaderStage::Fragment, "fs_main");
-    fxaaFragmentShader = rhiDevice->createShader(rhi::ShaderDesc(fragSource, "FXAAFragmentShader"));
-
-    if (!fxaaVertexShader || !fxaaFragmentShader) {
-        LOG_ERROR("Renderer") << "Failed to create FXAA shaders";
-        return;
-    }
-
-    // Bind group layout: binding 0 = LDR texture, binding 1 = sampler
-    rhi::BindGroupLayoutDesc layoutDesc;
-
-    rhi::BindGroupLayoutEntry texEntry;
-    texEntry.binding = 0;
-    texEntry.visibility = rhi::ShaderStage::Fragment;
-    texEntry.type = rhi::BindingType::SampledTexture;
-    layoutDesc.entries.push_back(texEntry);
-
-    rhi::BindGroupLayoutEntry samplerEntry;
-    samplerEntry.binding = 1;
-    samplerEntry.visibility = rhi::ShaderStage::Fragment;
-    samplerEntry.type = rhi::BindingType::Sampler;
-    layoutDesc.entries.push_back(samplerEntry);
-
-    layoutDesc.label = "FXAA Bind Group Layout";
-    fxaaBindGroupLayout = rhiDevice->createBindGroupLayout(layoutDesc);
-
-    if (!fxaaBindGroupLayout) {
-        LOG_ERROR("Renderer") << "Failed to create FXAA bind group layout";
-        return;
-    }
-
-    // Bind group: LDR texture + sampler (reuse hdrSampler — same linear+clamp settings)
-    rhi::BindGroupDesc bindGroupDesc;
-    bindGroupDesc.layout = fxaaBindGroupLayout.get();
-    bindGroupDesc.entries.push_back(rhi::BindGroupEntry::TextureView(0, ldrColorView.get()));
-    bindGroupDesc.entries.push_back(rhi::BindGroupEntry::Sampler(1, hdrSampler.get()));
-    bindGroupDesc.label = "FXAA Bind Group";
-    fxaaBindGroup = rhiDevice->createBindGroup(bindGroupDesc);
-
-    // Pipeline layout
-    rhi::PipelineLayoutDesc pipelineLayoutDesc;
-    pipelineLayoutDesc.bindGroupLayouts.push_back(fxaaBindGroupLayout.get());
-    fxaaPipelineLayout = rhiBridge->createPipelineLayout(pipelineLayoutDesc);
-
-    if (!fxaaPipelineLayout) {
-        LOG_ERROR("Renderer") << "Failed to create FXAA pipeline layout";
-        return;
-    }
-
-    // Pipeline — fullscreen triangle, no depth test, writes to swapchain
-    rhi::RenderPipelineDesc pipelineDesc;
-    pipelineDesc.vertexShader = fxaaVertexShader.get();
-    pipelineDesc.fragmentShader = fxaaFragmentShader.get();
-    pipelineDesc.layout = fxaaPipelineLayout.get();
-
-    pipelineDesc.primitive.topology = rhi::PrimitiveTopology::TriangleList;
-    pipelineDesc.primitive.cullMode = rhi::CullMode::None;
-    pipelineDesc.primitive.frontFace = rhi::FrontFace::Clockwise;
-
-    // Color target: swapchain format (final output)
-    rhi::ColorTargetState colorTarget;
-    auto* swapchain = rhiBridge->getSwapchain();
-    colorTarget.format = swapchain ? swapchain->getFormat() : rhi::TextureFormat::BGRA8Unorm;
-    colorTarget.blend.blendEnabled = false;
-    pipelineDesc.colorTargets.push_back(colorTarget);
-
-    pipelineDesc.label = "FXAA Pipeline";
-
-    fxaaPipeline = rhiBridge->createRenderPipeline(pipelineDesc);
-
-    if (fxaaPipeline) {
-        LOG_INFO("Renderer") << "FXAA pipeline created successfully";
-    } else {
-        LOG_ERROR("Renderer") << "Failed to create FXAA pipeline";
+        LOG_ERROR("Renderer") << "Failed to create postprocess pipeline";
     }
 }
 #endif  // __EMSCRIPTEN__
@@ -3132,11 +2993,7 @@ void Renderer::drawFrame() {
 
     // Color attachment: all platforms render geometry to HDR offscreen texture
     rhi::RenderPassColorAttachment colorAttachment;
-#ifdef __EMSCRIPTEN__
-    colorAttachment.view = (hdrColorView && tonemapPipeline) ? hdrColorView.get() : swapchainView;
-#else
     colorAttachment.view = hdrColorView ? hdrColorView.get() : swapchainView;
-#endif
     colorAttachment.loadOp = rhi::LoadOp::Clear;
     colorAttachment.storeOp = rhi::StoreOp::Store;
     colorAttachment.clearValue = rhi::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
@@ -3423,59 +3280,51 @@ void Renderer::drawFrame() {
         }
     }
 
-    // Tonemap pass (WebGPU): HDR + bloom → LDR intermediate (ACES + gamma correction)
-    if (tonemapPipeline && tonemapBindGroup && hdrColorView && ldrColorView) {
-        rhi::RenderPassDesc tonemapPassDesc;
-        tonemapPassDesc.width = rhiBridge->getSwapchain()->getWidth();
-        tonemapPassDesc.height = rhiBridge->getSwapchain()->getHeight();
-        tonemapPassDesc.label = "Tonemap Pass";
+    // PostProcess pass (WebGPU): HDR + Bloom + SSAO → ACES + FXAA → swapchain
+    if (wgslPostprocessPipeline && wgslPostprocessBG && hdrColorView && swapchainView) {
+        // Update params UBO each frame
+        struct alignas(16) PostProcessParams {
+            float    bloomStrength;
+            float    exposure;
+            float    aoStrength;
+            int32_t  debugView;
+            uint32_t fxaaOn;
+            uint32_t tonemapOn;
+            float    texelW;
+            float    texelH;
+        };
+        auto* sc = rhiBridge->getSwapchain();
+        PostProcessParams pp{};
+        pp.bloomStrength = bloomStrength;
+        pp.exposure      = exposure;
+        pp.aoStrength    = aoStrength;
+        pp.debugView     = debugView;
+        pp.fxaaOn        = fxaaEnabled    ? 1u : 0u;
+        pp.tonemapOn     = tonemapEnabled ? 1u : 0u;
+        pp.texelW        = sc ? 1.0f / static_cast<float>(sc->getWidth())  : 0.0f;
+        pp.texelH        = sc ? 1.0f / static_cast<float>(sc->getHeight()) : 0.0f;
+        wgslPostprocessParamsUBO->write(&pp, sizeof(pp));
 
-        rhi::RenderPassColorAttachment tonemapColorAttachment;
-        tonemapColorAttachment.view = ldrColorView.get();
-        tonemapColorAttachment.loadOp = rhi::LoadOp::Clear;
-        tonemapColorAttachment.storeOp = rhi::StoreOp::Store;
-        tonemapColorAttachment.clearValue = rhi::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
-        tonemapPassDesc.colorAttachments.push_back(tonemapColorAttachment);
+        uint32_t W = sc ? sc->getWidth()  : 1;
+        uint32_t H = sc ? sc->getHeight() : 1;
 
-        auto tonemapPass = encoder->beginRenderPass(tonemapPassDesc);
-        if (tonemapPass) {
-            tonemapPass->setViewport(0.0f, 0.0f,
-                static_cast<float>(tonemapPassDesc.width),
-                static_cast<float>(tonemapPassDesc.height),
-                0.0f, 1.0f);
-            tonemapPass->setScissorRect(0, 0, tonemapPassDesc.width, tonemapPassDesc.height);
-            tonemapPass->setPipeline(tonemapPipeline.get());
-            tonemapPass->setBindGroup(0, tonemapBindGroup.get());
-            tonemapPass->draw(3);  // Fullscreen triangle
-            tonemapPass->end();
-        }
-    }
+        rhi::RenderPassDesc pd;
+        pd.width = W; pd.height = H; pd.label = "PostProcess";
+        rhi::RenderPassColorAttachment ca;
+        ca.view      = swapchainView;
+        ca.loadOp    = rhi::LoadOp::Clear;
+        ca.storeOp   = rhi::StoreOp::Store;
+        ca.clearValue = rhi::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
+        pd.colorAttachments.push_back(ca);
 
-    // FXAA pass (WebGPU): LDR intermediate → swapchain (anti-aliasing)
-    if (fxaaPipeline && fxaaBindGroup && ldrColorView && swapchainView) {
-        rhi::RenderPassDesc fxaaPassDesc;
-        fxaaPassDesc.width = rhiBridge->getSwapchain()->getWidth();
-        fxaaPassDesc.height = rhiBridge->getSwapchain()->getHeight();
-        fxaaPassDesc.label = "FXAA Pass";
-
-        rhi::RenderPassColorAttachment fxaaColorAttachment;
-        fxaaColorAttachment.view = swapchainView;
-        fxaaColorAttachment.loadOp = rhi::LoadOp::Clear;
-        fxaaColorAttachment.storeOp = rhi::StoreOp::Store;
-        fxaaColorAttachment.clearValue = rhi::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
-        fxaaPassDesc.colorAttachments.push_back(fxaaColorAttachment);
-
-        auto fxaaPass = encoder->beginRenderPass(fxaaPassDesc);
-        if (fxaaPass) {
-            fxaaPass->setViewport(0.0f, 0.0f,
-                static_cast<float>(fxaaPassDesc.width),
-                static_cast<float>(fxaaPassDesc.height),
-                0.0f, 1.0f);
-            fxaaPass->setScissorRect(0, 0, fxaaPassDesc.width, fxaaPassDesc.height);
-            fxaaPass->setPipeline(fxaaPipeline.get());
-            fxaaPass->setBindGroup(0, fxaaBindGroup.get());
-            fxaaPass->draw(3);  // Fullscreen triangle
-            fxaaPass->end();
+        auto pass = encoder->beginRenderPass(pd);
+        if (pass) {
+            pass->setViewport(0.0f, 0.0f, float(W), float(H), 0.0f, 1.0f);
+            pass->setScissorRect(0, 0, W, H);
+            pass->setPipeline(wgslPostprocessPipeline.get());
+            pass->setBindGroup(0, wgslPostprocessBG.get());
+            pass->draw(3);
+            pass->end();
         }
     }
 #endif  // __EMSCRIPTEN__
