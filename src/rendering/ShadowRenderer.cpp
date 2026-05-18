@@ -238,107 +238,62 @@ bool ShadowRenderer::createPipeline(void* nativeRenderPass, rhi::RHIBindGroupLay
 }
 
 // ---------------------------------------------------------------------------
-// CSM matrix computation
+// Shadow matrix computation — single scene-fit map
 // ---------------------------------------------------------------------------
 
 /**
- * Compute the light-space orthographic matrix that tightly covers
- * the camera frustum sub-slice [nearSlice, farSlice].
+ * Build ONE light-space matrix that tightly fits the whole scene's bounding
+ * sphere (centre = world origin for this showcase, radius = sceneRadius).
  *
- * Algorithm:
- *   1. Extract cameraNear/cameraFar from cameraProj using Z-row coefficients
- *      (immune to Y-flip — [2][2] and [3][2] are unaffected by proj[1][1] *= -1).
- *   2. Unproject the 8 NDC corners of the FULL frustum to world space via inv(P*V).
- *   3. Linearly interpolate the near/far corner rays to get the sub-slice corners
- *      at [nearSlice, farSlice] in view depth.
- *   4. Fit a tight light-space AABB around those sub-corners, extend Z to catch
- *      shadow casters outside the camera frustum, then build the ortho matrix.
+ * This deliberately replaces the previous 4-cascade CSM. CSM refits the
+ * shadow frustum to the *camera* frustum every frame, which made the shadow
+ * swim, pulse, and balloon with zoom and tangled WebGPU/Vulkan NDC
+ * conventions. For a small, fixed scene a single camera-independent map is
+ * exactly correct and inherently stable: the matrix is constant frame-to-
+ * frame regardless of camera zoom/orbit, so there is no swimming and no
+ * cascade-selection logic to get wrong.
  *
- * Replaces the previous approach which extracted fovY from cameraProj[1][1],
- * which was negative after the Vulkan Y-flip and produced garbage sub-projections.
+ * cameraView/cameraProj/nearSlice/farSlice are unused (kept so the .hpp
+ * signature and the per-cascade call sites stay unchanged — all four UBO
+ * slots receive this same matrix).
  */
 glm::mat4 ShadowRenderer::computeCascadeMatrix(const glm::vec3& lightDir,
-                                                const glm::mat4& cameraView,
-                                                const glm::mat4& cameraProj,
-                                                float nearSlice, float farSlice) {
-    // ── Step 1: Extract camera near/far from projection matrix ─────────────
-    // For OpenGL-convention perspective (Y-flip doesn't touch these entries):
-    //   proj[2][2] = A = -(far + near) / (far - near)
-    //   proj[3][2] = B = -2 * far * near / (far - near)
-    //   => near = B / (A - 1),  far = B / (A + 1)
-    float A = cameraProj[2][2];
-    float B = cameraProj[3][2];
-    float cameraNear = B / (A - 1.0f);
-    float cameraFar  = B / (A + 1.0f);
+                                                const glm::mat4& /*cameraView*/,
+                                                const glm::mat4& /*cameraProj*/,
+                                                float /*nearSlice*/,
+                                                float /*farSlice*/,
+                                                float sceneRadius) {
+    const glm::vec3 sceneCenter(0.0f);                 // showcase grid is origin-centred
+    const float Rc = std::max(sceneRadius, 1.0f);      // building-cluster radius
+    const glm::vec3 L = glm::normalize(lightDir);      // points toward the sun
 
-    // Guard against degenerate projection (e.g. infinite far plane)
-    if (std::abs(cameraFar - cameraNear) < 1.0f) {
-        cameraNear = 0.1f;
-        cameraFar  = 1000.0f;
-    }
+    // The ortho must contain not just the casters but the long shadows they
+    // throw onto the ground. The sun is very low ("low-angle sunset",
+    // sunDir.y ≈ 0.28), so a building of height H casts a shadow of length
+    // ~ H·|L_horizontal| / L.y  (≈ 3–4× H here). Sizing the box to the
+    // cluster radius alone clipped those shadows, making them look the wrong
+    // size/shape. Expand the half-extent to cover cluster + shadow throw.
+    const float horiz   = std::sqrt(std::max(1.0f - L.y * L.y, 1e-4f));
+    const float stretch = horiz / std::max(std::abs(L.y), 0.05f);   // shadow/height
+    // Cluster radius doubles as a proxy for the tallest caster's reach.
+    const float R = Rc + Rc * std::clamp(stretch, 0.0f, 6.0f);
 
-    // ── Step 2: Unproject full-frustum NDC corners to world space ──────────
-    // Use z=0 (near, Vulkan NDC) and z=1 (far) — matches shader depth convention.
-    glm::mat4 invVP = glm::inverse(cameraProj * cameraView);
-
-    const glm::vec3 ndcCorners[8] = {
-        {-1,-1, 0},{1,-1, 0},{1,1, 0},{-1,1, 0},   // near (z = 0)
-        {-1,-1, 1},{1,-1, 1},{1,1, 1},{-1,1, 1}    // far  (z = 1)
-    };
-    glm::vec3 fullCorners[8];
-    for (int i = 0; i < 8; ++i) {
-        glm::vec4 ws = invVP * glm::vec4(ndcCorners[i], 1.0f);
-        fullCorners[i] = glm::vec3(ws) / ws.w;
-    }
-
-    // ── Step 3: Interpolate to the cascade sub-slice ───────────────────────
-    // fullCorners[0–3] = world positions at cameraNear
-    // fullCorners[4–7] = world positions at cameraFar
-    float range = cameraFar - cameraNear;
-    float tNear = glm::clamp((nearSlice - cameraNear) / range, 0.0f, 1.0f);
-    float tFar  = glm::clamp((farSlice  - cameraNear) / range, 0.0f, 1.0f);
-
-    glm::vec3 subCorners[8];
-    for (int i = 0; i < 4; ++i) {
-        glm::vec3 ray = fullCorners[i + 4] - fullCorners[i];
-        subCorners[i]     = fullCorners[i] + ray * tNear;  // cascade near
-        subCorners[i + 4] = fullCorners[i] + ray * tFar;   // cascade far
-    }
-
-    // ── Step 4: Light-space AABB ────────────────────────────────────────────
-    glm::vec3 center(0.0f);
-    for (auto& c : subCorners) center += c;
-    center /= 8.0f;
-
-    glm::vec3 up = std::abs(glm::dot(lightDir, glm::vec3(0, 1, 0))) < 0.99f
+    glm::vec3 up = std::abs(glm::dot(L, glm::vec3(0, 1, 0))) < 0.99f
                    ? glm::vec3(0, 1, 0) : glm::vec3(0, 0, 1);
-    glm::mat4 lightView = glm::lookAt(center + lightDir, center, up);
 
-    glm::vec3 minLS( 1e9f), maxLS(-1e9f);
-    for (auto& c : subCorners) {
-        glm::vec3 ls = glm::vec3(lightView * glm::vec4(c, 1.0f));
-        minLS = glm::min(minLS, ls);
-        maxLS = glm::max(maxLS, ls);
-    }
+    // Light "camera" sits on the sun side, 3R from the scene centre, looking
+    // back along the light-travel direction (-L). Depth window [0, 6R] keeps
+    // the box (occupying [2R, 4R] from the eye) well inside with a tail for
+    // tall casters.
+    glm::mat4 lightView = glm::lookAt(sceneCenter + L * (R * 3.0f),
+                                      sceneCenter, up);
 
-    // Extend Z to capture shadow casters outside the visible frustum
-    float zExt = (maxLS.z - minLS.z) * 0.5f;
-    minLS.z -= zExt;
-    maxLS.z += zExt;
-
-    // Small XY margin (3 %) to avoid edge artefacts
-    float xM = (maxLS.x - minLS.x) * 0.03f;
-    float yM = (maxLS.y - minLS.y) * 0.03f;
-    minLS.x -= xM;  maxLS.x += xM;
-    minLS.y -= yM;  maxLS.y += yM;
-
-    // ── Step 5: Orthographic projection (Vulkan depth [0, 1]) ──────────────
-    // glm::ortho produces OpenGL NDC z in [-1,1], so remap to [0,1] manually.
-    glm::mat4 lightProj = glm::ortho(minLS.x, maxLS.x,
-                                      minLS.y, maxLS.y,
-                                      -maxLS.z, -minLS.z);
-    lightProj[1][1] *= -1.0f;          // Vulkan Y flip
-    lightProj[2][2] *= 0.5f;           // remap z: [-1,1] → [0,1]
+    // glm::ortho gives OpenGL NDC z ∈ [-1,1]; remap to [0,1] for WebGPU/Vulkan.
+    // Keep the Vulkan Y-flip: it is consistent with shadow.wgsl (write) and
+    // deferred_lighting.wgsl (read, projCoords.y = -y*0.5+0.5).
+    glm::mat4 lightProj = glm::ortho(-R, R, -R, R, 0.0f, R * 6.0f);
+    lightProj[1][1] *= -1.0f;
+    lightProj[2][2] *= 0.5f;
     lightProj[3][2]  = lightProj[3][2] * 0.5f + 0.5f;
 
     return lightProj * lightView;
@@ -348,24 +303,16 @@ void ShadowRenderer::updateLightMatrices(const glm::vec3& lightDir,
                                           const glm::vec3& /*cameraPos*/,
                                           const glm::mat4& view,
                                           const glm::mat4& proj,
-                                          float near, float far) {
-    // PSSM split scheme (λ = 0.75), clamped to CSM max range
-    float csmFar = std::min(far, 1000.0f);
-    float splits[NUM_CASCADES];
-    for (uint32_t i = 0; i < NUM_CASCADES; ++i) {
-        float p          = static_cast<float>(i + 1) / static_cast<float>(NUM_CASCADES);
-        float logSplit   = near * std::pow(csmFar / near, p);
-        float unifSplit  = near + (csmFar - near) * p;
-        splits[i]        = 0.75f * logSplit + 0.25f * unifSplit;
-    }
-    m_cascadeSplits = glm::vec4(splits[0], splits[1], splits[2], splits[3]);
-
-    float prevSplit = near;
-    for (uint32_t i = 0; i < NUM_CASCADES; ++i) {
-        m_lightSpaceMatrices[i] = computeCascadeMatrix(
-            glm::normalize(lightDir), view, proj, prevSplit, splits[i]);
-        prevSplit = splits[i];
-    }
+                                          float /*near*/, float /*far*/,
+                                          float sceneRadius) {
+    // Single scene-fit matrix, replicated into all four UBO slots so no C++
+    // struct / binding / Vulkan-path change is needed. cascadeSplits set huge
+    // so the shader's cascade pick always resolves to slot 0 (all identical).
+    glm::mat4 m = computeCascadeMatrix(glm::normalize(lightDir), view, proj,
+                                       0.0f, 0.0f, sceneRadius);
+    for (uint32_t i = 0; i < NUM_CASCADES; ++i)
+        m_lightSpaceMatrices[i] = m;
+    m_cascadeSplits = glm::vec4(1.0e18f);
 }
 
 // ---------------------------------------------------------------------------

@@ -6,9 +6,12 @@ set(CMAKE_CXX_COMPILER em++)
 set(EMSCRIPTEN ON)
 
 # On Windows, emar/emranlib are .bat wrappers — cmake_link_script (CreateProcess)
-# cannot run .bat files directly, but CMake wraps .bat paths in "cmd /c" automatically.
-# On Unix, use the plain script names.
-if(WIN32 AND DEFINED ENV{EMSDK})
+# cannot run extension-less script names directly, but CMake wraps .bat paths in
+# "cmd /c" automatically. Test CMAKE_HOST_WIN32, NOT WIN32: this toolchain sets
+# CMAKE_SYSTEM_NAME=Emscripten (cross-compiling), so WIN32 reflects the TARGET
+# (Emscripten → false) and the Windows host would wrongly fall to the plain
+# `emar`, which Windows cannot execute → fresh configure fails the compiler test.
+if(CMAKE_HOST_WIN32 AND DEFINED ENV{EMSDK})
     set(_em "$ENV{EMSDK}/upstream/emscripten")
     set(CMAKE_AR     "${_em}/emar.bat"     CACHE FILEPATH "Emscripten ar"     FORCE)
     set(CMAKE_RANLIB "${_em}/emranlib.bat"  CACHE FILEPATH "Emscripten ranlib" FORCE)

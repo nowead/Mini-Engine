@@ -2796,9 +2796,17 @@ void Renderer::drawFrame() {
 
     // Step 2: Update CSM light matrices (before uniform buffer update)
     if (shadowRenderer && shadowRenderer->isInitialized()) {
+        // The scene is centered near the origin; the camera orbits it at
+        // ~|cameraPosition|. Passing 0.1 / sceneRadius as the cascade range
+        // wasted cascades 0-2 on empty space in front of the scene and left
+        // the far half of the scene outside every cascade. Span the cascades
+        // over the scene's actual view-depth range instead.
+        float camDist = glm::length(cameraPosition);
+        float sNear   = std::max(0.1f, camDist - shadowSceneRadius);
+        float sFar    = camDist + shadowSceneRadius;
         shadowRenderer->updateLightMatrices(sunDirection, cameraPosition,
                                             viewMatrix, projectionMatrix,
-                                            0.1f, shadowSceneRadius);
+                                            sNear, sFar, shadowSceneRadius);
     }
 
     // Step 3: Update uniform buffer with RHI (includes shadow matrix)
@@ -2925,7 +2933,6 @@ void Renderer::drawFrame() {
                 }
 #endif
 
-                uint32_t buildingCount = instanceCount - 1;
                 for (uint32_t cascade = 0; cascade < rendering::ShadowRenderer::NUM_CASCADES; ++cascade) {
                     auto* shadowPass = shadowRenderer->beginShadowPass(encoder.get(), frameIndex, cascade);
                     if (shadowPass) {
@@ -2933,7 +2940,11 @@ void Renderer::drawFrame() {
                             shadowPass->setBindGroup(1, ssboBindGroups[frameIndex].get());
                         shadowPass->setVertexBuffer(0, mesh->getVertexBuffer(), 0);
                         shadowPass->setIndexBuffer(mesh->getIndexBuffer(), rhi::IndexFormat::Uint32, 0);
-                        shadowPass->drawIndexed(meshIndexCount, buildingCount, 0, 0, 1);
+                        // Render ALL instances with trivial 0-based indexing;
+                        // shadow.wgsl culls the ground by its huge AABB. This
+                        // avoids the Vulkan↔WebGPU instance_index/firstInstance
+                        // discrepancy that let the ground into the shadow map.
+                        shadowPass->drawIndexed(meshIndexCount, instanceCount, 0, 0, 0);
                         shadowRenderer->endShadowPass();
                     }
                 }

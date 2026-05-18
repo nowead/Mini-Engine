@@ -48,7 +48,8 @@ public:
                              const glm::vec3& cameraPos,
                              const glm::mat4& view,
                              const glm::mat4& proj,
-                             float near, float far);
+                             float near, float far,
+                             float sceneRadius);
 
     /**
      * @brief Begin one cascade shadow pass.
@@ -130,7 +131,8 @@ private:
     glm::mat4 computeCascadeMatrix(const glm::vec3& lightDir,
                                    const glm::mat4& cameraView,
                                    const glm::mat4& cameraProj,
-                                   float nearSlice, float farSlice);
+                                   float nearSlice, float farSlice,
+                                   float sceneRadius);
 };
 
 } // namespace rendering

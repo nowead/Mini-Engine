@@ -102,26 +102,30 @@ fn fresnelSchlickRoughness(cosTheta: f32, F0: vec3<f32>, roughness: f32) -> vec3
 }
 
 // =============================================================================
-// CSM shadow — PCF 3×3 on selected cascade
+// Soft shadows — PCSS on a single scene-fit shadow map
 // =============================================================================
+// ShadowRenderer now writes ONE camera-independent matrix into every cascade
+// slot (all identical → slot 0). PCSS = blocker search → penumbra estimate →
+// variable-radius Poisson PCF, giving contact-hardening soft shadows that are
+// stable under any camera zoom/orbit (the matrix never changes per frame).
+
+var<private> POISSON16: array<vec2<f32>, 16> = array<vec2<f32>, 16>(
+    vec2<f32>(-0.942016, -0.399062), vec2<f32>( 0.945586, -0.768907),
+    vec2<f32>(-0.094184, -0.929389), vec2<f32>( 0.344959,  0.293878),
+    vec2<f32>(-0.915886,  0.457714), vec2<f32>(-0.815442, -0.879125),
+    vec2<f32>(-0.382775,  0.276768), vec2<f32>( 0.974844,  0.756484),
+    vec2<f32>( 0.443233, -0.975116), vec2<f32>( 0.537430, -0.473734),
+    vec2<f32>(-0.264969, -0.418930), vec2<f32>( 0.791975,  0.190902),
+    vec2<f32>(-0.241888,  0.997065), vec2<f32>(-0.814100,  0.914376),
+    vec2<f32>( 0.199841,  0.786414), vec2<f32>( 0.143832, -0.141008)
+);
 
 fn calculateCSMShadow(worldPos: vec3<f32>) -> f32 {
-    // Select cascade by view-space depth
-    let posView   = ubo.view * vec4<f32>(worldPos, 1.0);
-    let viewDepth = -posView.z;  // positive distance from camera
-
-    var cascadeIdx: i32 = 3;
-    for (var i: i32 = 0; i < 4; i++) {
-        if (viewDepth < ubo.cascadeSplits[i]) {
-            cascadeIdx = i;
-            break;
-        }
-    }
-
-    let posLightSpace = ubo.lightSpaceMatrices[cascadeIdx] * vec4<f32>(worldPos, 1.0);
+    // Single scene-fit matrix (every slot identical → use 0).
+    let posLightSpace = ubo.lightSpaceMatrices[0] * vec4<f32>(worldPos, 1.0);
     var projCoords = posLightSpace.xyz / posLightSpace.w;
     projCoords.x = projCoords.x * 0.5 + 0.5;
-    projCoords.y = projCoords.y * 0.5 + 0.5;  // Vulkan Y already top-down
+    projCoords.y = -projCoords.y * 0.5 + 0.5;  // WebGPU: NDC Y=+1→texV=0, Y=-1→texV=1
 
     // Out-of-frustum: no shadow
     if (projCoords.z > 1.0 || projCoords.z < 0.0 ||
@@ -130,22 +134,43 @@ fn calculateCSMShadow(worldPos: vec3<f32>) -> f32 {
         return 0.0;
     }
 
-    let bias         = ubo.shadowBias * 0.01;
-    let currentDepth = projCoords.z;
-    let texelSize    = 1.0 / ubo.shadowMapSize;
-    var shadow: f32  = 0.0;
+    let receiver = projCoords.z;
+    let bias     = ubo.shadowBias * 0.01;
+    let texel    = 1.0 / ubo.shadowMapSize;          // vec2
+    // Sun "size" as a UV search radius — larger = softer penumbra.
+    let lightSizeUV = 3.0 * texel.x;
 
-    // PCF 3×3: use textureSampleLevel(level=0) — avoids the uniform-control-flow
-    // requirement of textureSample while returning the same raw depth value.
-    for (var x: i32 = -1; x <= 1; x++) {
-        for (var y: i32 = -1; y <= 1; y++) {
-            let offset = vec2<f32>(f32(x), f32(y)) * texelSize;
-            let pcfDepth = textureSampleLevel(shadowCsmArray, shadowSampler,
-                                              projCoords.xy + offset, cascadeIdx, 0);
-            shadow += select(0.0, 1.0, currentDepth - bias > pcfDepth);
+    // 1) Blocker search: average depth of texels closer to the light.
+    var blockerSum   = 0.0;
+    var blockerCount = 0.0;
+    for (var i: i32 = 0; i < 16; i++) {
+        let o = POISSON16[i] * lightSizeUV;
+        let d = textureSampleLevel(shadowCsmArray, shadowSampler,
+                                   projCoords.xy + o, 0, 0);
+        if (d < receiver - bias) {
+            blockerSum   += d;
+            blockerCount += 1.0;
         }
     }
-    shadow /= 9.0;
+    if (blockerCount < 0.5) {
+        return 0.0;                                  // no occluders → fully lit
+    }
+    let avgBlocker = blockerSum / blockerCount;
+
+    // 2) Penumbra via similar triangles (contact-hardening).
+    let penumbra = clamp((receiver - avgBlocker) / max(avgBlocker, 1e-4),
+                         0.0, 1.0);
+    let filterR  = max(penumbra * lightSizeUV, texel.x);  // ≥ 1 texel
+
+    // 3) Variable-radius Poisson PCF.
+    var shadow = 0.0;
+    for (var i: i32 = 0; i < 16; i++) {
+        let o = POISSON16[i] * filterR;
+        let d = textureSampleLevel(shadowCsmArray, shadowSampler,
+                                   projCoords.xy + o, 0, 0);
+        shadow += select(0.0, 1.0, receiver - bias > d);
+    }
+    shadow /= 16.0;
     return shadow * ubo.shadowStrength;
 }
 
@@ -165,9 +190,10 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
     if (depth >= 1.0) { discard; }
 
     // Reconstruct world position from depth.
-    // uv is in [0,1] with (0,0)=top-left → matches Vulkan NDC where Y=-1 is top.
-    // invProj was built with Vulkan conventions, so pass NDC directly: ndcY = uv.y*2-1.
-    let ndc     = vec4<f32>(uv * 2.0 - 1.0, depth, 1.0);
+    // WebGPU: @builtin(position).y=0 is the top of the screen, NDC Y=+1 is also the top.
+    // So: ndc.y = 1.0 - uv.y * 2.0  (uv.y=0→NDC+1, uv.y=1→NDC-1)
+    // invProj is the inverse of the camera projection which has NO Y-flip for WebGPU.
+    let ndc     = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0);
     let viewPos = ubo.invProj * ndc;
     let worldPos = (ubo.invView * (viewPos / viewPos.w)).xyz;
 
@@ -237,8 +263,9 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
     let fallbackAmbient = albedo * ao;
     let ambient = mix(fallbackAmbient, iblAmbient, step(0.001, iblStrength)) * ubo.ambientIntensity;
 
-    // CSM shadow (directional sun only)
+    // Directional sun shadow (single scene-fit map + PCSS)
     let shadow = calculateCSMShadow(worldPos);
+
     var color  = ambient + (1.0 - shadow) * Lo;
 
     // Dynamic point lights

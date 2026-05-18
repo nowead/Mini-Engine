@@ -58,9 +58,13 @@ public:
 
     // Phase 3.3: Lighting settings (set by UI, read by Application)
     struct LightingSettings {
-        glm::vec3 sunDirection{0.7f, 0.25f, 0.5f};  // Low angle sunset
+        // High-ish sun (~62° elevation). The old (0.7,0.25,0.5) was a
+        // near-horizon sunset: physically-correct but it threw shadows
+        // ~3-4× building height, so one tall tower's shadow blanketed the
+        // whole block. This angle gives natural ~0.5× shadows.
+        glm::vec3 sunDirection{0.35f, 0.88f, 0.32f};
         float sunIntensity = 1.2f;
-        glm::vec3 sunColor{1.0f, 0.6f, 0.3f};  // Warm orange sunset
+        glm::vec3 sunColor{1.0f, 0.95f, 0.85f};  // Soft daylight
         float ambientIntensity = 0.12f;
         // Shadow settings
         float shadowBias = 0.008f;      // Depth bias to prevent shadow acne

@@ -16,8 +16,10 @@ struct ObjectData {
     boundingBoxMax: vec4<f32>,
     colorAndMetallic: vec4<f32>,
     roughnessAOPad: vec4<f32>,
-    texParams: vec4<f32>,   // C++ ObjectData 144 bytes 일치
-}
+}   // 128 bytes — MUST match C++ ObjectData (InstancedRenderData.hpp) and
+    // gbuffer.wgsl / frustum_cull.comp.wgsl. A stray extra vec4 here made the
+    // stride 144, so objects[i>0] read misaligned garbage and the shadow map
+    // was filled with nonsense geometry.
 
 struct ObjectBuffer {
     objects: array<ObjectData>,
@@ -42,11 +44,23 @@ struct VertexOutput {
 fn vs_main(input: VertexInput) -> VertexOutput {
     var output: VertexOutput;
 
+    // Direct indexing — render ALL instances; cull the ground geometrically
+    // below. Index tricks (+1u / firstInstance) proved unreliable across the
+    // Vulkan↔WebGPU instance_index semantics and let the giant ground plane
+    // into the shadow map (whole receiver self-shadowed).
     let obj = objectBuffer.objects[input.instanceIndex];
+
+    // The ground is an enormous flat quad (AABB span ~100000); it must not
+    // cast shadows. Detect it by its huge horizontal extent and emit a
+    // clipped vertex (NDC z = -2 < 0 → discarded), so it writes nothing.
+    let ext = obj.boundingBoxMax.xyz - obj.boundingBoxMin.xyz;
+    if (max(ext.x, ext.z) > 10000.0) {
+        output.position = vec4<f32>(0.0, 0.0, -2.0, 1.0);
+        return output;
+    }
+
     let worldPos = obj.worldMatrix * vec4<f32>(input.position, 1.0);
-
     output.position = ubo.lightSpaceMatrix * worldPos;
-
     return output;
 }
 

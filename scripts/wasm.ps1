@@ -58,6 +58,12 @@ function Invoke-Emsdk([string]$CmdArgs) {
         $lines = [System.Collections.Generic.List[string]]::new()
         $lines.Add("@echo off")
         $lines.Add("call `"$EmsdkEnv`"")
+        # Explicitly prepend the Emscripten dir: `call emsdk_env.bat` does not
+        # reliably expose emcc/em++/emcmake/emar on PATH in this cmd context
+        # (it can emit POSIX-style exports), which made a fresh `emcmake`
+        # configure fail with "'emcmake' is not recognized".
+        $emBin = Join-Path $EmsdkDir "upstream\emscripten"
+        $lines.Add("set PATH=$emBin;%PATH%")
         if ($nmakeDir) {
             $lines.Add("set PATH=$nmakeDir;%PATH%")
         }
@@ -179,7 +185,12 @@ if ($Command -eq "serve") {
         exit 0
     }
 
+    # Use the no-cache server: stock `python -m http.server` lets the browser
+    # heuristically cache MiniEngine.wasm/.data, so a rebuild silently shows
+    # the OLD binary even after a hard refresh. serve_nocache.py forces every
+    # asset to be re-fetched.
+    $serveScript = Join-Path $ScriptDir "serve_nocache.py"
     Push-Location $BuildDir
-    & $py -m http.server 8000
+    & $py $serveScript 8000
     Pop-Location
 }

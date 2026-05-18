@@ -602,28 +602,41 @@ else()
     set(MINIENGINE_SHADER_DIR ${CMAKE_CURRENT_BINARY_DIR}/shaders)
     file(MAKE_DIRECTORY ${MINIENGINE_SHADER_DIR})
 
+    set(MINIENGINE_WGSL_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/building.wgsl
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/gbuffer.wgsl
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/deferred_lighting.wgsl
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/bloom_prefilter.wgsl
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/bloom_blur.wgsl
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/ssao.wgsl
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/ssao_blur.wgsl
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess.wgsl
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shadow.wgsl
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/skybox.wgsl
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/particle.wgsl
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/brdf_lut.comp.wgsl
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/equirect_to_cubemap.comp.wgsl
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/irradiance_map.comp.wgsl
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/prefilter_env.comp.wgsl
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/frustum_cull.comp.wgsl
+    )
+
     add_custom_command(
         TARGET MiniEngine PRE_LINK
         COMMAND ${CMAKE_COMMAND} -E make_directory ${MINIENGINE_SHADER_DIR}
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/building.wgsl
-            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/gbuffer.wgsl
-            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/deferred_lighting.wgsl
-            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/bloom_prefilter.wgsl
-            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/bloom_blur.wgsl
-            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/ssao.wgsl
-            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/ssao_blur.wgsl
-            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess.wgsl
-            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shadow.wgsl
-            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/skybox.wgsl
-            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/particle.wgsl
-            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/brdf_lut.comp.wgsl
-            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/equirect_to_cubemap.comp.wgsl
-            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/irradiance_map.comp.wgsl
-            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/prefilter_env.comp.wgsl
-            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/frustum_cull.comp.wgsl
+            ${MINIENGINE_WGSL_SOURCES}
             ${MINIENGINE_SHADER_DIR}/
         COMMENT "Copying WGSL shaders for MiniEngine WASM"
+    )
+
+    # The WGSL shaders are baked into MiniEngine.data via --preload-file and the
+    # HTML via --shell-file, both at LINK time. NMake won't relink when only a
+    # .wgsl/.html changes (no object file changed), leaving stale shaders in the
+    # running app. Declaring them as LINK_DEPENDS forces a relink (which re-runs
+    # the PRE_LINK copy and re-packages the preload/shell) on any such change.
+    set_target_properties(MiniEngine PROPERTIES
+        LINK_DEPENDS "${MINIENGINE_WGSL_SOURCES};${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm_shell.html"
     )
 
     target_link_options(MiniEngine PRIVATE
