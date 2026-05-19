@@ -18,9 +18,14 @@
 | --- | --- | --- |
 | 1 | Emscripten bindings — Renderer setter를 JS에 노출 | ✅ 완료 |
 | 2 | HTML overlay UI — Debug view, Post-process, 조명 패널 | ✅ 완료 |
-| 3 | WGSL DeferredLighting — CSM cascade 색상 오버레이 | ✅ 완료 (셰이더 기구현) |
-| 4 | 씬에 동적 점 광원 배치 (도로 교차점 가로등) | ✅ 완료 |
-| 5 | CPU-side 패스 타이밍 표시 (HTML 패널 실시간 폴링) | ✅ 완료 |
+| 3 | WGSL CSM cascade 색상 오버레이 | ⚠️ 그림자 재설계로 대체 (단일 맵+PCSS, 시각화 무의미) |
+| 4 | 씬에 동적 점 광원 배치 (도로 교차점 가로등 9개) | ✅ 완료 |
+| 5 | 패스 타이밍 표시 | ◐ CPU 근사 부분 완료 — 진짜 GPU timestamp-query 미완 |
+
+> Task 3은 2026-05-19 그림자 전면 재작성(CSM 폐기 → 단일 씬-고정 맵 + PCSS)으로
+> 무의미해졌고, Task 5는 CPU 명령 기록 시간 근사로 부분 완료됐다. 포트폴리오
+> 수준 격상을 위한 남은 작업(프레이밍·가이드 투어·GPU timestamp-query 등)은
+> [WEBGPU_SHOWCASE_PLAN.md](webgpu-showcase/WEBGPU_SHOWCASE_PLAN.md) §5 참조.
 
 ---
 
