@@ -29,7 +29,7 @@ struct alignas(16) PointLight {
     float intensity;
 };
 
-static constexpr uint32_t MAX_POINT_LIGHTS = 32;
+static constexpr uint32_t MAX_POINT_LIGHTS = 128;
 
 struct UniformBufferObject {
 	alignas(16) glm::mat4 model;

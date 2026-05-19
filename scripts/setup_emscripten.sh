@@ -6,7 +6,7 @@ set -e  # Exit on error
 
 # Configuration
 EMSDK_DIR="${HOME}/emsdk"
-EMSDK_VERSION="3.1.71"
+EMSDK_VERSION="4.0.10"
 COLOR_GREEN="\033[0;32m"
 COLOR_BLUE="\033[0;34m"
 COLOR_YELLOW="\033[0;33m"

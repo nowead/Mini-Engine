@@ -4,7 +4,7 @@
 const PI: f32 = 3.14159265359;
 
 // Must match C++ UniformBufferObject (Vertex.hpp) exactly.
-// MAX_POINT_LIGHTS = 32; PointLight = 32 bytes each.
+// MAX_POINT_LIGHTS = 128; PointLight = 32 bytes each.
 struct PointLight {
     position:  vec3<f32>,
     radius:    f32,
@@ -31,8 +31,8 @@ struct UniformBufferObject {
     shadowBias:       f32,
     shadowStrength:   f32,
     // Phase 4: dynamic point lights
-    pointLights:      array<PointLight, 32>, // offset 656
-    numPointLights:   u32,                   // offset 1680
+    pointLights:      array<PointLight, 128>, // offset 656
+    numPointLights:   u32,                    // offset 4752
     debugCascades:    f32,
     debugView:        i32,
     _pad2:            f32,

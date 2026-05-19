@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mini-Engine &mdash; WebGPU Demos</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        html, body {
+            min-height: 100%;
+            background: radial-gradient(ellipse at top, #0a1426 0%, #04070d 70%);
+            color: #c0c8d8;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 56px 28px 64px;
+        }
+
+        header {
+            margin-bottom: 36px;
+        }
+
+        h1 {
+            font-size: 2.4rem;
+            color: #4a9eff;
+            letter-spacing: .04em;
+            margin-bottom: 6px;
+        }
+
+        .tag {
+            font-size: .8rem;
+            color: #4a6a9a;
+            letter-spacing: .14em;
+            text-transform: uppercase;
+        }
+
+        /* Featured card */
+        .card-featured {
+            display: block;
+            background: linear-gradient(145deg, rgba(20,36,70,0.6), rgba(12,18,38,0.6));
+            border: 1px solid rgba(74,158,255,0.32);
+            border-radius: 14px;
+            padding: 28px 32px;
+            margin-bottom: 32px;
+            text-decoration: none;
+            color: inherit;
+            transition: border-color .2s, transform .2s, box-shadow .2s;
+            box-shadow: 0 4px 28px rgba(0,0,0,0.35);
+        }
+
+        .card-featured:hover {
+            border-color: rgba(74,158,255,0.65);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 36px rgba(0,0,0,0.5), 0 0 0 1px rgba(74,158,255,0.1);
+        }
+
+        .card-featured h2 {
+            font-size: 1.4rem;
+            color: #6ab3ff;
+            margin-bottom: 6px;
+            font-weight: 600;
+        }
+
+        .card-featured .arrow {
+            font-size: 1.1rem;
+            margin-left: 6px;
+            transition: margin-left .15s;
+        }
+
+        .card-featured:hover .arrow { margin-left: 12px; }
+
+        .card-featured p {
+            font-size: .9rem;
+            line-height: 1.65;
+            color: #8a9ab8;
+            margin-bottom: 16px;
+        }
+
+        .feature-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .feature-tag {
+            font-size: .72rem;
+            padding: 3px 10px;
+            background: rgba(74,158,255,0.09);
+            border: 1px solid rgba(74,158,255,0.22);
+            border-radius: 20px;
+            color: #5a9aee;
+            letter-spacing: .03em;
+        }
+
+        /* Secondary grid */
+        .section-label {
+            font-size: .72rem;
+            color: #4a6a8a;
+            letter-spacing: .14em;
+            text-transform: uppercase;
+            margin-bottom: 14px;
+            margin-top: 8px;
+        }
+
+        .card-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 12px;
+        }
+
+        .card {
+            display: block;
+            background: rgba(12,18,32,0.55);
+            border: 1px solid rgba(74,158,255,0.15);
+            border-radius: 8px;
+            padding: 16px 18px;
+            text-decoration: none;
+            color: inherit;
+            transition: border-color .2s, background .2s, transform .15s;
+        }
+
+        .card:hover {
+            border-color: rgba(74,158,255,0.4);
+            background: rgba(20,30,52,0.7);
+            transform: translateY(-1px);
+        }
+
+        .card h3 {
+            font-size: .92rem;
+            color: #c8d4e8;
+            margin-bottom: 4px;
+            font-weight: 600;
+        }
+
+        .card p {
+            font-size: .75rem;
+            line-height: 1.5;
+            color: #6a7a96;
+        }
+
+        footer {
+            margin-top: 48px;
+            font-size: .72rem;
+            color: #3a4a68;
+            letter-spacing: .04em;
+        }
+
+        footer a {
+            color: #4a6a8a;
+            text-decoration: none;
+        }
+
+        footer a:hover { color: #6a8aaa; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Mini-Engine</h1>
+            <p class="tag">Vulkan &middot; WebGPU &middot; C++ rendering engine</p>
+        </header>
+
+        <a href="MiniEngine.html" class="card-featured">
+            <h2>WebGPU Deferred Renderer <span class="arrow">&rsaquo;</span></h2>
+            <p>
+                The main showcase. A deferred renderer running entirely in the browser,
+                with PBR + IBL, PCSS soft shadows, SSAO, Bloom, and GPU frustum culling.
+                Includes a guided tour and an interactive debug panel.
+            </p>
+            <div class="feature-tags">
+                <span class="feature-tag">G-Buffer Deferred</span>
+                <span class="feature-tag">PBR + IBL</span>
+                <span class="feature-tag">PCSS Soft Shadows</span>
+                <span class="feature-tag">SSAO</span>
+                <span class="feature-tag">Bloom + FXAA</span>
+                <span class="feature-tag">GPU Frustum Culling</span>
+            </div>
+        </a>
+
+        <p class="section-label">Component Demos</p>
+        <div class="card-grid">
+            <a href="pbr_demo.html" class="card">
+                <h3>PBR Demo</h3>
+                <p>Cook-Torrance BRDF on a grid of spheres &mdash; metallic vs roughness sweep.</p>
+            </a>
+            <a href="dual_light_demo.html" class="card">
+                <h3>Dual Light</h3>
+                <p>Two-light deferred lighting scene &mdash; isolated lighting pass test.</p>
+            </a>
+            <a href="instancing_test.html" class="card">
+                <h3>Instancing Test</h3>
+                <p>SSBO-driven GPU instancing &mdash; single draw call for many transforms.</p>
+            </a>
+            <a href="rhi_smoke_test.html" class="card">
+                <h3>RHI Smoke Test</h3>
+                <p>Minimal RHI initialization sanity check &mdash; clears the screen.</p>
+            </a>
+        </div>
+
+        <footer>
+            Source: <a href="https://github.com" target="_blank" rel="noopener">github.com/mindaewon/Mini-Engine</a>
+        </footer>
+    </div>
+</body>
+</html>

@@ -153,7 +153,8 @@ void Application::initGameLogic() {
         }
 
 #ifdef __EMSCRIPTEN__
-        // Place street lights at intersections between building rows/columns
+        // Tier 1 — 9 iconic intersection street lights (warm orange, large radius).
+        // These define the baseline "city street" look at the slider default of 9.
         int intervals = gridSize - 1;
         for (int ix = 0; ix < intervals; ++ix) {
             for (int iz = 0; iz < intervals; ++iz) {
@@ -165,6 +166,39 @@ void Application::initGameLogic() {
                 pl.color     = glm::vec3(1.0f, 0.75f, 0.35f);
                 pl.intensity = 3.0f;
                 streetLights.push_back(pl);
+            }
+        }
+
+        // Tier 2 — 91 colored accent lights demonstrating deferred's many-light
+        // scalability. Lower height + smaller radius + rotating palette so each
+        // is locally visible; final total is 100 (9 tier-1 + 91 tier-2).
+        constexpr int   kTargetLightTotal = 100;
+        constexpr int   kAccentGrid       = 10;     // 10×10 = 100 candidate slots
+        constexpr float kAccentHeight     = 3.5f;
+        constexpr float kAccentRadius     = 8.0f;
+        constexpr float kAccentIntensity  = 2.5f;
+        const glm::vec3 palette[5] = {
+            glm::vec3(1.00f, 0.35f, 0.35f),  // red
+            glm::vec3(0.35f, 0.60f, 1.00f),  // blue
+            glm::vec3(0.40f, 1.00f, 0.55f),  // green
+            glm::vec3(0.95f, 0.40f, 0.95f),  // magenta
+            glm::vec3(1.00f, 0.85f, 0.30f),  // amber
+        };
+        const float totalSpan = (gridSize - 1) * spacing;
+        const float halfSpan  = totalSpan * 0.5f;
+        const float accentStep = totalSpan / static_cast<float>(kAccentGrid);
+        int colorIdx = 0;
+        for (int ix = 0; ix < kAccentGrid && static_cast<int>(streetLights.size()) < kTargetLightTotal; ++ix) {
+            for (int iz = 0; iz < kAccentGrid && static_cast<int>(streetLights.size()) < kTargetLightTotal; ++iz) {
+                PointLight pl;
+                pl.position  = glm::vec3(-halfSpan + (ix + 0.5f) * accentStep,
+                                         kAccentHeight,
+                                         -halfSpan + (iz + 0.5f) * accentStep);
+                pl.radius    = kAccentRadius;
+                pl.color     = palette[colorIdx % 5];
+                pl.intensity = kAccentIntensity;
+                streetLights.push_back(pl);
+                ++colorIdx;
             }
         }
         renderer->setPointLights(streetLights);

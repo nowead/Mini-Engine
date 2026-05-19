@@ -33,7 +33,7 @@ struct UniformBufferObject {
     shadowMapSize:      vec2<f32>,
     shadowBias:         f32,
     shadowStrength:     f32,
-    pointLights:        array<PointLight, 32>,
+    pointLights:        array<PointLight, 128>,
     numPointLights:     u32,
     debugCascades:      f32,
     debugView:          i32,

@@ -62,6 +62,7 @@ public:
     float wasm_getPassTimeBloom()       const { return renderer ? renderer->getPassTimeBloom()       : 0.f; }
     float wasm_getPassTimePostProcess() const { return renderer ? renderer->getPassTimePostProcess() : 0.f; }
     float wasm_getPassTimeTotal()       const { return renderer ? renderer->getPassTimeTotal()       : 0.f; }
+    bool  wasm_isGPUTimingAvailable()   const { return renderer ? renderer->isGPUTimingAvailable()   : false; }
 #endif
 
 private:

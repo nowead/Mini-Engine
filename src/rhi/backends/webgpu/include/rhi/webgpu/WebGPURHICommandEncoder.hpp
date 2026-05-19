@@ -109,6 +109,20 @@ public:
     // RHICommandEncoder interface
     std::unique_ptr<RHIRenderPassEncoder> beginRenderPass(const RenderPassDesc& desc) override;
     std::unique_ptr<RHIComputePassEncoder> beginComputePass(const char* label = nullptr) override;
+
+    // WebGPU-specific raw handle accessor (used by GPU timer to issue
+    // resolveQuerySet — keeps RHI interface unchanged).
+    WGPUCommandEncoder getWGPUEncoder() const { return m_encoder; }
+
+    // Arms timestamp writes for the NEXT render/compute pass started. The
+    // pass's descriptor will include the given query writes, then this state
+    // clears. Used by the GPU timer to inject timestampWrites into real
+    // passes (empty compute-pass tags do not emit timestamps in this build).
+    void setPendingTimestamps(WGPUQuerySet qs, uint32_t beginIdx, uint32_t endIdx) {
+        m_pendingTsQuerySet = qs;
+        m_pendingTsBeginIdx = beginIdx;
+        m_pendingTsEndIdx   = endIdx;
+    }
     void copyBufferToBuffer(rhi::RHIBuffer* src, uint64_t srcOffset,
                            rhi::RHIBuffer* dst, uint64_t dstOffset,
                            uint64_t size) override;
@@ -132,6 +146,11 @@ public:
 private:
     WebGPURHIDevice* m_device;
     WGPUCommandEncoder m_encoder = nullptr;
+
+    // Pending timestampWrites consumed by the next pass start.
+    WGPUQuerySet m_pendingTsQuerySet = nullptr;
+    uint32_t     m_pendingTsBeginIdx = 0;
+    uint32_t     m_pendingTsEndIdx   = 0;
 };
 
 } // namespace WebGPU

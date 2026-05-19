@@ -25,6 +25,7 @@ static float js_getPassTimeSSAO()        { return g_app ? g_app->wasm_getPassTim
 static float js_getPassTimeBloom()       { return g_app ? g_app->wasm_getPassTimeBloom()       : 0.f; }
 static float js_getPassTimePostProcess() { return g_app ? g_app->wasm_getPassTimePostProcess() : 0.f; }
 static float js_getPassTimeTotal()       { return g_app ? g_app->wasm_getPassTimeTotal()       : 0.f; }
+static bool  js_isGPUTimingAvailable()   { return g_app ? g_app->wasm_isGPUTimingAvailable()   : false; }
 
 } // namespace wasm
 
@@ -45,6 +46,7 @@ EMSCRIPTEN_BINDINGS(mini_engine) {
     emscripten::function("getPassTimeBloom",       &wasm::js_getPassTimeBloom);
     emscripten::function("getPassTimePostProcess", &wasm::js_getPassTimePostProcess);
     emscripten::function("getPassTimeTotal",       &wasm::js_getPassTimeTotal);
+    emscripten::function("isGPUTimingAvailable",   &wasm::js_isGPUTimingAvailable);
 }
 
 #endif // __EMSCRIPTEN__

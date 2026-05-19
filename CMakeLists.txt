@@ -580,6 +580,10 @@ else()
         # WASM/JS bindings
         src/wasm/WASMBindings.hpp
         src/wasm/WASMBindings.cpp
+
+        # GPU profiler (WebGPU timestamp-query)
+        src/utils/WebGPUTimer.hpp
+        src/utils/WebGPUTimer.cpp
     )
 
     target_include_directories(MiniEngine BEFORE PRIVATE
@@ -628,6 +632,17 @@ else()
             ${MINIENGINE_WGSL_SOURCES}
             ${MINIENGINE_SHADER_DIR}/
         COMMENT "Copying WGSL shaders for MiniEngine WASM"
+    )
+
+    # Copy the landing index.html into the build dir so localhost:8000/
+    # lands on a demo index instead of 404. Re-runs whenever the source
+    # template changes (copy_if_different short-circuits otherwise).
+    add_custom_command(
+        TARGET MiniEngine POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm_index.html
+            ${CMAKE_CURRENT_BINARY_DIR}/index.html
+        COMMENT "Copying landing index.html"
     )
 
     # The WGSL shaders are baked into MiniEngine.data via --preload-file and the

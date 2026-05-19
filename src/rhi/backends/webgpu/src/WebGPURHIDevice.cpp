@@ -13,6 +13,7 @@
 
 #include <iostream>
 #include <stdexcept>
+#include <vector>
 
 #ifdef __EMSCRIPTEN__
     #include <emscripten.h>
@@ -280,13 +281,23 @@ void WebGPURHIDevice::requestDevice() {
 
     deviceDesc.defaultQueue.label = WGPU_LABEL("Default Queue");
 
-    // Request features (none for now)
+    // Request optional features. timestamp-query enables real GPU profiling
+    // via begin/end-of-pass timestampWrites; falls back silently if the
+    // adapter does not support it.
+    std::vector<WGPUFeatureName> requestedFeatures;
+    if (wgpuAdapterHasFeature(m_adapter, WGPUFeatureName_TimestampQuery)) {
+        requestedFeatures.push_back(WGPUFeatureName_TimestampQuery);
+        std::cout << "[WebGPU] Adapter supports timestamp-query — requesting\n";
+    } else {
+        std::cout << "[WebGPU] Adapter does not support timestamp-query — using CPU timings\n";
+    }
+
 #if defined(__EMSCRIPTEN__) && EMSCRIPTEN_VERSION_LESS_THAN(3, 1, 60)
-    deviceDesc.requiredFeaturesCount = 0;
+    deviceDesc.requiredFeaturesCount = static_cast<uint32_t>(requestedFeatures.size());
 #else
-    deviceDesc.requiredFeatureCount = 0;
+    deviceDesc.requiredFeatureCount = static_cast<uint32_t>(requestedFeatures.size());
 #endif
-    deviceDesc.requiredFeatures = nullptr;
+    deviceDesc.requiredFeatures = requestedFeatures.empty() ? nullptr : requestedFeatures.data();
 
     DeviceRequestData callbackData;
 

@@ -295,6 +295,16 @@ std::unique_ptr<RHIRenderPassEncoder> WebGPURHICommandEncoder::beginRenderPass(c
     renderPassDesc.colorAttachments = colorAttachments.data();
     renderPassDesc.depthStencilAttachment = pDepthStencil;
 
+    // Consume any pending timestamp writes armed by setPendingTimestamps.
+    WGPUPassTimestampWrites tw{};
+    if (m_pendingTsQuerySet) {
+        tw.querySet                  = m_pendingTsQuerySet;
+        tw.beginningOfPassWriteIndex = m_pendingTsBeginIdx;
+        tw.endOfPassWriteIndex       = m_pendingTsEndIdx;
+        renderPassDesc.timestampWrites = &tw;
+        m_pendingTsQuerySet = nullptr;
+    }
+
     WGPURenderPassEncoder encoder = wgpuCommandEncoderBeginRenderPass(m_encoder, &renderPassDesc);
     return std::make_unique<WebGPURHIRenderPassEncoder>(m_device, encoder);
 }
@@ -302,6 +312,16 @@ std::unique_ptr<RHIRenderPassEncoder> WebGPURHICommandEncoder::beginRenderPass(c
 std::unique_ptr<RHIComputePassEncoder> WebGPURHICommandEncoder::beginComputePass(const char* label) {
     WGPUComputePassDescriptor desc{};
     desc.label = WGPU_LABEL(label);
+
+    // Consume any pending timestamp writes armed by setPendingTimestamps.
+    WGPUPassTimestampWrites tw{};
+    if (m_pendingTsQuerySet) {
+        tw.querySet                  = m_pendingTsQuerySet;
+        tw.beginningOfPassWriteIndex = m_pendingTsBeginIdx;
+        tw.endOfPassWriteIndex       = m_pendingTsEndIdx;
+        desc.timestampWrites = &tw;
+        m_pendingTsQuerySet = nullptr;
+    }
 
     WGPUComputePassEncoder encoder = wgpuCommandEncoderBeginComputePass(m_encoder, &desc);
     return std::make_unique<WebGPURHIComputePassEncoder>(m_device, encoder);

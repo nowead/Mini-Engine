@@ -34,7 +34,7 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
     vec2 shadowMapSize;
     float shadowBias;
     float shadowStrength;
-    PointLight pointLights[32];
+    PointLight pointLights[128];
     uint numPointLights;
     float debugCascades;  // 1.0 = visualize CSM cascade regions
     int   debugView;      // 0=normal, 1=normals, 2=albedo, 3=metallic, 4=roughness, 5=ao, 6=depth

@@ -233,8 +233,8 @@ check-emscripten:
 		echo "$(COLOR_GREEN)Manual Setup:$(COLOR_RESET)"; \
 		echo "  git clone https://github.com/emscripten-core/emsdk.git ~/emsdk"; \
 		echo "  cd ~/emsdk"; \
-		echo "  ./emsdk install 3.1.71"; \
-		echo "  ./emsdk activate 3.1.71"; \
+		echo "  ./emsdk install 4.0.10"; \
+		echo "  ./emsdk activate 4.0.10"; \
 		echo "  source ~/emsdk/emsdk_env.sh"; \
 		echo ""; \
 		echo "$(COLOR_BLUE)After installation, run 'make wasm' again.$(COLOR_RESET)"; \
@@ -296,12 +296,12 @@ wasm-instancing: build-wasm
 # Serve WASM build on local web server
 serve-wasm: wasm
 	@echo "$(COLOR_BLUE)========================================$(COLOR_RESET)"
-	@echo "$(COLOR_GREEN)🌐 Starting web server...$(COLOR_RESET)"
+	@echo "$(COLOR_GREEN)🌐 Starting web server (no-cache)...$(COLOR_RESET)"
 	@echo "$(COLOR_BLUE)========================================$(COLOR_RESET)"
 	@echo "Server URL: $(COLOR_GREEN)http://localhost:8000$(COLOR_RESET)"
 	@echo "Press Ctrl+C to stop"
 	@echo "$(COLOR_BLUE)========================================$(COLOR_RESET)"
-	@cd $(WASM_BUILD_DIR) && python3 -m http.server 8000
+	@cd $(WASM_BUILD_DIR) && python3 ../scripts/serve_nocache.py 8000
 
 # Serve WebGPU instancing test
 serve-instancing: wasm-instancing

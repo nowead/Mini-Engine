@@ -15,6 +15,10 @@
 #include <rhi/vulkan/VulkanRHITexture.hpp>
 #include <rhi/vulkan/VulkanRHIBuffer.hpp>
 #include <rhi/vulkan/VulkanRHIDevice.hpp>
+#else
+#include <rhi/webgpu/WebGPURHIDevice.hpp>
+#include <rhi/webgpu/WebGPURHICommandEncoder.hpp>
+#include "src/utils/WebGPUTimer.hpp"
 #endif
 
 #include <stdexcept>
@@ -118,6 +122,18 @@ Renderer::Renderer(GLFWwindow* window,
                 MAX_FRAMES_IN_FLIGHT);
         }
     }
+#else
+    // P0.3: WebGPU GPU profiler via timestamp-query (per-pass real GPU ms).
+    // No-op if adapter does not advertise the feature; CPU fallback still works.
+    {
+        auto* webgpuDevice = dynamic_cast<RHI::WebGPU::WebGPURHIDevice*>(rhiBridge->getDevice());
+        if (webgpuDevice) {
+            m_webgpuTimer = std::make_unique<WebGPUTimer>(
+                webgpuDevice->getWGPUDevice(),
+                webgpuDevice->getWGPUQueue(),
+                MAX_FRAMES_IN_FLIGHT);
+        }
+    }
 #endif
 
     // Phase 3.1: Log GPU memory statistics
@@ -131,6 +147,44 @@ Renderer::~Renderer() {
     }
     // All resources cleaned up by RAII in reverse declaration order
 }
+
+#ifdef __EMSCRIPTEN__
+// Pass time getters — prefer GPU timing when supported, CPU as fallback.
+bool Renderer::isGPUTimingAvailable() const {
+    return m_webgpuTimer && m_webgpuTimer->isSupported();
+}
+
+float Renderer::getPassTimeGBuffer() const {
+    if (isGPUTimingAvailable())
+        return m_webgpuTimer->getElapsedMs(WebGPUTimer::TimerId::GBuffer);
+    return m_passTimeGBuffer;
+}
+float Renderer::getPassTimeDeferred() const {
+    if (isGPUTimingAvailable())
+        return m_webgpuTimer->getElapsedMs(WebGPUTimer::TimerId::Deferred);
+    return m_passTimeDeferred;
+}
+float Renderer::getPassTimeSSAO() const {
+    if (isGPUTimingAvailable())
+        return m_webgpuTimer->getElapsedMs(WebGPUTimer::TimerId::SSAO);
+    return m_passTimeSSAO;
+}
+float Renderer::getPassTimeBloom() const {
+    if (isGPUTimingAvailable())
+        return m_webgpuTimer->getElapsedMs(WebGPUTimer::TimerId::Bloom);
+    return m_passTimeBloom;
+}
+float Renderer::getPassTimePostProcess() const {
+    if (isGPUTimingAvailable())
+        return m_webgpuTimer->getElapsedMs(WebGPUTimer::TimerId::PostProcess);
+    return m_passTimePostProcess;
+}
+float Renderer::getPassTimeTotal() const {
+    if (isGPUTimingAvailable())
+        return m_webgpuTimer->getElapsedMs(WebGPUTimer::TimerId::Frame);
+    return m_passTimeTotal;
+}
+#endif
 
 #ifndef __EMSCRIPTEN__
 GpuProfiler* Renderer::getGpuProfiler() {
@@ -3091,6 +3145,17 @@ void Renderer::drawFrame() {
     using _Clock = std::chrono::high_resolution_clock;
     auto _tFrame = _Clock::now();
     auto _tPass  = _tFrame;
+
+    // Real GPU timestamps via timestamp-query (no-op when unsupported).
+    // The timer arms the next render/compute pass with begin+end timestamp
+    // writes via the WebGPU encoder's setPendingTimestamps state setter.
+    RHI::WebGPU::WebGPURHICommandEncoder* _wgpuEnc = nullptr;
+    WGPUCommandEncoder _rawEnc = nullptr;
+    if (m_webgpuTimer) {
+        _wgpuEnc = dynamic_cast<RHI::WebGPU::WebGPURHICommandEncoder*>(encoder.get());
+        if (_wgpuEnc) _rawEnc = _wgpuEnc->getWGPUEncoder();
+        m_webgpuTimer->beginPhase(_wgpuEnc, WebGPUTimer::TimerId::GBuffer);
+    }
 #endif
 
     // G-Buffer pass — geometry to G-Buffers + depth (Vulkan + WebGPU)
@@ -3121,6 +3186,9 @@ void Renderer::drawFrame() {
     if (pendingInstancedData) pendingInstancedData.reset();
 
 #ifdef __EMSCRIPTEN__
+    if (m_webgpuTimer) {
+        m_webgpuTimer->beginPhase(_wgpuEnc, WebGPUTimer::TimerId::Deferred);
+    }
     m_passTimeGBuffer = std::chrono::duration<float, std::milli>(_Clock::now() - _tPass).count();
     _tPass = _Clock::now();
 
@@ -3148,6 +3216,9 @@ void Renderer::drawFrame() {
             dlPass->draw(3);  // Fullscreen triangle
             dlPass->end();
         }
+    }
+    if (m_webgpuTimer) {
+        m_webgpuTimer->beginPhase(_wgpuEnc, WebGPUTimer::TimerId::SSAO);
     }
     m_passTimeDeferred = std::chrono::duration<float, std::milli>(_Clock::now() - _tPass).count();
     _tPass = _Clock::now();
@@ -3235,6 +3306,9 @@ void Renderer::drawFrame() {
             }
         }
     }
+    if (m_webgpuTimer) {
+        m_webgpuTimer->beginPhase(_wgpuEnc, WebGPUTimer::TimerId::Bloom);
+    }
     m_passTimeSSAO = std::chrono::duration<float, std::milli>(_Clock::now() - _tPass).count();
     _tPass = _Clock::now();
 
@@ -3278,6 +3352,9 @@ void Renderer::drawFrame() {
             runBloomPass(wgslBloomBlurVPipeline.get(), bloomTextureView.get(),
                          wgslBloomBlurBGs[1].get(), "BloomBlurV");
         }
+    }
+    if (m_webgpuTimer) {
+        m_webgpuTimer->beginPhase(_wgpuEnc, WebGPUTimer::TimerId::PostProcess);
     }
     m_passTimeBloom = std::chrono::duration<float, std::milli>(_Clock::now() - _tPass).count();
     _tPass = _Clock::now();
@@ -3645,6 +3722,13 @@ void Renderer::drawFrame() {
     // =========================================================================
 
 #endif  // !__EMSCRIPTEN__ — render graph block
+
+#ifdef __EMSCRIPTEN__
+    // Resolve all phase timestamps before encoder finish.
+    if (m_webgpuTimer) {
+        m_webgpuTimer->endFrame(_rawEnc);
+    }
+#endif
 
     // Finish command buffer
     auto commandBuffer = encoder->finish();

@@ -3,251 +3,317 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mini-Engine WebGPU</title>
+    <title>Mini-Engine &mdash; WebGPU Deferred Renderer</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
 
         html, body {
-            width: 100%;
-            height: 100%;
+            width: 100%; height: 100%;
             overflow: hidden;
             background-color: #000;
         }
 
         #canvas {
             display: block;
-            width: 100vw;
-            height: 100vh;
+            width: 100vw; height: 100vh;
         }
 
-        /* Loading overlay */
+        /* ── Loading overlay ──────────────────────────────────────────────── */
         #overlay {
-            position: fixed;
-            inset: 0;
-            background: rgba(0, 0, 0, 0.85);
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            z-index: 10;
-            color: #fff;
+            position: fixed; inset: 0;
+            background: rgba(0,0,0,0.85);
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            z-index: 10; color: #fff;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             transition: opacity 0.5s ease;
         }
-
-        #overlay.hidden {
-            opacity: 0;
-            pointer-events: none;
-        }
-
-        #overlay h1 {
-            font-size: 2rem;
-            color: #4a9eff;
-            margin-bottom: 8px;
-            letter-spacing: 0.05em;
-        }
-
-        #overlay .subtitle {
-            color: #888;
-            margin-bottom: 40px;
-            font-size: 0.9rem;
-        }
-
+        #overlay.hidden { opacity: 0; pointer-events: none; }
+        #overlay h1 { font-size: 2rem; color: #4a9eff; margin-bottom: 8px; letter-spacing: .05em; }
+        #overlay .subtitle { color: #888; margin-bottom: 40px; font-size: .9rem; }
         .spinner {
-            width: 48px;
-            height: 48px;
-            border: 4px solid #222;
-            border-top: 4px solid #4a9eff;
+            width: 48px; height: 48px;
+            border: 4px solid #222; border-top: 4px solid #4a9eff;
             border-radius: 50%;
             animation: spin 0.9s linear infinite;
             margin-bottom: 20px;
         }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        #statusText { font-size: .85rem; color: #aaa; font-family: 'Courier New', monospace; }
 
-        @keyframes spin {
-            to { transform: rotate(360deg); }
+        /* ── Intro modal ──────────────────────────────────────────────────── */
+        #introModal {
+            position: fixed; inset: 0;
+            background: rgba(0,0,0,0.72);
+            display: flex; align-items: center; justify-content: center;
+            z-index: 30;
+            -webkit-backdrop-filter: blur(4px);
+            backdrop-filter: blur(4px);
+            animation: fadeIn 0.4s ease;
+        }
+        #introModal.hidden { display: none; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+        #introCard {
+            background: rgba(8,12,24,0.96);
+            border: 1px solid rgba(74,158,255,0.3);
+            border-radius: 12px;
+            padding: 32px 36px 28px;
+            max-width: 520px;
+            width: calc(100% - 40px);
+            color: #c0c8d8;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            box-shadow: 0 8px 40px rgba(0,0,0,0.6), 0 0 0 1px rgba(74,158,255,0.06);
         }
 
-        #statusText {
-            font-size: 0.85rem;
-            color: #aaa;
-            font-family: 'Courier New', monospace;
-        }
-
-        /* Fullscreen button */
-        #fullscreenBtn {
-            position: fixed;
-            bottom: 16px;
-            right: 16px;
-            z-index: 20;
-            background: rgba(0, 0, 0, 0.5);
-            border: 1px solid rgba(74, 158, 255, 0.4);
+        #introCard h2 {
+            font-size: 1.6rem;
             color: #4a9eff;
+            letter-spacing: .04em;
+            margin-bottom: 4px;
+        }
+
+        .intro-subtitle {
+            font-size: .75rem;
+            color: #4a6a9a;
+            letter-spacing: .14em;
+            text-transform: uppercase;
+            margin-bottom: 18px;
+        }
+
+        .intro-desc {
+            font-size: .875rem;
+            line-height: 1.68;
+            color: #8a9ab8;
+            margin-bottom: 20px;
+        }
+
+        .intro-features {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 26px;
+        }
+
+        .intro-feature {
+            font-size: .72rem;
+            padding: 3px 10px;
+            background: rgba(74,158,255,0.09);
+            border: 1px solid rgba(74,158,255,0.22);
+            border-radius: 20px;
+            color: #5a9aee;
+            letter-spacing: .03em;
+        }
+
+        .intro-btns {
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn-primary {
+            flex: 1;
+            padding: 9px 0;
+            background: #4a9eff;
+            color: #000;
+            border: none;
             border-radius: 6px;
-            padding: 6px 10px;
+            font-size: .85rem;
+            font-weight: 700;
             cursor: pointer;
-            font-size: 18px;
-            line-height: 1;
-            opacity: 0.5;
-            transition: opacity 0.2s;
+            letter-spacing: .04em;
+            transition: background .15s;
         }
+        .btn-primary:hover { background: #6ab3ff; }
 
-        #fullscreenBtn:hover {
-            opacity: 1;
+        .btn-secondary {
+            flex: 1;
+            padding: 9px 0;
+            background: transparent;
+            color: #5a7a9a;
+            border: 1px solid rgba(74,158,255,0.18);
+            border-radius: 6px;
+            font-size: .85rem;
+            cursor: pointer;
+            transition: color .15s, border-color .15s;
         }
+        .btn-secondary:hover { color: #c0c8d8; border-color: rgba(74,158,255,0.4); }
 
-        /* Debug Control Panel */
-        #controlPanel {
+        /* ── Tour toast ───────────────────────────────────────────────────── */
+        #tourToast {
             position: fixed;
-            top: 16px;
-            left: 16px;
-            z-index: 20;
-            background: rgba(8, 10, 18, 0.88);
-            border: 1px solid rgba(74, 158, 255, 0.25);
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 25;
+            background: rgba(8,12,24,0.93);
+            border: 1px solid rgba(74,158,255,0.22);
+            border-radius: 10px;
+            padding: 14px 46px 18px 18px;
+            min-width: 320px;
+            max-width: 460px;
+            width: calc(100% - 40px);
+            color: #c0c8d8;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            -webkit-backdrop-filter: blur(6px);
+            backdrop-filter: blur(6px);
+            box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+            overflow: hidden;
+        }
+        #tourToast.hidden { display: none; }
+
+        .toast-header {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+            margin-bottom: 5px;
+        }
+
+        .toast-step {
+            font-size: .68rem;
+            color: #4a7aaa;
+            font-variant-numeric: tabular-nums;
+            letter-spacing: .07em;
+            flex-shrink: 0;
+        }
+
+        .toast-label {
+            font-size: .9rem;
+            font-weight: 600;
+            color: #e0e8f8;
+        }
+
+        .toast-desc {
+            font-size: .78rem;
+            line-height: 1.55;
+            color: #6a7a96;
+        }
+
+        .toast-skip {
+            position: absolute;
+            top: 11px; right: 12px;
+            background: none;
+            border: none;
+            color: #3a5a78;
+            cursor: pointer;
+            font-size: 14px;
+            line-height: 1;
+            padding: 3px 5px;
+            transition: color .15s;
+        }
+        .toast-skip:hover { color: #c0c8d8; }
+
+        .toast-progress {
+            position: absolute;
+            bottom: 0; left: 0;
+            height: 2px;
+            background: linear-gradient(90deg, #2a6adf, #4aefb8);
+            transition: width 0.35s ease;
+        }
+
+        /* ── Fullscreen button ────────────────────────────────────────────── */
+        #fullscreenBtn {
+            position: fixed; bottom: 16px; right: 16px; z-index: 20;
+            background: rgba(0,0,0,0.5);
+            border: 1px solid rgba(74,158,255,0.4);
+            color: #4a9eff; border-radius: 6px;
+            padding: 6px 10px; cursor: pointer;
+            font-size: 18px; line-height: 1;
+            opacity: 0.5; transition: opacity .2s;
+        }
+        #fullscreenBtn:hover { opacity: 1; }
+
+        /* ── Control panel ────────────────────────────────────────────────── */
+        #controlPanel {
+            position: fixed; top: 16px; left: 16px; z-index: 20;
+            background: rgba(8,10,18,0.88);
+            border: 1px solid rgba(74,158,255,0.25);
             border-radius: 8px;
             color: #c0c8d8;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            font-size: 11px;
-            min-width: 210px;
-            -webkit-user-select: none;
-            user-select: none;
-            -webkit-backdrop-filter: blur(6px);
-            backdrop-filter: blur(6px);
+            font-size: 11px; min-width: 210px;
+            -webkit-user-select: none; user-select: none;
+            -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
             overflow: hidden;
         }
 
         .panel-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 8px 12px;
-            background: rgba(74, 158, 255, 0.08);
-            border-bottom: 1px solid rgba(74, 158, 255, 0.15);
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 8px 10px 8px 12px;
+            background: rgba(74,158,255,0.08);
+            border-bottom: 1px solid rgba(74,158,255,0.15);
             cursor: pointer;
+            color: #4a9eff; font-size: 12px; font-weight: 600; letter-spacing: .03em;
+        }
+        .panel-header:hover { background: rgba(74,158,255,0.14); }
+
+        .panel-header-right {
+            display: flex; align-items: center; gap: 7px;
+        }
+
+        .tour-btn-sm {
+            font-size: 10px;
+            padding: 2px 8px;
+            background: rgba(74,158,255,0.13);
+            border: 1px solid rgba(74,158,255,0.32);
             color: #4a9eff;
-            font-size: 12px;
-            font-weight: 600;
-            letter-spacing: 0.03em;
+            border-radius: 4px;
+            cursor: pointer;
+            line-height: 1.6;
+            letter-spacing: .03em;
+            transition: background .15s;
         }
+        .tour-btn-sm:hover { background: rgba(74,158,255,0.26); }
 
-        .panel-header:hover {
-            background: rgba(74, 158, 255, 0.14);
-        }
-
-        #panelBody {
-            padding: 8px 12px 10px;
-        }
+        #panelBody { padding: 8px 12px 10px; }
 
         .section-label {
-            color: #4a9eff;
-            font-size: 10px;
-            font-weight: 600;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
+            color: #4a9eff; font-size: 10px; font-weight: 600;
+            letter-spacing: .08em; text-transform: uppercase;
             margin: 10px 0 5px;
             padding-bottom: 3px;
-            border-bottom: 1px solid rgba(74, 158, 255, 0.15);
+            border-bottom: 1px solid rgba(74,158,255,0.15);
         }
-
-        .section-label:first-child {
-            margin-top: 2px;
-        }
+        .section-label:first-child { margin-top: 2px; }
 
         .radio-group {
-            display: grid;
-            grid-template-columns: 1fr 1fr 1fr;
-            gap: 2px 4px;
-            margin-bottom: 2px;
+            display: grid; grid-template-columns: 1fr 1fr 1fr;
+            gap: 2px 4px; margin-bottom: 2px;
         }
-
         .radio-group label {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-            cursor: pointer;
-            padding: 2px 0;
-            white-space: nowrap;
+            display: flex; align-items: center; gap: 4px;
+            cursor: pointer; padding: 2px 0; white-space: nowrap;
         }
-
-        .radio-group label:hover {
-            color: #fff;
-        }
+        .radio-group label:hover { color: #fff; }
 
         .toggle {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            cursor: pointer;
-            padding: 3px 0;
+            display: flex; align-items: center; gap: 6px;
+            cursor: pointer; padding: 3px 0;
         }
-
-        .toggle:hover {
-            color: #fff;
-        }
+        .toggle:hover { color: #fff; }
 
         .slider-row {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            padding: 3px 0;
+            display: flex; align-items: center; gap: 6px; padding: 3px 0;
         }
+        .slider-row span:first-child { min-width: 58px; }
+        .slider-row input[type=range] { flex: 1; height: 3px; accent-color: #4a9eff; cursor: pointer; }
+        .slider-row .val { min-width: 32px; text-align: right; color: #8af; font-variant-numeric: tabular-nums; }
 
-        .slider-row span:first-child {
-            min-width: 58px;
-        }
-
-        .slider-row input[type=range] {
-            flex: 1;
-            height: 3px;
-            accent-color: #4a9eff;
-            cursor: pointer;
-        }
-
-        .slider-row .val {
-            min-width: 32px;
-            text-align: right;
-            color: #8af;
-            font-variant-numeric: tabular-nums;
-        }
-
-        input[type=checkbox], input[type=radio] {
-            accent-color: #4a9eff;
-            cursor: pointer;
-        }
+        input[type=checkbox], input[type=radio] { accent-color: #4a9eff; cursor: pointer; }
 
         .timing-row {
-            display: flex;
-            justify-content: space-between;
-            padding: 2px 0;
-            color: #8a9ab8;
+            display: flex; justify-content: space-between; padding: 2px 0; color: #8a9ab8;
         }
-
         .t-val {
-            color: #4aefb8;
-            font-variant-numeric: tabular-nums;
-            min-width: 48px;
-            text-align: right;
+            color: #4aefb8; font-variant-numeric: tabular-nums; min-width: 48px; text-align: right;
         }
-
-        .timing-label-note {
-            font-size: 9px;
-            color: #444;
-            font-weight: 400;
-        }
-
-        .timing-total {
-            border-top: 1px solid rgba(74, 158, 255, 0.15);
-            margin-top: 3px;
-            padding-top: 4px;
-        }
+        .timing-label-note { font-size: 9px; color: #444; font-weight: 400; }
+        .timing-total { border-top: 1px solid rgba(74,158,255,0.15); margin-top: 3px; padding-top: 4px; }
     </style>
 </head>
 <body>
     <canvas id="canvas"></canvas>
 
+    <!-- Loading overlay -->
     <div id="overlay">
         <h1>Mini-Engine</h1>
         <p class="subtitle">WebGPU / WebAssembly</p>
@@ -255,12 +321,53 @@
         <div id="statusText">Loading...</div>
     </div>
 
+    <!-- Intro modal: shown once after load completes -->
+    <div id="introModal" class="hidden">
+        <div id="introCard">
+            <h2>Mini-Engine</h2>
+            <p class="intro-subtitle">WebGPU &middot; WebAssembly &middot; Real-time</p>
+            <p class="intro-desc">
+                A deferred renderer running entirely in the browser &mdash; no plugins, no native code.
+                The G-Buffer pass separates geometry from lighting so multiple dynamic lights
+                cost almost nothing extra. PBR + IBL, PCSS soft shadows, SSAO, and Bloom,
+                all at 60&thinsp;fps via the WebGPU API.
+            </p>
+            <div class="intro-features">
+                <span class="intro-feature">G-Buffer Deferred</span>
+                <span class="intro-feature">PBR + IBL</span>
+                <span class="intro-feature">PCSS Soft Shadows</span>
+                <span class="intro-feature">SSAO</span>
+                <span class="intro-feature">Bloom + FXAA</span>
+                <span class="intro-feature">GPU Frustum Culling</span>
+            </div>
+            <div class="intro-btns">
+                <button class="btn-primary" id="introBtnTour">&#9654;&ensp;Guided Tour</button>
+                <button class="btn-secondary" id="introBtnExplore">Explore</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tour toast: shown during guided tour -->
+    <div id="tourToast" class="hidden">
+        <div class="toast-header">
+            <span class="toast-step" id="tourStepNum"></span>
+            <span class="toast-label" id="tourLabel"></span>
+        </div>
+        <p class="toast-desc" id="tourDesc"></p>
+        <button class="toast-skip" id="tourSkip" title="Skip tour">&#x2715;</button>
+        <div class="toast-progress" id="tourProgress"></div>
+    </div>
+
     <button id="fullscreenBtn" type="button" title="Toggle Fullscreen (F)">&#x26F6;</button>
 
+    <!-- Debug control panel -->
     <div id="controlPanel">
         <div class="panel-header" id="panelToggle">
-            <span>&#9881; Debug Controls</span>
-            <span id="panelChevron">&#9660;</span>
+            <span>&#9881;&ensp;Debug Controls</span>
+            <div class="panel-header-right">
+                <button class="tour-btn-sm" id="tourBtnPanel" title="Guided Tour">&#9654;&thinsp;Tour</button>
+                <span id="panelChevron">&#9660;</span>
+            </div>
         </div>
         <div id="panelBody">
             <div class="section-label">G-Buffer View</div>
@@ -303,14 +410,11 @@
             </div>
             <div class="slider-row">
                 <span>Street Lights</span>
-                <input type="range" id="pointLightCount" aria-label="Street Light Count" min="0" max="9" step="1" value="9">
+                <input type="range" id="pointLightCount" aria-label="Street Light Count" min="0" max="100" step="1" value="9">
                 <span class="val" id="plVal">9</span>
             </div>
 
-            <div class="section-label">Debug</div>
-            <label class="toggle"><input type="checkbox" id="debugCascades"> CSM Cascades</label>
-
-            <div class="section-label">Pass Timings <span class="timing-label-note">(CPU ms)</span></div>
+            <div class="section-label">Pass Timings <span class="timing-label-note" id="timingsModeLabel">(CPU ms)</span></div>
             <div class="timing-row"><span>G-Buffer</span>     <span class="t-val" id="tGBuffer">—</span></div>
             <div class="timing-row"><span>Deferred</span>     <span class="t-val" id="tDeferred">—</span></div>
             <div class="timing-row"><span>SSAO</span>         <span class="t-val" id="tSSAO">—</span></div>
@@ -323,14 +427,11 @@
     </div>
 
     <script type="text/javascript">
-        var overlay = document.getElementById('overlay');
+        var overlay    = document.getElementById('overlay');
         var statusText = document.getElementById('statusText');
-        var canvas = document.getElementById('canvas');
+        var canvas     = document.getElementById('canvas');
 
-        // Canvas buffer size is managed by C++/GLFW via Emscripten's resize callback.
-        // CSS (width: 100vw; height: 100vh) handles the visual fullscreen layout.
-
-        // Fullscreen toggle
+        // ── Fullscreen ──────────────────────────────────────────────────────
         function toggleFullscreen() {
             if (!document.fullscreenElement) {
                 document.documentElement.requestFullscreen().catch(function() {});
@@ -338,26 +439,26 @@
                 document.exitFullscreen();
             }
         }
-
         document.getElementById('fullscreenBtn').addEventListener('click', toggleFullscreen);
 
         document.addEventListener('keydown', function(e) {
-            if (e.key === 'f' || e.key === 'F') {
-                toggleFullscreen();
-            }
+            if (e.key === 'f' || e.key === 'F') { toggleFullscreen(); return; }
+            if (e.key === 'Escape') { hideIntro(); stopTour(); }
         });
 
-        // Panel collapse toggle
-        var panelBody = document.getElementById('panelBody');
+        // ── Panel collapse ───────────────────────────────────────────────────
+        var panelBody    = document.getElementById('panelBody');
         var panelChevron = document.getElementById('panelChevron');
-        document.getElementById('panelToggle').addEventListener('click', function() {
+        document.getElementById('panelToggle').addEventListener('click', function(e) {
+            if (e.target.id === 'tourBtnPanel' || e.target.closest('#tourBtnPanel')) return;
             var collapsed = panelBody.style.display === 'none';
             panelBody.style.display = collapsed ? '' : 'none';
-            panelChevron.innerHTML = collapsed ? '&#9660;' : '&#9658;';
+            panelChevron.innerHTML  = collapsed ? '&#9660;' : '&#9658;';
         });
 
-        // Pending WASM commands — set by JS event handlers, flushed each frame
-        // when WASM is not suspended by ASYNCIFY.
+        // ── Pending WASM command queue ──────────────────────────────────────
+        // Values are coalesced per function name and flushed on rAF, avoiding
+        // ASYNCIFY "multiple async operations" collisions from rapid UI events.
         var _pending = {};
 
         function _safeCall(fn, val) {
@@ -367,18 +468,36 @@
         function _flushPending() {
             var cmds = _pending;
             _pending = {};
-            for (var fn in cmds) {
-                _safeCall(fn, cmds[fn]);
-            }
+            for (var fn in cmds) _safeCall(fn, cmds[fn]);
             requestAnimationFrame(_flushPending);
         }
         requestAnimationFrame(_flushPending);
 
         function _queue(fn, val) { _pending[fn] = val; }
 
-        // Helper: update a slider value display and queue a Module function call
+        // ── UI sync helpers — used by both manual controls and guided tour ──
+        function _setDebugView(n) {
+            document.querySelectorAll('input[name="debugView"]').forEach(function(r) {
+                r.checked = parseInt(r.value, 10) === n;
+            });
+            _queue('setDebugView', n);
+        }
+
+        function _setAOStrength(v) {
+            document.getElementById('aoStrength').value         = v;
+            document.getElementById('aoVal').textContent        = v.toFixed(2);
+            _queue('setAOStrength', v);
+        }
+
+        function _setPointLightCount(n) {
+            document.getElementById('pointLightCount').value    = n;
+            document.getElementById('plVal').textContent        = n;
+            _queue('setPointLightCount', n);
+        }
+
+        // ── Slider helper ─────────────────────────────────────────────────────
         function bindSlider(id, valId, digits, fn) {
-            var el = document.getElementById(id);
+            var el    = document.getElementById(id);
             var valEl = document.getElementById(valId);
             el.addEventListener('input', function() {
                 var v = parseFloat(this.value);
@@ -387,15 +506,14 @@
             });
         }
 
+        // ── Wire controls (called after WASM runtime is ready) ────────────────
         function wireControls() {
-            // G-Buffer view radios
             document.querySelectorAll('input[name="debugView"]').forEach(function(r) {
                 r.addEventListener('change', function() {
-                    _queue('setDebugView', parseInt(this.value, 10));
+                    _setDebugView(parseInt(this.value, 10));
                 });
             });
 
-            // Post-process toggles
             document.getElementById('tonemapEnabled').addEventListener('change', function() {
                 _queue('setTonemapEnabled', this.checked);
             });
@@ -403,42 +521,165 @@
                 _queue('setFXAAEnabled', this.checked);
             });
 
-            // Post-process sliders
-            bindSlider('exposure',     'exposureVal', 1, 'setExposure');
-            bindSlider('bloomStrength','bloomVal',    2, 'setBloomStrength');
-            bindSlider('aoStrength',   'aoVal',       2, 'setAOStrength');
+            bindSlider('exposure',      'exposureVal', 1, 'setExposure');
+            bindSlider('bloomStrength', 'bloomVal',    2, 'setBloomStrength');
 
-            // Lighting sliders
+            document.getElementById('aoStrength').addEventListener('input', function() {
+                document.getElementById('aoVal').textContent = parseFloat(this.value).toFixed(2);
+                _queue('setAOStrength', parseFloat(this.value));
+            });
+
             bindSlider('sunIntensity', 'sunVal', 1, 'setSunIntensity');
 
-            // Street lights
-            var plEl = document.getElementById('pointLightCount');
-            var plVal = document.getElementById('plVal');
-            plEl.addEventListener('input', function() {
+            document.getElementById('pointLightCount').addEventListener('input', function() {
                 var n = parseInt(this.value, 10);
-                plVal.textContent = n;
+                document.getElementById('plVal').textContent = n;
                 _queue('setPointLightCount', n);
             });
 
-            // Debug CSM cascades
-            document.getElementById('debugCascades').addEventListener('change', function() {
-                _queue('setDebugCascades', this.checked);
-            });
-
-            // Pass timing poller — safe read, skip frame on ASYNCIFY conflict
-            function updateTimings() {
+            // Pass timing poller — real GPU ms when timestamp-query is supported,
+            // CPU command-recording ms otherwise. Label auto-updates on first read.
+            var _timingsLabelSet = false;
+            setInterval(function() {
                 try {
-                    document.getElementById('tGBuffer').textContent     = Module.getPassTimeGBuffer().toFixed(2) + ' ms';
-                    document.getElementById('tDeferred').textContent    = Module.getPassTimeDeferred().toFixed(2) + ' ms';
-                    document.getElementById('tSSAO').textContent        = Module.getPassTimeSSAO().toFixed(2) + ' ms';
-                    document.getElementById('tBloom').textContent       = Module.getPassTimeBloom().toFixed(2) + ' ms';
+                    if (!_timingsLabelSet && typeof Module.isGPUTimingAvailable === 'function') {
+                        var gpuOk = Module.isGPUTimingAvailable();
+                        var note = document.getElementById('timingsModeLabel');
+                        if (note) note.textContent = gpuOk ? '(GPU ms)' : '(CPU ms)';
+                        _timingsLabelSet = true;
+                    }
+                    document.getElementById('tGBuffer').textContent     = Module.getPassTimeGBuffer().toFixed(2)     + ' ms';
+                    document.getElementById('tDeferred').textContent    = Module.getPassTimeDeferred().toFixed(2)    + ' ms';
+                    document.getElementById('tSSAO').textContent        = Module.getPassTimeSSAO().toFixed(2)        + ' ms';
+                    document.getElementById('tBloom').textContent       = Module.getPassTimeBloom().toFixed(2)       + ' ms';
                     document.getElementById('tPostProcess').textContent = Module.getPassTimePostProcess().toFixed(2) + ' ms';
-                    document.getElementById('tTotal').textContent       = Module.getPassTimeTotal().toFixed(2) + ' ms';
+                    document.getElementById('tTotal').textContent       = Module.getPassTimeTotal().toFixed(2)       + ' ms';
                 } catch(e) {}
-            }
-            setInterval(updateTimings, 500);
+            }, 500);
         }
 
+        // ── Intro modal ───────────────────────────────────────────────────────
+        var _introShown = false;
+
+        function showIntro() {
+            if (_introShown) return;
+            _introShown = true;
+            document.getElementById('introModal').classList.remove('hidden');
+        }
+
+        function hideIntro() {
+            document.getElementById('introModal').classList.add('hidden');
+        }
+
+        document.getElementById('introBtnTour').addEventListener('click', function() {
+            hideIntro();
+            startTour();
+        });
+        document.getElementById('introBtnExplore').addEventListener('click', hideIntro);
+
+        // ── Guided tour ───────────────────────────────────────────────────────
+        var TOUR_STEPS = [
+            {
+                label: 'G-Buffer Normals',
+                desc:  'World-space normals written once in the G-Buffer pass. Lighting is decoupled from geometry — adding lights won\'t change this pass\'s cost.',
+                action: function() { _setDebugView(1); },
+                dur: 3000
+            },
+            {
+                label: 'G-Buffer Albedo',
+                desc:  'Per-pixel albedo and metallic packed here. PBR parameters are evaluated once and reused across every light in the deferred pass.',
+                action: function() { _setDebugView(2); },
+                dur: 3000
+            },
+            {
+                label: 'SSAO Mask',
+                desc:  'Screen-Space Ambient Occlusion — hemisphere depth samples darken corners and contact edges, adding a layer of ambient self-shadowing.',
+                action: function() { _setDebugView(7); },
+                dur: 3000
+            },
+            {
+                label: 'SSAO Disabled',
+                desc:  'Contact shadows at building bases flatten. SSAO is subtle but it grounds the scene significantly.',
+                action: function() { _setDebugView(0); _setAOStrength(0); },
+                dur: 2500
+            },
+            {
+                label: 'SSAO Restored',
+                desc:  'Ambient occlusion back on. Notice how edges and recesses re-acquire depth.',
+                action: function() { _setAOStrength(0.6); },
+                dur: 2000
+            },
+            {
+                label: 'Deferred: 0 Street Lights',
+                desc:  'All dynamic lights off — sun + IBL only. Watch the G-Buffer timing above as we add a lot of lights…',
+                action: function() { _setPointLightCount(0); },
+                dur: 3000
+            },
+            {
+                label: 'Deferred: 100 Street Lights',
+                desc:  'One hundred dynamic point lights — and the G-Buffer timing is unchanged. In a forward renderer, each light multiplies per-fragment shading cost; deferred evaluates them in a single fullscreen pass.',
+                action: function() { _setPointLightCount(100); },
+                dur: 4500
+            },
+            {
+                label: 'Bloom Mask',
+                desc:  'Pixels above the luminance threshold feed the blur pass. Street light halos and specular hotspots originate here.',
+                action: function() { _setDebugView(8); },
+                dur: 2500
+            },
+            {
+                label: 'Full Pipeline',
+                desc:  'G-Buffer → SSAO → Deferred PBR + IBL + PCSS shadows → Bloom → ACES tonemap → FXAA. All real-time in the browser via WebGPU.',
+                action: function() { _setDebugView(0); },
+                dur: 4000
+            }
+        ];
+
+        var _tour = { active: false, step: 0, timer: null };
+
+        function startTour() {
+            stopTour();
+            _tour.active = true;
+            _tour.step   = 0;
+            _runTourStep();
+        }
+
+        function stopTour() {
+            _tour.active = false;
+            if (_tour.timer) { clearTimeout(_tour.timer); _tour.timer = null; }
+            document.getElementById('tourToast').classList.add('hidden');
+        }
+
+        function _runTourStep() {
+            if (!_tour.active) return;
+            if (_tour.step >= TOUR_STEPS.length) { stopTour(); return; }
+
+            var s = TOUR_STEPS[_tour.step];
+            s.action();
+            _updateTourToast(_tour.step + 1, TOUR_STEPS.length, s.label, s.desc);
+
+            _tour.timer = setTimeout(function() {
+                _tour.step++;
+                _runTourStep();
+            }, s.dur);
+        }
+
+        function _updateTourToast(n, total, label, desc) {
+            document.getElementById('tourStepNum').textContent      = n + ' / ' + total;
+            document.getElementById('tourLabel').textContent        = label;
+            document.getElementById('tourDesc').textContent         = desc;
+            document.getElementById('tourProgress').style.width     = (n / total * 100) + '%';
+            document.getElementById('tourToast').classList.remove('hidden');
+        }
+
+        document.getElementById('tourSkip').addEventListener('click', stopTour);
+
+        document.getElementById('tourBtnPanel').addEventListener('click', function(e) {
+            e.stopPropagation();
+            startTour();
+        });
+
+        // ── Emscripten Module ─────────────────────────────────────────────────
         var Module = {
             onRuntimeInitialized: function() {
                 wireControls();
@@ -450,38 +691,31 @@
 
             print: function(text) {
                 console.log('[stdout] ' + text);
-                if (statusText) {
-                    statusText.innerHTML = text;
-                }
+                if (statusText) statusText.innerHTML = text;
             },
 
             printErr: function(text) {
                 console.error('[stderr] ' + text);
-                if (statusText) {
-                    statusText.innerHTML = '<span style="color: #ff4a4a;">Error: ' + text + '</span>';
-                }
+                if (statusText) statusText.innerHTML = '<span style="color:#ff4a4a;">Error: ' + text + '</span>';
             },
 
             setStatus: function(text) {
                 if (!Module.setStatus.last) Module.setStatus.last = { time: Date.now(), text: '' };
                 if (text === Module.setStatus.last.text) return;
 
-                var m = text.match(/([^(]+)\((\d+(\.\d+)?)\/(\d+)\)/);
+                var m   = text.match(/([^(]+)\((\d+(\.\d+)?)\/(\d+)\)/);
                 var now = Date.now();
-
                 if (m && now - Module.setStatus.last.time < 30) return;
                 Module.setStatus.last.time = now;
                 Module.setStatus.last.text = text;
-
-                if (m) {
-                    text = m[1];
-                }
+                if (m) text = m[1];
 
                 console.log('[status] ' + text);
                 if (statusText) statusText.innerHTML = text;
 
                 if (!text && overlay) {
                     overlay.classList.add('hidden');
+                    showIntro();
                 }
             },
 
@@ -489,23 +723,19 @@
 
             monitorRunDependencies: function(left) {
                 this.totalDependencies = Math.max(this.totalDependencies, left);
-                Module.setStatus(left ? 'Preparing... (' + (this.totalDependencies-left) + '/' + this.totalDependencies + ')' : 'All downloads complete.');
+                Module.setStatus(left
+                    ? 'Preparing... (' + (this.totalDependencies - left) + '/' + this.totalDependencies + ')'
+                    : 'All downloads complete.');
             }
         };
 
         Module.setStatus('Downloading...');
 
         window.onerror = function(msg, url, lineNo, columnNo, error) {
-            var message = [
-                'Message: ' + msg,
-                'URL: ' + url,
-                'Line: ' + lineNo,
-                'Column: ' + columnNo,
-                'Error object: ' + JSON.stringify(error)
-            ].join(' - ');
-
             Module.setStatus('Exception: ' + msg);
-            console.error(message);
+            console.error(['Message: ' + msg, 'URL: ' + url,
+                           'Line: ' + lineNo, 'Column: ' + columnNo,
+                           'Error: ' + JSON.stringify(error)].join(' — '));
             return false;
         };
     </script>

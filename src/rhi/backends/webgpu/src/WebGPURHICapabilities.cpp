@@ -96,7 +96,7 @@ void WebGPURHICapabilities::queryFeatures(WGPUDevice device) {
     m_features.depth24UnormStencil8 = true;
 
     // Query features
-    m_features.timestampQuery = false; // Requires extension
+    m_features.timestampQuery = wgpuDeviceHasFeature(device, WGPUFeatureName_TimestampQuery);
     m_features.pipelineStatisticsQuery = false;
     m_features.occlusionQuery = false;
 

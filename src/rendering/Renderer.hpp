@@ -19,6 +19,12 @@
 #include "src/rendering/BindlessTextureManager.hpp"
 #endif
 
+// Forward decl — full WebGPUTimer included in Renderer.cpp to keep WGPU
+// types out of public Renderer interface.
+#ifdef __EMSCRIPTEN__
+class WebGPUTimer;
+#endif
+
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <array>
@@ -200,13 +206,16 @@ public:
     int  getDebugView() const { return debugView; }
 
 #ifdef __EMSCRIPTEN__
-    // CPU-side pass recording times (milliseconds), updated every drawFrame()
-    float getPassTimeGBuffer()     const { return m_passTimeGBuffer; }
-    float getPassTimeDeferred()    const { return m_passTimeDeferred; }
-    float getPassTimeSSAO()        const { return m_passTimeSSAO; }
-    float getPassTimeBloom()       const { return m_passTimeBloom; }
-    float getPassTimePostProcess() const { return m_passTimePostProcess; }
-    float getPassTimeTotal()       const { return m_passTimeTotal; }
+    // Pass timing (milliseconds). When the WebGPU timestamp-query feature is
+    // available, returns true GPU timings; otherwise falls back to CPU command
+    // recording time. UI labels should call isGPUTimingAvailable() to decide.
+    float getPassTimeGBuffer()     const;
+    float getPassTimeDeferred()    const;
+    float getPassTimeSSAO()        const;
+    float getPassTimeBloom()       const;
+    float getPassTimePostProcess() const;
+    float getPassTimeTotal()       const;
+    bool  isGPUTimingAvailable()   const;
 #endif
 
     /**
@@ -466,12 +475,16 @@ private:
     int   debugView      = 0;    // 0=normal, 1-6=GBuffer channels, 7=SSAO, 8=bloom
     float shadowSceneRadius = 200.0f;  // Orthographic projection half-extent for shadows
 #ifdef __EMSCRIPTEN__
+    // CPU-recorded times (fallback when timestamp-query is unavailable).
     float m_passTimeGBuffer     = 0.0f;
     float m_passTimeDeferred    = 0.0f;
     float m_passTimeSSAO        = 0.0f;
     float m_passTimeBloom       = 0.0f;
     float m_passTimePostProcess = 0.0f;
     float m_passTimeTotal       = 0.0f;
+
+    // Real GPU timestamps (preferred when supported).
+    std::unique_ptr<WebGPUTimer> m_webgpuTimer;
 #endif
 
     // Phase 3: Deferred Rendering
