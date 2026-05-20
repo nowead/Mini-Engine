@@ -2,7 +2,7 @@
 
 ## 구조
 
-```
+```text
 docs/
 ├── README.md          ← 이 파일 (전체 네비게이션)
 ├── SUMMARY.md         ← 프로젝트 요약
@@ -28,7 +28,9 @@ docs/
     │   ├── monolith-to-layered/
     │   ├── layered-to-rhi/
     │   ├── aaa-upgrade/
-    │   └── webgpu-backend/
+    │   ├── webgpu-backend/
+    │   ├── webgpu-deferred/
+    │   └── webgpu-showcase/
     ├── changelogs/
     ├── debugging/
     └── game_logic/
@@ -40,7 +42,7 @@ docs/
 
 → **[current/README.md](current/README.md)**
 
-- [WEBGPU_SHOWCASE_PLAN.md](current/webgpu-showcase/WEBGPU_SHOWCASE_PLAN.md) — WebGPU 쇼케이스 격상 계획 (Emscripten bindings + HTML overlay)
+- [ENGINE_ROADMAP.md](current/engine-roadmap/ENGINE_ROADMAP.md) — 엔진 성숙도 관점의 다음 단계 계획서. 첫 작업: 머티리얼 텍스처 확장(노멀·MR·이미시브·AO 맵).
 
 ---
 

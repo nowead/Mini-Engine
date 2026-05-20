@@ -35,7 +35,7 @@ struct UniformBufferObject {
     numPointLights:   u32,                    // offset 4752
     debugCascades:    f32,
     debugView:        i32,
-    _pad2:            f32,
+    abSplitX:         f32,                    // 0 = off; (0,1) = A/B compare split position
 }
 
 @group(0) @binding(0) var<uniform> ubo: UniformBufferObject;

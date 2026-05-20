@@ -67,7 +67,8 @@ private:
     enum class SlotState {
         Idle,      ///< ready to record
         Recorded,  ///< commands recorded; mapAsync scheduled next frame
-        Mapping    ///< mapAsync in flight; awaiting callback
+        Mapping,   ///< mapAsync in flight; awaiting callback
+        Mapped     ///< callback fired; Get/Unmap pending on main thread
     };
 
     struct FrameSlot {
@@ -76,7 +77,13 @@ private:
         WGPUBuffer   readbackBuf = nullptr;
         SlotState    state       = SlotState::Idle;
         bool         hasData     = false;
+        bool         mapSucceeded = false;  ///< set by callback; read by consumeMappedSlots
     };
+
+    /// Called from main-thread context: drains Mapped slots into m_results
+    /// and releases the JS mapping. Safe to call any time no other async op
+    /// is in flight.
+    void consumeMappedSlots();
 
     static void onMapped(WGPUMapAsyncStatus status, WGPUStringView message,
                          void* userdata1, void* userdata2);

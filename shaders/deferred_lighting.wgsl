@@ -37,7 +37,7 @@ struct UniformBufferObject {
     numPointLights:     u32,
     debugCascades:      f32,
     debugView:          i32,
-    _pad2:              f32,
+    abSplitX:           f32,                  // 0 = off; (0,1) = A/B compare split position
 }
 
 @group(0) @binding(0)  var<uniform> ubo:            UniformBufferObject;
@@ -268,7 +268,14 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
 
     var color  = ambient + (1.0 - shadow) * Lo;
 
-    // Dynamic point lights
+    // A/B split: when active and we are on the LEFT half, run the baseline
+    // pipeline (no point lights). The matching SSAO suppression and divider
+    // line live in postprocess.wgsl, which composites this HDR buffer.
+    let abActive = ubo.abSplitX > 0.0;
+    let onBaselineSide = abActive && uv.x < ubo.abSplitX;
+
+    // Dynamic point lights (skipped on the baseline side of an A/B split)
+    if (!onBaselineSide) {
     for (var i: u32 = 0u; i < ubo.numPointLights; i++) {
         let Lp   = ubo.pointLights[i].position - worldPos;
         let dist = length(Lp);
@@ -292,6 +299,7 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
         let radianceP = ubo.pointLights[i].color * ubo.pointLights[i].intensity * atten;
         color += (kDp * albedo / PI + specP) * radianceP * NdotLp;
     }
+    }  // end !onBaselineSide
 
     // CSM cascade debug visualization
     if (ubo.debugCascades > 0.5) {

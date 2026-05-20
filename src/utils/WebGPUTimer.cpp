@@ -48,8 +48,11 @@ WebGPUTimer::WebGPUTimer(WGPUDevice device, WGPUQueue queue, uint32_t framesInFl
 }
 
 WebGPUTimer::~WebGPUTimer() {
-    // Best effort: leak slots whose map callback is still pending — the timer
-    // typically lives the entire app lifetime.
+    // Drain any callbacks that fired but were never consumed (unmaps the JS
+    // ArrayBuffer too). Then release the underlying objects. Slots still in
+    // Mapping (callback never fired before shutdown) are intentionally leaked
+    // — the timer typically lives the entire app lifetime, so this is rare.
+    consumeMappedSlots();
     for (FrameSlot& s : m_slots) {
         if (s.state != SlotState::Mapping) {
             if (s.readbackBuf) wgpuBufferRelease(s.readbackBuf);
@@ -78,6 +81,14 @@ void WebGPUTimer::beginPhase(RHI::WebGPU::WebGPURHICommandEncoder* enc, TimerId 
 
 void WebGPUTimer::endFrame(WGPUCommandEncoder rawEncoder) {
     if (!m_supported || !rawEncoder) return;
+
+    // Step 0 — drain any slots whose mapAsync callback has fired. Get/Unmap
+    // must happen on the main thread (NOT inside the JS callback), since under
+    // Emscripten ASYNCIFY those calls may suspend, and re-entering wasm from a
+    // spontaneous JS callback while another async op (e.g. fence wait's
+    // emscripten_sleep) is suspended trips
+    // "Cannot have multiple async operations in flight at once".
+    consumeMappedSlots();
 
     // Step 1 — kick off mapAsync for slots whose commands were recorded in
     // prior frames. Those submits have already completed (we are at the start
@@ -121,41 +132,59 @@ float WebGPUTimer::getElapsedMs(TimerId id) const {
 
 void WebGPUTimer::onMapped(WGPUMapAsyncStatus status, WGPUStringView /*message*/,
                            void* userdata1, void* userdata2) {
+    // IMPORTANT: This may be invoked as a "spontaneous" JS callback while the
+    // wasm main stack is suspended inside emscripten_sleep (fence wait). Only
+    // plain-memory writes are safe here — NO wgpu calls (Get/Unmap), no
+    // allocations, nothing that could itself suspend via ASYNCIFY. The actual
+    // Get/Unmap is deferred to consumeMappedSlots(), called from endFrame on
+    // the main thread.
     auto* self = static_cast<WebGPUTimer*>(userdata1);
     const auto bufIdx = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(userdata2));
     if (!self || bufIdx >= self->m_slots.size()) return;
 
     FrameSlot& s = self->m_slots[bufIdx];
-    if (status == WGPUMapAsyncStatus_Success) {
-        const void* mapped = wgpuBufferGetConstMappedRange(s.readbackBuf, 0, kBytesPerFrame);
-        if (mapped) {
-            uint64_t ticks[kQueriesPerFrame];
-            std::memcpy(ticks, mapped, kBytesPerFrame);
+    s.mapSucceeded = (status == WGPUMapAsyncStatus_Success);
+    s.state        = SlotState::Mapped;
+}
 
-            // Each physical timer: 2 slots [begin, end]. WebGPU normalizes
-            // timestamps to nanoseconds.
-            for (uint32_t i = 0; i < kPhysicalTimerCount; ++i) {
-                const uint64_t begin = ticks[i * kQueriesPerTimer + 0];
-                const uint64_t end   = ticks[i * kQueriesPerTimer + 1];
-                if (end > begin) {
-                    const double ns = static_cast<double>(end - begin);
-                    self->m_results[i] = static_cast<float>(ns / 1.0e6);
+void WebGPUTimer::consumeMappedSlots() {
+    if (!m_supported) return;
+
+    for (FrameSlot& s : m_slots) {
+        if (s.state != SlotState::Mapped) continue;
+
+        if (s.mapSucceeded) {
+            const void* mapped = wgpuBufferGetConstMappedRange(s.readbackBuf, 0, kBytesPerFrame);
+            if (mapped) {
+                uint64_t ticks[kQueriesPerFrame];
+                std::memcpy(ticks, mapped, kBytesPerFrame);
+
+                // Each physical timer: 2 slots [begin, end]. WebGPU normalizes
+                // timestamps to nanoseconds.
+                for (uint32_t i = 0; i < kPhysicalTimerCount; ++i) {
+                    const uint64_t begin = ticks[i * kQueriesPerTimer + 0];
+                    const uint64_t end   = ticks[i * kQueriesPerTimer + 1];
+                    if (end > begin) {
+                        const double ns = static_cast<double>(end - begin);
+                        m_results[i] = static_cast<float>(ns / 1.0e6);
+                    }
+                }
+
+                // Virtual Frame timer: GBuffer_begin → PostProcess_end.
+                const uint64_t gbBegin = ticks[static_cast<uint32_t>(TimerId::GBuffer)     * kQueriesPerTimer + 0];
+                const uint64_t ppEnd   = ticks[static_cast<uint32_t>(TimerId::PostProcess) * kQueriesPerTimer + 1];
+                if (ppEnd > gbBegin) {
+                    const double ns = static_cast<double>(ppEnd - gbBegin);
+                    m_results[static_cast<uint32_t>(TimerId::Frame)] =
+                        static_cast<float>(ns / 1.0e6);
                 }
             }
-
-            // Virtual Frame timer: GBuffer_begin → PostProcess_end.
-            const uint64_t gbBegin = ticks[static_cast<uint32_t>(TimerId::GBuffer)     * kQueriesPerTimer + 0];
-            const uint64_t ppEnd   = ticks[static_cast<uint32_t>(TimerId::PostProcess) * kQueriesPerTimer + 1];
-            if (ppEnd > gbBegin) {
-                const double ns = static_cast<double>(ppEnd - gbBegin);
-                self->m_results[static_cast<uint32_t>(TimerId::Frame)] =
-                    static_cast<float>(ns / 1.0e6);
-            }
+            wgpuBufferUnmap(s.readbackBuf);
         }
-        wgpuBufferUnmap(s.readbackBuf);
-    }
 
-    s.state = SlotState::Idle;
+        s.mapSucceeded = false;
+        s.state        = SlotState::Idle;
+    }
 }
 
 #endif  // __EMSCRIPTEN__

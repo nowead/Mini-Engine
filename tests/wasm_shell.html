@@ -138,6 +138,28 @@
         }
         .btn-secondary:hover { color: #c0c8d8; border-color: rgba(74,158,255,0.4); }
 
+        .intro-links {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px 14px;
+            margin-top: 18px;
+            padding-top: 14px;
+            border-top: 1px solid rgba(74,158,255,0.12);
+            font-size: .72rem;
+            color: #4a6a8a;
+            letter-spacing: .03em;
+        }
+
+        .intro-links span { color: #3a5a7a; }
+
+        .intro-links a {
+            color: #5a8abe;
+            text-decoration: none;
+            transition: color .15s;
+        }
+
+        .intro-links a:hover { color: #8abae8; }
+
         /* ── Tour toast ───────────────────────────────────────────────────── */
         #tourToast {
             position: fixed;
@@ -209,6 +231,31 @@
             background: linear-gradient(90deg, #2a6adf, #4aefb8);
             transition: width 0.35s ease;
         }
+
+        /* ── A/B compare labels ───────────────────────────────────────────── */
+        .ab-label {
+            position: fixed;
+            top: 16px;
+            z-index: 18;
+            transform: translateX(-50%);
+            padding: 5px 14px;
+            background: rgba(8,12,24,0.78);
+            border: 1px solid rgba(255,255,255,0.18);
+            border-radius: 14px;
+            color: #e0e8f8;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: .14em;
+            text-transform: uppercase;
+            pointer-events: none;
+            -webkit-backdrop-filter: blur(4px);
+            backdrop-filter: blur(4px);
+            box-shadow: 0 2px 14px rgba(0,0,0,0.4);
+        }
+        .ab-label.hidden { display: none; }
+        .ab-label.baseline   { color: #b8c0d0; }
+        .ab-label.full       { color: #6ab3ff; border-color: rgba(74,158,255,0.45); }
 
         /* ── Fullscreen button ────────────────────────────────────────────── */
         #fullscreenBtn {
@@ -344,6 +391,15 @@
                 <button class="btn-primary" id="introBtnTour">&#9654;&ensp;Guided Tour</button>
                 <button class="btn-secondary" id="introBtnExplore">Explore</button>
             </div>
+            <div class="intro-links">
+                <span>How it was built:</span>
+                <a href="https://github.com/nowead/Mini-Engine/blob/main/docs/EVOLUTION.md"
+                   target="_blank" rel="noopener">Architecture evolution</a>
+                <a href="https://github.com/nowead/Mini-Engine/blob/main/docs/archive/refactoring/layered-to-rhi/RHI_TECHNICAL_GUIDE.md"
+                   target="_blank" rel="noopener">RHI design</a>
+                <a href="https://github.com/nowead/Mini-Engine/blob/main/docs/archive/changelogs/CHANGELOG_2026-05-19.md"
+                   target="_blank" rel="noopener">Shadow rewrite postmortem</a>
+            </div>
         </div>
     </div>
 
@@ -357,6 +413,10 @@
         <button class="toast-skip" id="tourSkip" title="Skip tour">&#x2715;</button>
         <div class="toast-progress" id="tourProgress"></div>
     </div>
+
+    <!-- A/B compare floating labels (hidden until toggle on) -->
+    <div id="abLabelBaseline" class="ab-label baseline hidden">Baseline</div>
+    <div id="abLabelFull"     class="ab-label full hidden">Full pipeline</div>
 
     <button id="fullscreenBtn" type="button" title="Toggle Fullscreen (F)">&#x26F6;</button>
 
@@ -412,6 +472,14 @@
                 <span>Street Lights</span>
                 <input type="range" id="pointLightCount" aria-label="Street Light Count" min="0" max="100" step="1" value="9">
                 <span class="val" id="plVal">9</span>
+            </div>
+
+            <div class="section-label">A/B Compare</div>
+            <label class="toggle"><input type="checkbox" id="abEnabled"> Side-by-side (baseline | full)</label>
+            <div class="slider-row">
+                <span>Split</span>
+                <input type="range" id="abSplit" aria-label="A/B Split Position" min="0.05" max="0.95" step="0.01" value="0.5" disabled>
+                <span class="val" id="abVal">0.50</span>
             </div>
 
             <div class="section-label">Pass Timings <span class="timing-label-note" id="timingsModeLabel">(CPU ms)</span></div>
@@ -536,6 +604,36 @@
                 document.getElementById('plVal').textContent = n;
                 _queue('setPointLightCount', n);
             });
+
+            // A/B compare — toggle + split slider drive a single abSplitX float
+            // (0 = off, (0,1) = active at this uv.x). Labels mirror the split.
+            var abEnabled = document.getElementById('abEnabled');
+            var abSplit   = document.getElementById('abSplit');
+            var abVal     = document.getElementById('abVal');
+            var labelBaseline = document.getElementById('abLabelBaseline');
+            var labelFull     = document.getElementById('abLabelFull');
+
+            function _applyAB() {
+                var on = abEnabled.checked;
+                var x  = parseFloat(abSplit.value);
+                abSplit.disabled = !on;
+                abVal.textContent = x.toFixed(2);
+                _queue('setABSplitX', on ? x : 0.0);
+
+                if (on) {
+                    var lpct = (x * 0.5) * 100;          // center of [0, x]
+                    var rpct = (x + (1 - x) * 0.5) * 100; // center of [x, 1]
+                    labelBaseline.style.left = lpct + '%';
+                    labelFull.style.left     = rpct + '%';
+                    labelBaseline.classList.remove('hidden');
+                    labelFull.classList.remove('hidden');
+                } else {
+                    labelBaseline.classList.add('hidden');
+                    labelFull.classList.add('hidden');
+                }
+            }
+            abEnabled.addEventListener('change', _applyAB);
+            abSplit.addEventListener('input', _applyAB);
 
             // Pass timing poller — real GPU ms when timestamp-query is supported,
             // CPU command-recording ms otherwise. Label auto-updates on first read.

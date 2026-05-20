@@ -265,7 +265,7 @@ void Renderer::handleFramebufferResize(int width, int height) {
             rhi::BindGroupEntry::TextureView(1, bv),
             rhi::BindGroupEntry::TextureView(2, ssao),
             rhi::BindGroupEntry::Sampler    (3, hdrSampler.get()),
-            rhi::BindGroupEntry::Buffer     (4, wgslPostprocessParamsUBO.get(), 0, 32),
+            rhi::BindGroupEntry::Buffer     (4, wgslPostprocessParamsUBO.get(), 0, 48),
         };
         bd.label = "PostProcess Bind Group";
         wgslPostprocessBG = rhiBridge->getDevice()->createBindGroup(bd);
@@ -345,7 +345,7 @@ void Renderer::recreateSwapchain() {
             rhi::BindGroupEntry::TextureView(1, bv),
             rhi::BindGroupEntry::TextureView(2, ssao),
             rhi::BindGroupEntry::Sampler    (3, hdrSampler.get()),
-            rhi::BindGroupEntry::Buffer     (4, wgslPostprocessParamsUBO.get(), 0, 32),
+            rhi::BindGroupEntry::Buffer     (4, wgslPostprocessParamsUBO.get(), 0, 48),
         };
         bd.label = "PostProcess Bind Group";
         wgslPostprocessBG = rhiBridge->getDevice()->createBindGroup(bd);
@@ -1918,10 +1918,10 @@ void Renderer::createPostProcessPipelineWGSL() {
         LOG_ERROR("Renderer") << "Failed to create postprocess shaders"; return;
     }
 
-    // Params UBO: 32 bytes (bloomStr, exposure, aoStr, debugView, fxaaOn, tonemapOn, texelW, texelH)
+    // Params UBO: 48 bytes (8 floats + abSplitX + 3 pad → std140 16-byte aligned)
     {
         rhi::BufferDesc bd;
-        bd.size  = 32;
+        bd.size  = 48;
         bd.usage = rhi::BufferUsage::Uniform | rhi::BufferUsage::CopyDst;
         bd.label = "PostProcessParamsUBO";
         wgslPostprocessParamsUBO = device->createBuffer(bd);
@@ -1952,7 +1952,7 @@ void Renderer::createPostProcessPipelineWGSL() {
         rhi::BindGroupEntry::TextureView(1, bv),
         rhi::BindGroupEntry::TextureView(2, ssao),
         rhi::BindGroupEntry::Sampler    (3, hdrSampler.get()),
-        rhi::BindGroupEntry::Buffer     (4, wgslPostprocessParamsUBO.get(), 0, 32),
+        rhi::BindGroupEntry::Buffer     (4, wgslPostprocessParamsUBO.get(), 0, 48),
     };
     bd.label = "PostProcess BG";
     wgslPostprocessBG = device->createBindGroup(bd);
@@ -2797,6 +2797,7 @@ void Renderer::updateRHIUniformBuffer(uint32_t currentImage) {
         ubo.pointLights[i] = pendingPointLights[i];
     ubo.debugCascades = debugCascades ? 1.0f : 0.0f;
     ubo.debugView     = debugView;
+    ubo.abSplitX      = abSplitX;
 
     // Copy to RHI uniform buffer - always use write() to ensure proper flush to GPU
     auto* buffer = rhiUniformBuffers[currentImage].get();
@@ -3371,6 +3372,10 @@ void Renderer::drawFrame() {
             uint32_t tonemapOn;
             float    texelW;
             float    texelH;
+            float    abSplitX;       // 0 = off, (0,1) = uv.x split
+            float    _pad0;
+            float    _pad1;
+            float    _pad2;
         };
         auto* sc = rhiBridge->getSwapchain();
         PostProcessParams pp{};
@@ -3382,6 +3387,7 @@ void Renderer::drawFrame() {
         pp.tonemapOn     = tonemapEnabled ? 1u : 0u;
         pp.texelW        = sc ? 1.0f / static_cast<float>(sc->getWidth())  : 0.0f;
         pp.texelH        = sc ? 1.0f / static_cast<float>(sc->getHeight()) : 0.0f;
+        pp.abSplitX      = abSplitX;
         wgslPostprocessParamsUBO->write(&pp, sizeof(pp));
 
         uint32_t W = sc ? sc->getWidth()  : 1;

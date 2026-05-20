@@ -18,6 +18,7 @@ static void js_setDebugCascades(bool on)  { if (g_app) g_app->wasm_setDebugCasca
 static void js_setSunIntensity(float i)   { if (g_app) g_app->wasm_setSunIntensity(i); }
 static void js_setExposure(float e)       { if (g_app) g_app->wasm_setExposure(e); }
 static void js_setPointLightCount(int n)  { if (g_app) g_app->wasm_setPointLightCount(n); }
+static void js_setABSplitX(float x)        { if (g_app) g_app->wasm_setABSplitX(x); }
 
 static float js_getPassTimeGBuffer()     { return g_app ? g_app->wasm_getPassTimeGBuffer()     : 0.f; }
 static float js_getPassTimeDeferred()    { return g_app ? g_app->wasm_getPassTimeDeferred()    : 0.f; }
@@ -39,6 +40,7 @@ EMSCRIPTEN_BINDINGS(mini_engine) {
     emscripten::function("setSunIntensity",    &wasm::js_setSunIntensity);
     emscripten::function("setExposure",        &wasm::js_setExposure);
     emscripten::function("setPointLightCount", &wasm::js_setPointLightCount);
+    emscripten::function("setABSplitX",         &wasm::js_setABSplitX);
 
     emscripten::function("getPassTimeGBuffer",     &wasm::js_getPassTimeGBuffer);
     emscripten::function("getPassTimeDeferred",    &wasm::js_getPassTimeDeferred);

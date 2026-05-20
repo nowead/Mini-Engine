@@ -1,7 +1,7 @@
 # WebGPU Showcase 격상 — 계획 및 현황
 
 **작성일**: 2026-05-14
-**최종 수정일**: 2026-05-19
+**최종 수정일**: 2026-05-20
 **상태**:
 
 - Task 1 (Emscripten bindings) — ✅ 계획대로 완료
@@ -14,7 +14,9 @@
 - §5 P0.4 (광원 9 → 100) — ✅ 완료 (2026-05-19)
 - §5 P1.4 (cascade 시각화 정리) — ✅ 완료 (2026-05-19)
 - §5 P0.3 (진짜 GPU timestamp-query) — ✅ 완료 (2026-05-19)
-- §5 P1.1–1.3 — ⬜ 미착수
+- §5 P1.3 (깊이 레이어 링크) — ✅ 완료 (2026-05-20)
+- §5 P1.1 (A/B 분할 화면) — ✅ 완료 (2026-05-20)
+- §5 P1.2 (폴백 영상) — ✗ De-scoped (2026-05-20)
 
 > 이 문서는 원래 "구현 계획"이었으나, 구현 과정에서 그림자 파이프라인이 전면
 > 재작성되는 등 계획과 어긋난 부분이 많아 **현황 기준으로 최신화**했다.
@@ -32,7 +34,7 @@ ImGui 패널로 제공하는 **인터랙티브 제어 기능**을 브라우저�
 
 전략:
 
-```
+```text
 네이티브:  Renderer ←→ ImGuiManager (C++)
 WebGPU:   Renderer ←→ Application::wasm_* 브리지 ←→ Emscripten bindings ←→ HTML/CSS overlay (JS)
 ```
@@ -190,11 +192,24 @@ G-Buffer/Deferred/SSAO/Bloom/PostProcess/Total 6행, JS `setInterval` 500ms 폴�
 
 ### P1 — 격 상승
 
-1. ⬜ **A/B 분할 화면** — SSAO·점광원 유/무를 좌/우 반반으로(토글보다 압도적).
-2. ⬜ **비-WebGPU 폴백 영상** — Safari·모바일·구형 브라우저 대비 30초 캡처,
-   README/링크드인 임베드.
-3. ⬜ **깊이 레이어 링크** — `CHANGELOG_2026-05-19` 디버깅 여정 + RHI
-   아키텍처 문서를 데모 페이지에서 링크 (엔지니어 청중 전환).
+1. ✅ **A/B 분할 화면** (2026-05-20) — `abSplitX` 하나의 float(0=비활성,
+   0~1=분할 위치)으로 좌측 baseline(SSAO off + 점광원 off) vs 우측 full pipeline
+   동시 비교. UBO 두 곳 동기(`UniformBufferObject._pad2`→`abSplitX` 용도 변경,
+   PostProcess UBO 32B→48B 확장). 셰이더에서: `deferred_lighting.wgsl`은
+   `uv.x < abSplitX`일 때 점광원 루프 스킵, `postprocess.wgsl`은 동일 조건에서
+   `aoStrength=0`으로 강제 + `applyDivider()`가 모든 return 경로에 1.5px 흰
+   디바이더 오버레이. HTML에 토글 + 분할 위치 슬라이더(0.05~0.95) + 캔버스
+   상단 "Baseline" / "Full pipeline" 플로팅 라벨(분할 위치에 따라 자동 이동).
+2. ✗ **비-WebGPU 폴백 영상** — De-scoped (2026-05-20). 미디어 제작은 별도
+   작업이며 본 코드/문서 격상 범위에서 분리. 필요 시 차후 별도 작업으로 재검토.
+3. ✅ **깊이 레이어 링크** (2026-05-20) — 데모 페이지에서 깊이 자료로 직접 진입.
+   - 랜딩 (`tests/wasm_index.html`): "How It Was Built" 섹션 신설 — 3개 카드
+     스타일 링크 (Architecture Evolution / RHI Architecture / Debugging the
+     Shadow Rewrite). 좌측 강조선 + hover translateX 마이크로 인터랙션, 모바일
+     ≤560px에서 세로 스택. 기존 footer GitHub 사용자명 오타(`mindaewon` →
+     `nowead`)도 정정.
+   - 인트로 모달 (`tests/wasm_shell.html`): 버튼 아래 구분선 + 같은 3개 링크를
+     인라인 보조 텍스트로 노출. 토스트/메인 UX 흐름은 건드리지 않음.
 4. ✅ **cascade 시각화 정리** (2026-05-19) — `wasm_shell.html`의 "Debug" 섹션
    및 "CSM Cascades" 체크박스 제거(`setDebugCascades` 호출 경로 미사용). 단일
    맵 환경에서 전 화면 빨간 틴트 → 오해 유발 해소. C++ 바인딩은 그대로 유지
@@ -245,5 +260,16 @@ G-Buffer/Deferred/SSAO/Bloom/PostProcess/Total 6행, JS `setInterval` 500ms 폴�
 | `cmake/EmscriptenToolchain.cmake` | `WIN32`→`CMAKE_HOST_WIN32` | 환경 |
 | `scripts/wasm.ps1`, `scripts/serve_nocache.py` | emcmake PATH 선행, no-cache dev 서버 | 환경 |
 
-> 미반영(향후 우선순위 순): A/B 분할 화면 (P1.1) · 폴백 영상 (P1.2) ·
-> 깊이 레이어 링크 (P1.3) · multi-pass phase 정확한 timing (P0.3 후속).
+| `tests/wasm_index.html` | **"How It Was Built" 섹션 추가** — Evolution/RHI/Shadow-rewrite postmortem 3개 링크 카드 + `.writeup*` / `.section-label.spaced` CSS; GitHub 사용자명 오타 정정 (2026-05-20) | P1.3 |
+| `tests/wasm_shell.html` | **인트로 모달 하단 "How it was built:" 인라인 링크 3개 추가** + `.intro-links` 스타일 (2026-05-20) | P1.3 |
+| `src/utils/WebGPUTimer.{hpp,cpp}` | **간헐 ASYNCIFY 충돌 수정** (2026-05-20) — `SlotState::Mapped` 신설, `onMapped` 콜백은 plain memory write만 수행 (`mapSucceeded` bool + state 갱신), 실제 `wgpuBufferGetConstMappedRange`/`Unmap`은 `endFrame` 진입부에서 호출되는 `consumeMappedSlots()`로 이동. 콜백이 fence wait의 `emscripten_sleep` 중 spontaneous 진입할 때 wgpu 호출이 추가 ASYNCIFY suspend를 일으켜 "Cannot have multiple async operations in flight" 어설션이 터지던 문제 해소. | P0.3 follow |
+| `src/utils/Vertex.hpp` | `UniformBufferObject._pad2` → `abSplitX` 용도 변경 (2026-05-20) | P1.1 |
+| `src/rendering/Renderer.{hpp,cpp}` | `abSplitX` 멤버 + `setABSplitX`; deferred UBO·PostProcess UBO 양쪽에 전달; PostProcess UBO 32B→48B 확장 (BindGroup binding size + buffer size 모두) (2026-05-20) | P1.1 |
+| `shaders/deferred_lighting.wgsl` | `_pad2`→`abSplitX`; 좌측 분할 영역에서 점광원 루프 스킵 (2026-05-20) | P1.1 |
+| `shaders/building.wgsl` | `_pad2`→`abSplitX` (UBO 레이아웃 동기) (2026-05-20) | P1.1 |
+| `shaders/postprocess.wgsl` | `PostProcessParams`에 `abSplitX` + 3 pad 추가; 좌측 분할은 `aoStrength=0` 강제; `applyDivider()` 헬퍼로 모든 return 경로에 1.5px 흰 분할선 오버레이 (2026-05-20) | P1.1 |
+| `src/Application.hpp`, `src/wasm/WASMBindings.cpp` | `wasm_setABSplitX`/`setABSplitX` 노출 (2026-05-20) | P1.1 |
+| `tests/wasm_shell.html` | "A/B Compare" 섹션 + 토글 + 슬라이더(0.05~0.95) + 분할 위치 따라 이동하는 "Baseline" / "Full pipeline" 플로팅 라벨; `.ab-label*` 스타일 (2026-05-20) | P1.1 |
+
+> 미반영: multi-pass phase 정확한 timing (P0.3 후속) — 시니어 그래픽스 면접에서
+> 명시적으로 지적될 때 잡는다는 방침. P1.2(폴백 영상)는 De-scoped.

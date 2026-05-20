@@ -55,6 +55,7 @@ public:
     void wasm_setSunIntensity(float i)    { if (renderer) renderer->setSunIntensity(i); }
     void wasm_setExposure(float e)        { if (renderer) renderer->setExposure(e); }
     void wasm_setPointLightCount(int n);
+    void wasm_setABSplitX(float x)        { if (renderer) renderer->setABSplitX(x); }
 
     float wasm_getPassTimeGBuffer()     const { return renderer ? renderer->getPassTimeGBuffer()     : 0.f; }
     float wasm_getPassTimeDeferred()    const { return renderer ? renderer->getPassTimeDeferred()    : 0.f; }

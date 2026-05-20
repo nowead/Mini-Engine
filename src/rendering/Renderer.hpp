@@ -205,6 +205,12 @@ public:
     void setDebugView(int v) { debugView = v; }
     int  getDebugView() const { return debugView; }
 
+    // A/B split screen: 0 = disabled, (0,1) = split at uv.x. Left of split runs
+    // a baseline pipeline (no SSAO + no point lights); right of split runs the
+    // full pipeline. A 1-px white divider is drawn in post-process.
+    void  setABSplitX(float x) { abSplitX = x; }
+    float getABSplitX() const { return abSplitX; }
+
 #ifdef __EMSCRIPTEN__
     // Pass timing (milliseconds). When the WebGPU timestamp-query feature is
     // available, returns true GPU timings; otherwise falls back to CPU command
@@ -319,7 +325,7 @@ private:
     // bindings: 0=hdrTexture, 1=bloomTexture, 2=ssaoTexture, 3=sampler, 4=params UBO
     std::unique_ptr<rhi::RHIShader>          wgslPostprocessVertexShader;
     std::unique_ptr<rhi::RHIShader>          wgslPostprocessFragmentShader;
-    std::unique_ptr<rhi::RHIBuffer>          wgslPostprocessParamsUBO;  // PostProcessParams (32 bytes)
+    std::unique_ptr<rhi::RHIBuffer>          wgslPostprocessParamsUBO;  // PostProcessParams (48 bytes)
     std::unique_ptr<rhi::RHIBindGroupLayout> wgslPostprocessLayout;
     std::unique_ptr<rhi::RHIBindGroup>       wgslPostprocessBG;
     std::unique_ptr<rhi::RHIPipelineLayout>  wgslPostprocessPipelineLayout;
@@ -473,6 +479,7 @@ private:
     bool  fxaaEnabled    = true; // FXAA anti-aliasing on/off
     bool  debugCascades  = false;// CSM cascade color debug
     int   debugView      = 0;    // 0=normal, 1-6=GBuffer channels, 7=SSAO, 8=bloom
+    float abSplitX       = 0.0f; // A/B compare split position (0 = off, (0,1) = uv.x split)
     float shadowSceneRadius = 200.0f;  // Orthographic projection half-extent for shadows
 #ifdef __EMSCRIPTEN__
     // CPU-recorded times (fallback when timestamp-query is unavailable).

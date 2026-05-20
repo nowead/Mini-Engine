@@ -20,6 +20,10 @@ struct PostProcessParams {
     tonemapOn     : u32,
     texelW        : f32,
     texelH        : f32,
+    abSplitX      : f32,     // 0 = off; (0,1) = A/B compare split position
+    _pad0         : f32,
+    _pad1         : f32,
+    _pad2         : f32,
 }
 @group(0) @binding(4) var<uniform> params: PostProcessParams;
 
@@ -47,6 +51,16 @@ fn luma(rgb: vec3<f32>) -> f32 {
     return dot(rgb, vec3<f32>(0.299, 0.587, 0.114));
 }
 
+// Overlay a thin white vertical divider at the A/B split position.
+// Returns the input color unchanged when A/B mode is off.
+fn applyDivider(uv: vec2<f32>, color: vec3<f32>) -> vec3<f32> {
+    if (params.abSplitX <= 0.0) { return color; }
+    let dist  = abs(uv.x - params.abSplitX);
+    let lineW = params.texelW * 1.5;
+    if (dist < lineW) { return vec3<f32>(1.0, 1.0, 1.0); }
+    return color;
+}
+
 // Tonemap + gamma a raw HDR neighbor sample (used by FXAA edge detection)
 fn smpLDR(uv: vec2<f32>) -> vec3<f32> {
     let hdr = textureSampleLevel(hdrTexture, hdrSampler, uv, 0.0).rgb;
@@ -65,14 +79,21 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // Debug view: bypass composite and show individual G-Buffer channels
     // 7=ssao, 8=bloom (other channels handled in deferred lighting pass)
     if params.debugView == 7 {
-        return vec4<f32>(ao, ao, ao, 1.0);
+        return vec4<f32>(applyDivider(uv, vec3<f32>(ao)), 1.0);
     }
     if params.debugView == 8 {
-        return vec4<f32>(bloom, 1.0);
+        return vec4<f32>(applyDivider(uv, bloom), 1.0);
     }
 
+    // A/B compare: left of the split runs the baseline (no SSAO darkening).
+    // Point lights are already absent in the HDR buffer for the left side
+    // because deferred_lighting.wgsl skips them on the same uv.x condition.
+    let abActive       = params.abSplitX > 0.0;
+    let onBaselineSide = abActive && uv.x < params.abSplitX;
+    let aoStrengthEff  = select(params.aoStrength, 0.0, onBaselineSide);
+
     // SSAO + Bloom composite
-    let aoFactor  = mix(1.0, ao, params.aoStrength);
+    let aoFactor  = mix(1.0, ao, aoStrengthEff);
     let exposed   = hdr * params.exposure;
     let composite = exposed * aoFactor + bloom * params.bloomStrength;
 
@@ -89,7 +110,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
     // Early exit if FXAA disabled
     if params.fxaaOn == 0u {
-        return vec4<f32>(gamma, 1.0);
+        return vec4<f32>(applyDivider(uv, gamma), 1.0);
     }
 
     // ---- FXAA (simplified 3.11) ----
@@ -113,7 +134,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
     // Early exit — no significant edge
     if lumaRange < max(EDGE_THRESHOLD_MIN, lumaMax * EDGE_THRESHOLD) {
-        return vec4<f32>(gamma, 1.0);
+        return vec4<f32>(applyDivider(uv, gamma), 1.0);
     }
 
     // Corner samples (non-uniform flow after conditional return)
@@ -174,5 +195,5 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     if isHorizontal { uvFinal.y += blendFactor * perpSign * perpStep; }
     else            { uvFinal.x += blendFactor * perpSign * perpStep; }
 
-    return vec4<f32>(smpLDR(uvFinal), 1.0);
+    return vec4<f32>(applyDivider(uv, smpLDR(uvFinal)), 1.0);
 }

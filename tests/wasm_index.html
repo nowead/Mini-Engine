@@ -107,6 +107,8 @@
             margin-top: 8px;
         }
 
+        .section-label.spaced { margin-top: 36px; }
+
         .card-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
@@ -141,6 +143,64 @@
             font-size: .75rem;
             line-height: 1.5;
             color: #6a7a96;
+        }
+
+        /* Deep-dive writeups */
+        .writeup-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .writeup {
+            display: flex;
+            align-items: baseline;
+            gap: 12px;
+            padding: 12px 14px;
+            background: rgba(10,16,28,0.5);
+            border: 1px solid rgba(74,158,255,0.12);
+            border-left: 2px solid rgba(74,158,255,0.4);
+            border-radius: 6px;
+            text-decoration: none;
+            color: inherit;
+            transition: border-color .2s, background .2s, transform .15s;
+        }
+
+        .writeup:hover {
+            border-color: rgba(74,158,255,0.35);
+            border-left-color: rgba(106,179,255,0.85);
+            background: rgba(18,28,48,0.65);
+            transform: translateX(2px);
+        }
+
+        .writeup-title {
+            font-size: .88rem;
+            color: #c8d4e8;
+            font-weight: 600;
+            flex-shrink: 0;
+            min-width: 200px;
+        }
+
+        .writeup-desc {
+            font-size: .76rem;
+            line-height: 1.5;
+            color: #6a7a96;
+        }
+
+        .writeup-arrow {
+            color: #4a6a8a;
+            font-size: .9rem;
+            margin-left: auto;
+            padding-left: 8px;
+            flex-shrink: 0;
+        }
+
+        .writeup:hover .writeup-arrow { color: #6ab3ff; }
+
+        @media (max-width: 560px) {
+            .writeup { flex-direction: column; align-items: stretch; gap: 4px; }
+            .writeup-title { min-width: 0; }
+            .writeup-arrow { display: none; }
         }
 
         footer {
@@ -202,8 +262,30 @@
             </a>
         </div>
 
+        <p class="section-label spaced">How It Was Built</p>
+        <div class="writeup-list">
+            <a href="https://github.com/nowead/Mini-Engine/blob/main/docs/EVOLUTION.md"
+               class="writeup" target="_blank" rel="noopener">
+                <span class="writeup-title">Architecture Evolution</span>
+                <span class="writeup-desc">Five refactors from a 467-line monolith to a PBR + GPU-driven engine with Vulkan and WebGPU backends.</span>
+                <span class="writeup-arrow">&rsaquo;</span>
+            </a>
+            <a href="https://github.com/nowead/Mini-Engine/blob/main/docs/archive/refactoring/layered-to-rhi/RHI_TECHNICAL_GUIDE.md"
+               class="writeup" target="_blank" rel="noopener">
+                <span class="writeup-title">RHI Architecture</span>
+                <span class="writeup-desc">How one interface (RHIDevice / RHICommandEncoder) drives both Vulkan and WebGPU &mdash; the same renderer code runs in both.</span>
+                <span class="writeup-arrow">&rsaquo;</span>
+            </a>
+            <a href="https://github.com/nowead/Mini-Engine/blob/main/docs/archive/changelogs/CHANGELOG_2026-05-19.md"
+               class="writeup" target="_blank" rel="noopener">
+                <span class="writeup-title">Debugging the Shadow Rewrite</span>
+                <span class="writeup-desc">A 144-vs-128-byte struct mismatch hidden behind four build-environment bugs. The full diagnostic journey.</span>
+                <span class="writeup-arrow">&rsaquo;</span>
+            </a>
+        </div>
+
         <footer>
-            Source: <a href="https://github.com" target="_blank" rel="noopener">github.com/mindaewon/Mini-Engine</a>
+            Source: <a href="https://github.com/nowead/Mini-Engine" target="_blank" rel="noopener">github.com/nowead/Mini-Engine</a>
         </footer>
     </div>
 </body>
