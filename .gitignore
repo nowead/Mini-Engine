@@ -32,6 +32,11 @@ cmake_install.cmake
 # Compiled shaders (keep source .glsl files, ignore compiled .spv files)
 *.spv
 
+# Python bytecode caches (build/tooling scripts under third_party/, scripts/)
+__pycache__/
+*.pyc
+*.pyo
+
 #docs/blog
 docs/blog
 
