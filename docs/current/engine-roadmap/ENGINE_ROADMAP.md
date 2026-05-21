@@ -1,9 +1,33 @@
 # Mini-Engine — 다음 단계 계획서
 
 **작성일**: 2026-05-20
-**최종 수정일**: 2026-05-20 (A+B 통합으로 첫 작업 재정의)
+**최종 수정일**: 2026-05-22 (AB sub-task 1~7 종결, 시퀀스 재정렬)
 **관점**: 커리어 마일스톤이 아니라 **엔진 자체의 성숙도**. 무엇이 만들어졌고,
 무엇이 만들어진 것을 가리고 있는가, 다음에 무엇을 짚어야 가장 큰 잠금이 풀리는가.
+
+---
+
+## 0. 현재 위치 (2026-05-22)
+
+| 영역 | 상태 |
+| --- | --- |
+| §4.4 sub-task 1–7 (cgltf → glTF 풀 PBR sampling) | ✅ WebGPU에서 완료. 마지막 commit `4f809dd` |
+| §4.4 sub-task 8 (SceneNode 최소 구현) | ⬜ |
+| §4.4 sub-task 9 (A/B 모드 머티리얼 토글) | ⬜ |
+| Vulkan parity — material bind group | ⬜ (헬멧 네이티브에선 회색) |
+| §4.5 잔여 한계 | 4개 — Vulkan parity, tangent.w, emissive HDR, ORM-packed MR fallback |
+
+**다음 시퀀스**: 9 (시연 통합) → Vulkan parity → 8 (SceneNode) → C (TAA). 9는
+작업량 작고 AB 영역을 깨끗히 봉인. Vulkan parity는 양 백엔드 동등성 확보. 8은
+다중 메시 자산을 위한 인프라. 그 뒤 큰 단위(C, TAA)로 이동.
+
+상세 디버깅 여정: [`CHANGELOG_2026-05-21.md`](../../archive/changelogs/CHANGELOG_2026-05-21.md)
+(자산 파이프라인 구축 + 함정 3종) ·
+[`CHANGELOG_2026-05-22.md`](../../archive/changelogs/CHANGELOG_2026-05-22.md)
+(normal/MR/AO/emissive + 진단 도구).
+
+§1 이하 진단은 **작성 시점(2026-05-20) 기준**이며 역사적 컨텍스트로 보존.
+구체 진척은 §4.4 표를 보면 됨.
 
 ---
 
@@ -209,12 +233,23 @@ RHI에 Secondary CB 타입 추가. Render Graph 스케줄러가 의존성 없는
 
 ### 이후 시퀀스
 
-1. **C(TAA)를 두 번째로** — AB로 풍부한 머티리얼이 들어와야 안티앨리어싱
+1. **AB 닫기 (2026-05-22 추가 단계)** — sub-task 1~7이 완료된 후, 다음
+   순서로 AB를 깨끗히 봉인:
+   - **(a) sub-task 9: 시연 통합** — A/B 분할에 머티리얼 토글 추가 (좌측
+     sentinel 강제, 우측 정상). 작업량 작고 시각 효과 즉시. P1.1 인프라
+     재사용.
+   - **(b) Vulkan parity** — 네이티브 빌드도 헬멧을 풀 PBR로 렌더링하도록
+     material bind group 경로를 Vulkan에 이식. 핵심 설계 결정: 현재 set 2
+     를 점유 중인 bindless texture array와의 충돌 해소 방안(set 3로 이동 /
+     bindless 내부 통합 / 별도 파이프라인 가지). 양 백엔드 동등성 확보.
+   - **(c) sub-task 8: SceneNode 최소 구현** — Sponza 같은 다중 메시 자산
+     ingest를 위한 인프라. AB 작업 단위의 마지막.
+2. **C(TAA)를 그 다음** — AB로 풍부한 머티리얼이 들어와야 안티앨리어싱
    차이가 시각적으로 드러남. velocity 채널 추가는 G-Buffer 포맷 확장이라
    D·E 이전이 깔끔.
-2. **D(멀티스레드)는 그 다음** — 시각 작업이 끝난 뒤 성능 작업으로 자연스럽게
+3. **D(멀티스레드)는 그 다음** — 시각 작업이 끝난 뒤 성능 작업으로 자연스럽게
    전환. AB로 들어온 풍부한 씬에서 CPU 측 병목이 비로소 측정 가능.
-3. **E(메시 셰이더)는 마지막** — 가장 큰 작업량, 가장 모던. AB~D가 만든 풍부한
+4. **E(메시 셰이더)는 마지막** — 가장 큰 작업량, 가장 모던. AB~D가 만든 풍부한
    씬에서 컬링 비교 시연이 단단해짐.
 
 **AB만 하더라도** 엔진의 데모 인상이 즉시 격상되며 외부 자산 라이브러리를 받을
@@ -296,78 +331,121 @@ third_party/cgltf/
 
 ### 4.4 진행 순서 (서브 작업)
 
-각 단계가 빌드·실행 가능한 단위가 되도록 분할.
+각 단계가 빌드·실행 가능한 단위가 되도록 분할. ✅ 표시는 WebGPU 측 완료.
+Vulkan parity는 별도 항목.
 
-1. **cgltf 도입 + AssetImporter 골격** — `third_party/cgltf/cgltf.h` 드롭, CMake
-   include path, `AssetImporter::load(path) → ImportedAsset` 빈 구현이 빌드까지
-   되는 것 확인.
-2. **메시 ingest** — glTF accessor → 엔진 VertexBuffer/IndexBuffer 변환. 첫
-   자산(DamagedHelmet)을 기존 머티리얼(회색)로라도 화면에 띄움. 다음 단계의
-   전제 — 자산이 일단 보여야 머티리얼 작업의 의미가 측정됨.
-3. **Vertex tangent 추가** — 자산이 tangent를 제공하면 그대로, 없으면 derived
-   (`derivative()` 또는 첫 단계는 단순 fallback). G-Buffer vertex 셰이더에 출력.
-4. **`ObjectData` 4-텍스처 슬롯 + 셰이더 동기** — 128B vs 144B 결정. 세 셰이더
-   동시 갱신 + `static_assert`. 이 시점에는 텍스처 인덱스가 전부 sentinel이라
-   동작 변화 없음.
-5. **텍스처 ingest + GPU 업로드** — 분할 진행:
-   - **5a/5b** ✅ (commit `161ada6`): AssetImporter가 glTF 임베디드 이미지를
-     `stbi_load_from_memory`로 RGBA8 디코드 + 머티리얼(`pbrMetallicRoughness`
-     factors + 4-텍스처 인덱스 + emissiveFactor) 추출.
-   - **5c** ✅ (commit `<this>`): `ResourceManager::uploadRGBA8FromMemory`
-     공개 메서드 추가 → Renderer가 ImportedAsset 텍스처를 RHI 텍스처로 업로드,
-     `ShowcaseAsset.materialTextures`에 저장. 머티리얼 사용처(baseColor/emissive
-     = sRGB, normal/MR/AO = linear)에 따라 포맷 자동 선택. 시각 변화 없음 —
-     `[Renderer] Uploaded K/N showcase textures (B KiB total)` 로그가 검증점.
-6. **G-Buffer fragment 텍스처 분기 (노멀 맵부터)** — WebGPU material bind
-   group set 2 신설(baseColor + normal + MR + emissive + sampler), helmet 자산은
-   업로드된 텍스처를 거기에 바인딩, 기존 buildings는 default 1×1 텍스처. WGSL
-   fragment에서 sample + TBN(per-vertex tangent 우선, fallback derivative). 첫
-   시각 효과: 헬멧 albedo + 노멀 맵 디테일.
-7. **MR · 이미시브 · AO 동일 패턴으로 추가** — G-Buffer 이미시브 채널 패킹
-   확인. Bloom 임계 통과해 자체 발광 확인.
-8. **SceneNode 최소 구현 + 노드 트리 ingest** — 단일 메시는 깊이 1. Sponza
-   같은 다중 메시 자산이 들어오면 의미가 나타남. 첫 자산은 깊이 1로 충분.
-9. **시연 통합** — A/B 분할에 "머티리얼 텍스처 on/off" 모드 추가(좌측 sentinel
-   강제, 우측 정상). P1.1 인프라 재사용. 가이드 투어에 새 스텝 추가도 가능.
+1. ✅ **cgltf 도입 + AssetImporter 골격** (commit `ab140bf`) — `third_party/cgltf`
+   대신 vcpkg 포트 + WASM FetchContent dual-path 채택(헤더만 노출). 빈
+   `AssetImporter::load()`가 빌드 통과까지 확인.
+2. ✅ **메시 ingest + showcase 경로** (commit `204fd1c`) — glTF accessor →
+   엔진 Vertex/IndexBuffer 변환. `ShowcaseAsset` 슬롯 + `setShowcaseMesh` +
+   `GBufferPass::execute` showcase params. 헬멧 첫 화면 등장 (회색).
+3. ✅ **Vertex tangent** (commit `161ada6` 동봉) — `Vertex.tangent` 추가,
+   해시·비교 갱신. AssetImporter는 glTF TANGENT(vec4) xyz 부분만 저장.
+   **알려진 한계**: bitangent sign (`tangent.w`) 미저장 — 거울 대칭 UV 자산
+   에서 노멀 맵 handedness 어긋남 가능 (§4.5).
+4. ✅ **`ObjectData` 4-텍스처 슬롯** (commit `161ada6`) — `uvec4 textureIndices`
+   추가, 128B → 144B. `static_assert(sizeof) == 144` + 셰이더 8개(building/
+   gbuffer/shadow/frustum_cull × glsl/wgsl) 동시 동기. 2026-05-19 shadow stride
+   사고 재발 방지.
+5. ✅ **텍스처 ingest + GPU 업로드** (commits `161ada6`, `32c3bdb`) — 5a/5b
+   (AssetImporter의 stb_image 디코드 + material extraction) + 5c
+   (`ResourceManager::uploadRGBA8FromMemory` + 256-aligned per-row staging).
+   디버깅 여정: bytesPerRow=0 거부 + Dawn-stricter-than-spec 1×1 256 정렬
+   요구. 자세한 내용은 [`CHANGELOG_2026-05-21.md`](../../archive/changelogs/CHANGELOG_2026-05-21.md) §4.
+6. ✅ **G-Buffer fragment baseColor + normal map** (commits `a2edecc`, `4f809dd`):
+   - **6a** baseColor sampling: material bind group set 2 (WebGPU only) 신설.
+     5 entries(baseColor + normal + MR + emissive + sampler — 6c에서 AO slot
+     추가로 6개로 확장). WGSL fragment에서 sample × factor.
+   - **6b** normal map + TBN: zero-tangent fallback, Gram-Schmidt 재직교화로
+     interpolation drift 보정.
+7. ✅ **MR + AO + emissive** (commit `4f809dd`):
+   - **6c** MR + AO: bind group 5 → 6 entry. AO 별도 슬롯(glTF 스펙대로).
+     **잠재 버그 수정**: 더미 MR `(0,255,0,255)` → `(0,255,255,255)` identity.
+     이전 값은 빌딩의 metallic factor를 0으로 무력화하던 latent bug.
+   - **6d** emissive: 새 attachment 없이 `gBuffer2.gba` free space에 pack.
+     DeferredLighting이 `gb2.gba` 추출 후 모든 라이팅 뒤에 가산. Bloom이
+     bright emissive 픽업. **LDR 한계** 명시(§4.5).
+   - 진단 도구 3종 동봉: slot resolution 로그, WGSL debug view 9
+     (Emissive), HTML 라디오. 자세한 내용은
+     [`CHANGELOG_2026-05-22.md`](../../archive/changelogs/CHANGELOG_2026-05-22.md).
+8. ⬜ **SceneNode 최소 구현 + 노드 트리 ingest** — 단일 메시는 깊이 1.
+   Sponza 같은 다중 메시 자산이 들어오면 의미가 나타남. 현재 sub-task 9
+   다음에 진행 예정 (§3 시퀀스 참조). 첫 자산은 깊이 1로 충분.
+9. ⬜ **시연 통합** — A/B 분할에 "머티리얼 텍스처 on/off" 모드 추가(좌측
+   sentinel 강제, 우측 정상). P1.1 인프라 재사용. 가이드 투어에 새 스텝 추가
+   도 가능. **이게 다음 작업**. 작업량 작고 AB 영역을 깔끔히 봉인.
+
+**비번호 항목 (sub-task 9 이후, §3 시퀀스 참조)**:
+
+- ⬜ **Vulkan parity** — 네이티브 빌드도 헬멧을 풀 PBR로 렌더링. set 2 ×
+  bindless 충돌 해소 결정 필요. 양 백엔드 동등성.
 
 ### 4.5 알려진 위험과 대응
 
-- **glTF 스펙 코너 케이스 폭증**: sparse accessor, non-interleaved attributes,
-  multiple primitives per mesh, alphaMode=MASK/BLEND, double-sided, KHR
-  extensions(특히 KHR_materials_unlit, KHR_texture_transform). **최소 viable
-  경로 우선** — opaque + PBR-MR + 단일 primitive만 첫 마일스톤. 나머지는
-  TODO 주석으로 표시하고 후속.
-- **TBN 정확도**: glTF가 tangent를 제공해도 일부 자산은 누락. fallback으로
-  화면 공간 derivative 사용(품질 손실 있음). 장기적으로 MikkTSpace 도입 검토.
-- **텍스처 색 공간**: 알베도·이미시브는 sRGB, 노멀·MR·AO는 linear. 잘못 로드하면
-  PBR 결과가 어긋남. RHI sampler/texture format이 `sRGB` vs `unorm` 구분을
-  지원하는지 확인 필요.
-- **KTX2/Draco**: glTF의 압축 텍스처(KTX2)와 압축 메시(Draco)는 추가 라이브러리
-  필요 — 첫 마일스톤에서는 미지원으로 두고 비압축 자산만 받음.
-- **WASM 자산 임베딩**: Emscripten `--preload-file`로 glTF·텍스처 묶음을
-  바이너리에 굽거나, runtime fetch. 자산이 커지면 첫 로딩 시간 증가 — 데모
-  자산은 합리적 크기(<10MB) 한 개로 시작.
+#### 작성 시점(2026-05-20) 예상 위험 — 현재 상태
+
+- ✅ **텍스처 색 공간**: baseColor/emissive는 sRGB, normal/MR/occlusion은
+  linear. `uploadShowcaseMaterialTextures`가 머티리얼 사용처에 따라 자동
+  분기 — 해결됨.
+- ✅ **2026-05-19 스트라이드 사고 재발 방지**: `ObjectData` 변경 시 C++ +
+  셰이더 8개를 한 커밋에서 동기 + `static_assert(sizeof) == 144` 가드 —
+  step 4에서 적용 완료.
+- ⚠️ **TBN 정확도**: glTF tangent vec4 중 xyz만 저장. handedness sign (w)
+  미저장 — 거울 대칭 UV 자산에서 어긋남 가능. 현재 영향 없음(DamagedHelmet
+  은 비-mirror UV).
+- ⬜ **KTX2/Draco**: 압축 텍스처/메시 미지원. 비압축 자산만 처리. 후속.
+- ⬜ **glTF 코너 케이스**: sparse accessor, alphaMode=MASK/BLEND, KHR
+  extensions, multi-primitive mesh 미처리. opaque + PBR-MR + 단일 primitive
+  만 지원. 후속 자산이 등장하면 그때 확장.
+
+#### 진행 중 새로 발견된 한계 (2026-05-22 시점)
+
+자세한 후속 행동: [`CHANGELOG_2026-05-22.md`](../../archive/changelogs/CHANGELOG_2026-05-22.md) §7.
+
+- **Vulkan parity 부재** — 네이티브 빌드는 헬멧이 회색. set 2 점유 중인
+  bindless texture array와 material bind group의 충돌 해소가 필요.
+  결정 옵션: bindless를 set 3으로 이동 / bindless 안에 material 통합 /
+  별도 파이프라인 가지. **§3 시퀀스에서 sub-task 9 이후 즉시 처리 예정.**
+- **Tangent.w (bitangent handedness) 미저장** — `Vertex.tangent`를 vec4로
+  승격하면 해소. 거울 대칭 UV 자산이 등장할 때까지 미루기.
+- **Emissive HDR 미지원** — `gBuffer2.gba`가 RGBA8Unorm이라 emissive 값이
+  0-1로 제한. 매우 밝은 self-emission 자산이 등장하면 `RGBA16Float` 4번째
+  attachment로 분리.
+- **ORM-packed MR 자산 fallback 부재** — DamagedHelmet은 occlusion과 MR을
+  별도 텍스처로 분리 제공해 별도 슬롯 접근이 맞음. 일부 자산은 한 텍스처에
+  ORM(Occlusion-Roughness-Metallic) packing — occlusion 슬롯이 sentinel일
+  때 MR 텍스처의 R 채널을 fallback으로 쓰는 처리가 필요.
 
 ### 4.6 측정·시연
 
-- **G-Buffer 디버그 뷰 회귀 테스트**: Normals/Albedo/Metallic/Roughness/AO 다섯
-  뷰가 새 자산에서 픽셀별로 의도대로 다양해질 것.
-- **A/B 분할에 새 모드**: 좌측 = 텍스처 없음(현 베이스라인), 우측 = 풀 머티리얼.
-  동일 자산을 좌우로 나눠 보면 노멀 맵의 임팩트가 즉시 가시화.
-- **퍼포먼스**: 4-텍스처 샘플 + tangent 추가가 G-Buffer 패스 시간을 얼마나
-  늘리는지 GPU 타이머로 측정. 예상은 미미(bindless + cache hit). 측정값을
-  CHANGELOG에 남김.
-- **자산 검증**: Khronos Sample Models 중 PBR 자산 3종(DamagedHelmet,
-  FlightHelmet, BoomBox) 정상 렌더링 확인 — 다양한 머티리얼 조합 cover.
+- ✅ **G-Buffer 디버그 뷰 회귀 테스트**: Normals/Albedo/Metallic/Roughness/AO
+  다섯 채널 + Emissive(view 9, 2026-05-22 추가)가 헬멧에서 픽셀별로 의도대로
+  다양해짐. 사용자 직접 확인.
+- ⬜ **A/B 분할에 새 모드**: 좌측 = 텍스처 없음(sentinel 강제), 우측 = 풀
+  머티리얼. 동일 자산을 좌우로 나눠 보면 노멀 맵/MR/AO/emissive의 임팩트가
+  즉시 가시화. **sub-task 9 (다음 작업)**.
+- ⬜ **퍼포먼스**: 4-텍스처 sampling + tangent 추가가 G-Buffer 패스 시간에
+  미치는 영향을 GPU 타이머로 측정. 헬멧 단일 추가 비용은 이미 미미(슬롯
+  로그로 확인). 100 인스턴스 시나리오에서 측정 후 CHANGELOG 추가 예정.
+- ⬜ **자산 검증 확장**: 현재 DamagedHelmet 1종만 검증. FlightHelmet, BoomBox
+  등 다른 PBR 자산에서도 정상 렌더링 확인 — 다양한 머티리얼 조합 cover.
+  sub-task 8 (SceneNode) 직전에 진행 권장.
 
 ---
 
 ## 5. 이후 단기·중기·장기 윤곽
 
-이번 작업(AB) 완료 후의 큰 그림:
+이번 작업(AB) 완료 후의 큰 그림. AB는 sub-task 9 + Vulkan parity + sub-task 8
+까지 묶어서 종결로 간주 (§3 시퀀스 참조).
 
-- **단기(다음 1 작업)**: C(TAA). AB로 들어온 풍부한 머티리얼 위에서 안티앨리어싱
-  품질 격차가 비로소 시각화됨.
+- **단기 (AB 닫는 작업, ~2~3 세션)**:
+  1. sub-task 9 — A/B 모드 머티리얼 토글 (작업량 작음)
+  2. Vulkan parity — material bind group을 Vulkan에 이식
+  3. sub-task 8 — SceneNode 최소 구현
+- **그 다음 (1 작업)**: C(TAA). AB로 들어온 풍부한 머티리얼 위에서
+  안티앨리어싱 품질 격차가 비로소 시각화됨. velocity 채널 추가는 G-Buffer
+  포맷 확장.
 - **중기**: D(멀티스레드 커맨드 레코딩). AB·C로 만든 풍부한 씬에서 CPU 측
   병목이 비로소 측정 가능해지므로 의미 있는 작업이 됨.
 - **장기**: E(메시 셰이더 + GPU-driven 클러스터 컬링) 또는 [`CAREER_ROADMAP.md`
