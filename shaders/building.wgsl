@@ -47,13 +47,15 @@ struct UniformBufferObject {
 @group(0) @binding(5) var brdfLUT: texture_2d<f32>;
 @group(0) @binding(6) var iblSampler: sampler;
 
-// Phase 2.1: Per-object data via SSBO
+// MUST match C++ ObjectData (InstancedRenderData.hpp) — 144 bytes.
+// See that file for the field-by-field contract.
 struct ObjectData {
     worldMatrix: mat4x4<f32>,
     boundingBoxMin: vec4<f32>,
     boundingBoxMax: vec4<f32>,
     colorAndMetallic: vec4<f32>,   // rgb = albedo, a = metallic
-    roughnessAOPad: vec4<f32>,     // r = roughness, g = ao
+    roughnessAOPad: vec4<f32>,     // r = roughness, g = ao, b = legacy bindless albedo idx, a = pad
+    textureIndices: vec4<u32>,     // x = baseColor, y = normal, z = MR, w = emissive (0xFFFFFFFF = none)
 }
 
 struct ObjectBuffer {

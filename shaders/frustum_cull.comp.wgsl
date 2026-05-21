@@ -10,12 +10,14 @@ struct CullUniforms {
     pad1: u32,
 }
 
+// MUST match C++ ObjectData (InstancedRenderData.hpp) — 144 bytes.
 struct ObjectData {
     worldMatrix: mat4x4<f32>,
     boundingBoxMin: vec4<f32>,
     boundingBoxMax: vec4<f32>,
     colorAndMetallic: vec4<f32>,
     roughnessAOPad: vec4<f32>,
+    textureIndices: vec4<u32>,
 }
 
 struct ObjectBuffer {

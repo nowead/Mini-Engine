@@ -9,17 +9,19 @@ struct LightSpaceUBO {
 
 @group(0) @binding(0) var<uniform> ubo: LightSpaceUBO;
 
-// Phase 2.1: Per-object data via SSBO
+// MUST match C++ ObjectData (InstancedRenderData.hpp) and gbuffer.wgsl /
+// frustum_cull.comp.wgsl. 144 bytes; see InstancedRenderData.hpp for the
+// field contract. A stride mismatch here once filled the shadow map with
+// nonsense geometry (CHANGELOG_2026-05-19); the static_assert on the C++
+// side now guards the size but every shader copy still needs to match.
 struct ObjectData {
     worldMatrix: mat4x4<f32>,
     boundingBoxMin: vec4<f32>,
     boundingBoxMax: vec4<f32>,
     colorAndMetallic: vec4<f32>,
     roughnessAOPad: vec4<f32>,
-}   // 128 bytes — MUST match C++ ObjectData (InstancedRenderData.hpp) and
-    // gbuffer.wgsl / frustum_cull.comp.wgsl. A stray extra vec4 here made the
-    // stride 144, so objects[i>0] read misaligned garbage and the shadow map
-    // was filled with nonsense geometry.
+    textureIndices: vec4<u32>,
+}
 
 struct ObjectBuffer {
     objects: array<ObjectData>,

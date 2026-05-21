@@ -27,13 +27,14 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
     float shadowStrength;
 } ubo;
 
-// Phase 2.1: Per-object data via SSBO (replaces per-instance vertex attributes)
+// MUST match C++ ObjectData (InstancedRenderData.hpp) — 144 bytes.
 struct ObjectData {
-    mat4 worldMatrix;
-    vec4 boundingBoxMin;
-    vec4 boundingBoxMax;
-    vec4 colorAndMetallic;   // rgb = albedo, a = metallic
-    vec4 roughnessAOPad;     // r = roughness, g = ao
+    mat4  worldMatrix;
+    vec4  boundingBoxMin;
+    vec4  boundingBoxMax;
+    vec4  colorAndMetallic;   // rgb = albedo, a = metallic
+    vec4  roughnessAOPad;     // r = roughness, g = ao, b = legacy bindless albedo idx, a = pad
+    uvec4 textureIndices;     // x = baseColor, y = normal, z = MR, w = emissive (0xFFFFFFFF = none)
 };
 
 layout(std430, set = 1, binding = 0) readonly buffer ObjectBuffer {

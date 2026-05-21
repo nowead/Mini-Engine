@@ -15,13 +15,14 @@ layout(std140, set = 0, binding = 0) uniform CullUniforms {
     uint pad1;
 } cull;
 
-// Per-object data (read-only, same struct as building shader)
+// Per-object data — MUST match C++ ObjectData (InstancedRenderData.hpp) — 144 bytes.
 struct ObjectData {
-    mat4 worldMatrix;
-    vec4 boundingBoxMin;
-    vec4 boundingBoxMax;
-    vec4 colorAndMetallic;
-    vec4 roughnessAOPad;
+    mat4  worldMatrix;
+    vec4  boundingBoxMin;
+    vec4  boundingBoxMax;
+    vec4  colorAndMetallic;
+    vec4  roughnessAOPad;
+    uvec4 textureIndices;
 };
 
 layout(std430, set = 0, binding = 1) readonly buffer ObjectBuffer {

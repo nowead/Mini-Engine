@@ -24,18 +24,15 @@ struct GBufferUBO {
 // =============================================================================
 // Bind Group 1: per-object SSBO (shared with shadow + deferred passes)
 // =============================================================================
-// Must match C++ ObjectData (InstancedRenderData.hpp) — 128 bytes:
-//   worldMatrix      64 bytes
-//   boundingBoxMin   16 bytes
-//   boundingBoxMax   16 bytes
-//   colorAndMetallic 16 bytes  (rgb = albedo, a = metallic)
-//   roughnessAOPad   16 bytes  (r = roughness, g = ao, b = bindless idx float, a = pad)
+// MUST match C++ ObjectData (InstancedRenderData.hpp) — 144 bytes. See that
+// file for the field contract.
 struct ObjectData {
     worldMatrix:      mat4x4<f32>,
     boundingBoxMin:   vec4<f32>,
     boundingBoxMax:   vec4<f32>,
-    colorAndMetallic: vec4<f32>,
-    roughnessAOPad:   vec4<f32>,
+    colorAndMetallic: vec4<f32>,   // rgb = albedo, a = metallic
+    roughnessAOPad:   vec4<f32>,   // r = roughness, g = ao, b = legacy bindless albedo idx, a = pad
+    textureIndices:   vec4<u32>,   // x = baseColor, y = normal, z = MR, w = emissive (0xFFFFFFFF = none)
 }
 
 struct ObjectBuffer {

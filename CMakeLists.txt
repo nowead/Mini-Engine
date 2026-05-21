@@ -85,6 +85,21 @@ else()
     # cgltf has no CMakeLists.txt — expose include dir manually
     add_library(cgltf INTERFACE)
     target_include_directories(cgltf INTERFACE ${cgltf_SOURCE_DIR})
+
+    # stb (header-only collection — stb_image is what we use for in-memory
+    # PNG/JPG decode of glTF embedded images). Native gets this via vcpkg
+    # (Stb::stb above); WASM needs the headers fetched manually.
+    FetchContent_Declare(
+        stb
+        GIT_REPOSITORY https://github.com/nothings/stb.git
+        GIT_TAG master
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(stb)
+    add_library(stb INTERFACE)
+    target_include_directories(stb INTERFACE ${stb_SOURCE_DIR})
+    # Match the vcpkg Stb::stb alias so call sites that need it can use either.
+    add_library(Stb::stb ALIAS stb)
 endif()
 
 # =============================================================================
@@ -623,6 +638,7 @@ else()
         rhi::factory
         tinyobjloader
         cgltf
+        stb
     )
 
     target_compile_definitions(MiniEngine PRIVATE

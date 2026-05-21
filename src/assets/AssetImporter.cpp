@@ -6,6 +6,11 @@
 
 #include "src/assets/AssetImporter.hpp"
 
+// stb_image is already STB_IMAGE_IMPLEMENTATION'd in ResourceManager.cpp;
+// here we only need the decode API for in-memory image buffers (glTF/glb
+// embeds PNG/JPG bytes in buffer views).
+#include <stb_image.h>
+
 #include <cstdio>
 #include <cstring>
 #include <memory>
@@ -59,6 +64,100 @@ bool readUintAccessor(const cgltf_accessor* a, std::vector<uint32_t>& out) {
         out[i] = static_cast<uint32_t>(v);
     }
     return true;
+}
+
+// Decode one cgltf image (PNG/JPG bytes embedded in a buffer_view) into an
+// ImportedTexture. Returns false on any failure; the caller logs context.
+bool decodeImage(const cgltf_image* img, ImportedTexture& out, std::string& why) {
+    if (!img) {
+        why = "null image";
+        return false;
+    }
+
+    const stbi_uc* bytes = nullptr;
+    int            len   = 0;
+
+    if (img->buffer_view) {
+        // Embedded image data (.glb or buffer-view-backed .gltf)
+        const cgltf_buffer_view* bv = img->buffer_view;
+        if (!bv->buffer || !bv->buffer->data) {
+            why = "image buffer_view has no backing data";
+            return false;
+        }
+        const uint8_t* base = static_cast<const uint8_t*>(bv->buffer->data);
+        bytes = base + bv->offset;
+        len   = static_cast<int>(bv->size);
+    } else if (img->uri && img->uri[0]) {
+        // External file or data: URI -- not handled in this milestone. cgltf
+        // can resolve data: URIs into a buffer, but external file fetching is
+        // a separate code path; flag explicitly.
+        why = std::string("image references external uri '") + img->uri
+            + "' -- only embedded buffer_views are decoded in this sub-task";
+        return false;
+    } else {
+        why = "image has neither buffer_view nor uri";
+        return false;
+    }
+
+    int w = 0, h = 0, channelsIgnored = 0;
+    stbi_uc* pixels = stbi_load_from_memory(bytes, len, &w, &h, &channelsIgnored,
+                                            STBI_rgb_alpha);
+    if (!pixels) {
+        why = std::string("stbi_load_from_memory failed: ")
+            + (stbi_failure_reason() ? stbi_failure_reason() : "(no reason)");
+        return false;
+    }
+
+    out.name   = img->name ? img->name : "";
+    out.width  = static_cast<uint32_t>(w);
+    out.height = static_cast<uint32_t>(h);
+    const size_t byteCount = static_cast<size_t>(w) * h * 4;
+    out.pixelsRGBA8.assign(pixels, pixels + byteCount);
+    stbi_image_free(pixels);
+    return true;
+}
+
+// Resolve a cgltf_texture pointer into an index into our ImportedAsset::textures
+// array. cgltf stores textures contiguously, so pointer arithmetic is valid.
+uint32_t textureIndexOf(const cgltf_texture* tex, const cgltf_data* data) {
+    if (!tex || !data || !tex->image) return UINT32_MAX;
+    // tex is &data->textures[i] for some i.
+    const std::ptrdiff_t idx = tex - data->textures;
+    if (idx < 0 || static_cast<cgltf_size>(idx) >= data->textures_count) {
+        return UINT32_MAX;
+    }
+    return static_cast<uint32_t>(idx);
+}
+
+// Translate one cgltf_material into an engine ImportedMaterial. Only the
+// metallic-roughness model + the four standard maps (baseColor / normal /
+// occlusion / emissive) are honored here; specular-glossiness, unlit, and
+// KHR extensions are deferred.
+void translateMaterial(const cgltf_material* m, const cgltf_data* data,
+                       ImportedMaterial& out) {
+    out.name = (m && m->name) ? m->name : "";
+
+    if (!m) return;
+
+    if (m->has_pbr_metallic_roughness) {
+        const auto& mr = m->pbr_metallic_roughness;
+        out.baseColorFactor = glm::vec4(mr.base_color_factor[0],
+                                        mr.base_color_factor[1],
+                                        mr.base_color_factor[2],
+                                        mr.base_color_factor[3]);
+        out.metallicFactor  = mr.metallic_factor;
+        out.roughnessFactor = mr.roughness_factor;
+        out.baseColorTextureIndex         = textureIndexOf(mr.base_color_texture.texture,         data);
+        out.metallicRoughnessTextureIndex = textureIndexOf(mr.metallic_roughness_texture.texture, data);
+    }
+
+    out.normalTextureIndex    = textureIndexOf(m->normal_texture.texture,    data);
+    out.occlusionTextureIndex = textureIndexOf(m->occlusion_texture.texture, data);
+    out.emissiveTextureIndex  = textureIndexOf(m->emissive_texture.texture,  data);
+    out.emissiveFactor = glm::vec3(m->emissive_factor[0],
+                                   m->emissive_factor[1],
+                                   m->emissive_factor[2]);
+    out.doubleSided = m->double_sided;
 }
 
 // Translate one cgltf primitive into an engine ImportedMesh.
@@ -205,9 +304,31 @@ std::optional<ImportedAsset> AssetImporter::load(std::string_view path) {
 
     ImportedAsset asset;
 
-    // Walk every primitive of every mesh — multi-primitive meshes become
-    // multiple ImportedMesh entries. Material/node ingest lives in later
-    // sub-tasks; meshes is all this milestone produces.
+    // ---- Textures ----------------------------------------------------------
+    // Decode embedded images up front so material translation can resolve
+    // texture pointers into our flat index space. Failures here leave gaps
+    // (empty ImportedTexture) rather than aborting the whole load -- the
+    // engine treats invalid pixels as a missing texture downstream.
+    asset.textures.resize(raw->textures_count);
+    cgltf_size skippedTextures = 0;
+    for (cgltf_size ti = 0; ti < raw->textures_count; ++ti) {
+        const cgltf_texture& tex = raw->textures[ti];
+        std::string why;
+        if (!decodeImage(tex.image, asset.textures[ti], why)) {
+            ++skippedTextures;
+            logInfo(path, std::string("texture[") + std::to_string(ti) + "] skipped: " + why);
+        }
+    }
+
+    // ---- Materials ---------------------------------------------------------
+    asset.materials.resize(raw->materials_count);
+    for (cgltf_size mi = 0; mi < raw->materials_count; ++mi) {
+        translateMaterial(&raw->materials[mi], raw, asset.materials[mi]);
+    }
+
+    // ---- Meshes ------------------------------------------------------------
+    // Walk every primitive of every mesh -- multi-primitive meshes become
+    // multiple ImportedMesh entries. Node ingest lives in a later sub-task.
     cgltf_size skippedPrimitives = 0;
     for (cgltf_size mi = 0; mi < raw->meshes_count; ++mi) {
         const cgltf_mesh& mesh = raw->meshes[mi];
@@ -228,13 +349,15 @@ std::optional<ImportedAsset> AssetImporter::load(std::string_view path) {
         return std::nullopt;
     }
 
-    // Diagnostic summary — counts only; pointer-vs-index validation lives in
-    // tests. The format string avoids embedded quotes for PowerShell-safe
-    // captures during build verification.
-    char summary[160];
+    // Diagnostic summary -- counts only; cross-validation lives in tests.
+    // Format string avoids embedded quotes for PowerShell-safe captures.
+    char summary[256];
     std::snprintf(summary, sizeof(summary),
-                  "ingested %zu mesh(es), %zu primitive(s) skipped, %zu material(s) reachable",
-                  asset.meshes.size(), skippedPrimitives, raw->materials_count);
+                  "ingested %zu mesh(es), %zu primitive(s) skipped, "
+                  "%zu material(s), %zu texture(s) decoded (%zu skipped)",
+                  asset.meshes.size(), skippedPrimitives,
+                  asset.materials.size(),
+                  asset.textures.size() - skippedTextures, skippedTextures);
     logInfo(path, summary);
 
     return asset;

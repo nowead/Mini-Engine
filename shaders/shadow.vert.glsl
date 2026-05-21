@@ -14,13 +14,14 @@ layout(set = 0, binding = 0) uniform LightSpaceUBO {
     mat4 lightSpaceMatrix;
 } ubo;
 
-// Phase 2.1: Per-object data via SSBO
+// MUST match C++ ObjectData (InstancedRenderData.hpp) — 144 bytes.
 struct ObjectData {
-    mat4 worldMatrix;
-    vec4 boundingBoxMin;
-    vec4 boundingBoxMax;
-    vec4 colorAndMetallic;
-    vec4 roughnessAOPad;
+    mat4  worldMatrix;
+    vec4  boundingBoxMin;
+    vec4  boundingBoxMax;
+    vec4  colorAndMetallic;
+    vec4  roughnessAOPad;
+    uvec4 textureIndices;
 };
 
 layout(std430, set = 1, binding = 0) readonly buffer ObjectBuffer {

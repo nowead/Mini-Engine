@@ -27,12 +27,14 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
     float shadowStrength;
 } ubo;
 
+// MUST match C++ ObjectData (InstancedRenderData.hpp) — 144 bytes.
 struct ObjectData {
-    mat4 worldMatrix;
-    vec4 boundingBoxMin;
-    vec4 boundingBoxMax;
-    vec4 colorAndMetallic;
-    vec4 roughnessAOPad;
+    mat4  worldMatrix;
+    vec4  boundingBoxMin;
+    vec4  boundingBoxMax;
+    vec4  colorAndMetallic;
+    vec4  roughnessAOPad;
+    uvec4 textureIndices;
 };
 
 layout(std430, set = 1, binding = 0) readonly buffer ObjectBuffer {
