@@ -462,10 +462,12 @@ private:
     std::unique_ptr<rhi::RHITextureView>     defaultBaseColorView;
     std::unique_ptr<rhi::RHITexture>         defaultNormalTex;      // flat (0,0,1) (linear)
     std::unique_ptr<rhi::RHITextureView>     defaultNormalView;
-    std::unique_ptr<rhi::RHITexture>         defaultMRTex;          // metallic=0 roughness=1 (linear)
+    std::unique_ptr<rhi::RHITexture>         defaultMRTex;          // identity: G=1, B=1 (linear)
     std::unique_ptr<rhi::RHITextureView>     defaultMRView;
     std::unique_ptr<rhi::RHITexture>         defaultEmissiveTex;    // black (sRGB)
     std::unique_ptr<rhi::RHITextureView>     defaultEmissiveView;
+    std::unique_ptr<rhi::RHITexture>         defaultAOTex;          // identity: R=1 (linear)
+    std::unique_ptr<rhi::RHITextureView>     defaultAOView;
 
     std::unique_ptr<rhi::RHIBindGroup>       defaultMaterialBindGroup;
 
@@ -498,6 +500,7 @@ private:
         rhi::RHITextureView* normalView    = nullptr;
         rhi::RHITextureView* mrView        = nullptr;
         rhi::RHITextureView* emissiveView  = nullptr;
+        rhi::RHITextureView* aoView        = nullptr;
 
 #ifdef __EMSCRIPTEN__
         // WebGPU set 2 bind group for this asset. Built by Renderer once the

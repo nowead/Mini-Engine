@@ -358,6 +358,7 @@ void Renderer::clearShowcaseMesh() {
     showcaseAsset.normalView    = nullptr;
     showcaseAsset.mrView        = nullptr;
     showcaseAsset.emissiveView  = nullptr;
+    showcaseAsset.aoView        = nullptr;
     showcaseAsset.materialTextureViews.clear();
     showcaseAsset.materialTextures.clear();
     showcaseAsset.ssboBindGroup.reset();
@@ -438,17 +439,19 @@ size_t Renderer::uploadShowcaseMaterialTextures(const assets::ImportedAsset& ass
     showcaseAsset.normalView    = resolveView(mat.normalTextureIndex);
     showcaseAsset.mrView        = resolveView(mat.metallicRoughnessTextureIndex);
     showcaseAsset.emissiveView  = resolveView(mat.emissiveTextureIndex);
+    showcaseAsset.aoView        = resolveView(mat.occlusionTextureIndex);
 
 #ifdef __EMSCRIPTEN__
     // Build the WebGPU set 2 bind group: each slot picks the helmet's own
     // view if available, otherwise the Renderer's default dummy view. This
     // means the shader can always sample unconditionally.
     if (materialBindGroupLayout && defaultBaseColorView && defaultNormalView
-        && defaultMRView && defaultEmissiveView && materialSampler) {
+        && defaultMRView && defaultEmissiveView && defaultAOView && materialSampler) {
         rhi::RHITextureView* bcV = showcaseAsset.baseColorView ? showcaseAsset.baseColorView : defaultBaseColorView.get();
         rhi::RHITextureView* nV  = showcaseAsset.normalView    ? showcaseAsset.normalView    : defaultNormalView.get();
         rhi::RHITextureView* mV  = showcaseAsset.mrView        ? showcaseAsset.mrView        : defaultMRView.get();
         rhi::RHITextureView* eV  = showcaseAsset.emissiveView  ? showcaseAsset.emissiveView  : defaultEmissiveView.get();
+        rhi::RHITextureView* aV  = showcaseAsset.aoView        ? showcaseAsset.aoView        : defaultAOView.get();
 
         rhi::BindGroupDesc bgDesc;
         bgDesc.layout = materialBindGroupLayout.get();
@@ -457,7 +460,8 @@ size_t Renderer::uploadShowcaseMaterialTextures(const assets::ImportedAsset& ass
         bgDesc.entries.push_back(rhi::BindGroupEntry::TextureView(1, nV));
         bgDesc.entries.push_back(rhi::BindGroupEntry::TextureView(2, mV));
         bgDesc.entries.push_back(rhi::BindGroupEntry::TextureView(3, eV));
-        bgDesc.entries.push_back(rhi::BindGroupEntry::Sampler    (4, materialSampler.get()));
+        bgDesc.entries.push_back(rhi::BindGroupEntry::TextureView(4, aV));
+        bgDesc.entries.push_back(rhi::BindGroupEntry::Sampler    (5, materialSampler.get()));
         showcaseAsset.materialBindGroup = rhiBridge->getDevice()->createBindGroup(bgDesc);
         if (!showcaseAsset.materialBindGroup) {
             LOG_ERROR("Renderer") << "Failed to create showcase material bind group";
@@ -468,6 +472,18 @@ size_t Renderer::uploadShowcaseMaterialTextures(const assets::ImportedAsset& ass
     LOG_INFO("Renderer") << "Uploaded " << uploaded << "/" << asset.textures.size()
                          << " showcase textures (" << (bytesUploaded / 1024u)
                          << " KiB total) for material " << materialIndex;
+
+    // Diagnostic: report which material slots resolved to real glTF textures
+    // vs the engine default dummies. If a slot says "dummy" but the source
+    // material was supposed to provide it, that points at AssetImporter or
+    // texture-index resolution rather than the upload itself.
+    auto slotTag = [](const rhi::RHITextureView* v) { return v ? "real" : "dummy"; };
+    LOG_INFO("Renderer") << "Showcase material slot resolution: "
+                         << "baseColor=" << slotTag(showcaseAsset.baseColorView)
+                         << " normal="    << slotTag(showcaseAsset.normalView)
+                         << " mr="        << slotTag(showcaseAsset.mrView)
+                         << " emissive="  << slotTag(showcaseAsset.emissiveView)
+                         << " ao="        << slotTag(showcaseAsset.aoView);
     return uploaded;
 }
 
@@ -1536,9 +1552,10 @@ void Renderer::createMaterialBindGroupInfrastructure() {
     addTexEntry(1);  // normal
     addTexEntry(2);  // metallicRoughness
     addTexEntry(3);  // emissive
+    addTexEntry(4);  // occlusion (AO)
     {
         rhi::BindGroupLayoutEntry samp;
-        samp.binding    = 4;
+        samp.binding    = 5;
         samp.visibility = rhi::ShaderStage::Fragment;
         samp.type       = rhi::BindingType::Sampler;
         layoutDesc.entries.push_back(samp);
@@ -1567,11 +1584,18 @@ void Renderer::createMaterialBindGroupInfrastructure() {
     }
 
     // ----------------------------------------------------------------------
-    // Dummy 1×1 textures. Color choices follow the glTF "neutral" convention:
-    //   baseColor white = sample × factor preserves factor color
-    //   normal flat     = decodes to (0,0,1) → identity in tangent space
-    //   MR (B=metallic, G=roughness): metallic=0, roughness=1 → diffuse dielectric
-    //   emissive black  = no self-emission
+    // Dummy 1×1 textures. The shader multiplies each sampled value by an
+    // ObjectData factor (baseColorFactor, metallicFactor, roughnessFactor,
+    // ao factor) so the dummies must be IDENTITY values for that multiply:
+    //   baseColor white      → sample × factor preserves the factor color
+    //   normal flat (0,0,1)  → identity rotation in tangent space
+    //   MR  (G=rough, B=met) → both channels = 1 so the factor passes through
+    //   emissive black       → no self-emission added on top of lit color
+    //   AO  (R=occlusion)    → R = 1 so the factor passes through
+    // Note: an earlier draft of MR was (0,255,0,255) which forced metallic
+    // to 0 across all buildings — bug, since their ObjectData carries a
+    // nonzero metallic factor that should survive when no MR texture is
+    // bound. The identity form below preserves the factor.
     // ----------------------------------------------------------------------
     auto upload1x1 = [&](uint8_t r, uint8_t g, uint8_t b, uint8_t a,
                           rhi::TextureFormat fmt) {
@@ -1580,10 +1604,11 @@ void Renderer::createMaterialBindGroupInfrastructure() {
     };
     defaultBaseColorTex = upload1x1(255, 255, 255, 255, rhi::TextureFormat::RGBA8UnormSrgb);
     defaultNormalTex    = upload1x1(128, 128, 255, 255, rhi::TextureFormat::RGBA8Unorm);
-    defaultMRTex        = upload1x1(  0, 255,   0, 255, rhi::TextureFormat::RGBA8Unorm);
+    defaultMRTex        = upload1x1(  0, 255, 255, 255, rhi::TextureFormat::RGBA8Unorm);
     defaultEmissiveTex  = upload1x1(  0,   0,   0, 255, rhi::TextureFormat::RGBA8UnormSrgb);
+    defaultAOTex        = upload1x1(255,   0,   0, 255, rhi::TextureFormat::RGBA8Unorm);
     if (!materialSampler || !defaultBaseColorTex || !defaultNormalTex
-        || !defaultMRTex || !defaultEmissiveTex) {
+        || !defaultMRTex || !defaultEmissiveTex || !defaultAOTex) {
         LOG_ERROR("Renderer") << "Material default resources failed";
         return;
     }
@@ -1600,6 +1625,7 @@ void Renderer::createMaterialBindGroupInfrastructure() {
     defaultNormalView    = makeView(defaultNormalTex.get(),    rhi::TextureFormat::RGBA8Unorm,     "Default_NormalView");
     defaultMRView        = makeView(defaultMRTex.get(),        rhi::TextureFormat::RGBA8Unorm,     "Default_MRView");
     defaultEmissiveView  = makeView(defaultEmissiveTex.get(),  rhi::TextureFormat::RGBA8UnormSrgb, "Default_EmissiveView");
+    defaultAOView        = makeView(defaultAOTex.get(),        rhi::TextureFormat::RGBA8Unorm,     "Default_AOView");
 
     // ----------------------------------------------------------------------
     // Default material bind group (used by buildings and any showcase slot
@@ -1612,7 +1638,8 @@ void Renderer::createMaterialBindGroupInfrastructure() {
     bgDesc.entries.push_back(rhi::BindGroupEntry::TextureView(1, defaultNormalView.get()));
     bgDesc.entries.push_back(rhi::BindGroupEntry::TextureView(2, defaultMRView.get()));
     bgDesc.entries.push_back(rhi::BindGroupEntry::TextureView(3, defaultEmissiveView.get()));
-    bgDesc.entries.push_back(rhi::BindGroupEntry::Sampler    (4, materialSampler.get()));
+    bgDesc.entries.push_back(rhi::BindGroupEntry::TextureView(4, defaultAOView.get()));
+    bgDesc.entries.push_back(rhi::BindGroupEntry::Sampler    (5, materialSampler.get()));
     defaultMaterialBindGroup = device->createBindGroup(bgDesc);
 
     if (!defaultMaterialBindGroup) {

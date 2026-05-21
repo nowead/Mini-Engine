@@ -207,6 +207,10 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
     let albedo    = gb1.rgb;
     let metallic  = gb1.a;
     let ao        = gb2.r;
+    // Step 6d: emissive RGB is packed into the unused gba lanes of gBuffer2
+    // by the G-Buffer fragment shader. The gbuffer color attachment is
+    // RGBA8UnormSrgb-linear so this value is already in linear space.
+    let emissive  = gb2.gba;
 
     // G-Buffer debug views
     if (ubo.debugView != 0) {
@@ -221,6 +225,13 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
             dbgColor = vec3<f32>(roughness);
         } else if (ubo.debugView == 5) {
             dbgColor = vec3<f32>(ao);
+        } else if (ubo.debugView == 9) {
+            // Step 6d diagnostic: raw emissive packed into gBuffer2.gba.
+            // Black everywhere means either the bind group used the dummy
+            // emissive or the asset has no emissive content; a few small
+            // bright pixels is the expected look for DamagedHelmet (the
+            // helmet only glows on the visor and side lamps).
+            dbgColor = emissive;
         } else {
             let linearDepth = (2.0 * 0.1 * 1000.0) / (1000.0 + 0.1 - depth * (1000.0 - 0.1));
             dbgColor = vec3<f32>(linearDepth / 1000.0);
@@ -300,6 +311,13 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
         color += (kDp * albedo / PI + specP) * radianceP * NdotLp;
     }
     }  // end !onBaselineSide
+
+    // Step 6d: add self-emission AFTER all lighting (it does not depend on
+    // shadows, point lights, IBL, or AO). The packed value lives in
+    // gBuffer2.gba; for non-emissive surfaces this is (0,0,0) so the add
+    // is a no-op. Bright emissive (e.g. the helmet visor) bleeds into the
+    // HDR target and the bloom pass picks it up naturally.
+    color += emissive;
 
     // CSM cascade debug visualization
     if (ubo.debugCascades > 0.5) {
