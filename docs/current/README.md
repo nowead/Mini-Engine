@@ -13,8 +13,9 @@
 | --- | --- |
 | [ENGINE_ROADMAP.md](engine-roadmap/ENGINE_ROADMAP.md) | 진단 + 작업 단위 5종 비교 + 권장 시퀀스(A → B → C → D → E) + 첫 작업(머티리얼 텍스처 확장) 구체화 |
 
-**현재 진입 작업**: A — 머티리얼 텍스처 확장 (노멀 / 메탈릭-러프니스 /
-이미시브 / AO 맵 도입).
+**현재 진입 작업**: AB(통합) — glTF 2.0 ingest + PBR 머티리얼 파이프라인.
+cgltf로 파싱·바이너리 디코딩 위임, 해석 레이어(`AssetImporter`) 직접 구현.
+첫 마일스톤: DamagedHelmet.glb 로딩 후 PBR 텍스처(노멀 · MR · 이미시브) 렌더링.
 
 ---
 

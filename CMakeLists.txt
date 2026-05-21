@@ -45,6 +45,13 @@ if(NOT EMSCRIPTEN)
     find_package(Stb REQUIRED)
     find_package(tinyobjloader REQUIRED)
     find_package(imgui CONFIG REQUIRED)
+
+    # cgltf vcpkg port is header-only and ships no CMake config — exposed via
+    # find_path and wrapped in an INTERFACE target so call sites match the
+    # WASM FetchContent path below (both link a plain `cgltf` target).
+    find_path(CGLTF_INCLUDE_DIRS "cgltf.h" REQUIRED)
+    add_library(cgltf INTERFACE)
+    target_include_directories(cgltf INTERFACE ${CGLTF_INCLUDE_DIRS})
 else()
     include(FetchContent)
     FetchContent_Declare(
@@ -66,6 +73,18 @@ else()
         GIT_SHALLOW TRUE
     )
     FetchContent_MakeAvailable(tinyobjloader)
+
+    # cgltf for glTF 2.0 loading (single-header, WASM)
+    FetchContent_Declare(
+        cgltf
+        GIT_REPOSITORY https://github.com/jkuhlmann/cgltf.git
+        GIT_TAG v1.14
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(cgltf)
+    # cgltf has no CMakeLists.txt — expose include dir manually
+    add_library(cgltf INTERFACE)
+    target_include_directories(cgltf INTERFACE ${cgltf_SOURCE_DIR})
 endif()
 
 # =============================================================================
@@ -152,6 +171,10 @@ if(NOT EMSCRIPTEN)
         src/scene/Frustum.hpp
         src/loaders/OBJLoader.cpp
         src/loaders/OBJLoader.hpp
+        # Asset pipeline (glTF 2.0 ingest via cgltf)
+        src/assets/AssetImporter.cpp
+        src/assets/AssetImporter.hpp
+        src/assets/ImportedAsset.hpp
         src/ui/ImGuiBackend.hpp
         src/ui/ImGuiVulkanBackend.hpp
         src/ui/ImGuiVulkanBackend.cpp
@@ -220,6 +243,7 @@ if(NOT EMSCRIPTEN)
         Stb::stb
         Vulkan::cppm
         tinyobjloader::tinyobjloader
+        cgltf
         imgui::imgui
         rhi::factory
         rhi::vulkan
@@ -539,6 +563,10 @@ else()
         src/scene/Frustum.hpp
         src/loaders/OBJLoader.cpp
         src/loaders/OBJLoader.hpp
+        # Asset pipeline (glTF 2.0 ingest via cgltf)
+        src/assets/AssetImporter.cpp
+        src/assets/AssetImporter.hpp
+        src/assets/ImportedAsset.hpp
         # Note: ImGui excluded from WASM build (WebGPU backend not yet implemented)
         src/utils/Vertex.hpp
         src/utils/FileUtils.hpp
@@ -594,6 +622,7 @@ else()
         glm::glm
         rhi::factory
         tinyobjloader
+        cgltf
     )
 
     target_compile_definitions(MiniEngine PRIVATE

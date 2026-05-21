@@ -42,7 +42,7 @@ docs/
 
 → **[current/README.md](current/README.md)**
 
-- [ENGINE_ROADMAP.md](current/engine-roadmap/ENGINE_ROADMAP.md) — 엔진 성숙도 관점의 다음 단계 계획서. 첫 작업: 머티리얼 텍스처 확장(노멀·MR·이미시브·AO 맵).
+- [ENGINE_ROADMAP.md](current/engine-roadmap/ENGINE_ROADMAP.md) — 엔진 성숙도 관점의 다음 단계 계획서. 첫 작업: glTF 2.0 ingest + PBR 머티리얼 파이프라인(AB 통합, cgltf 채택).
 
 ---
 

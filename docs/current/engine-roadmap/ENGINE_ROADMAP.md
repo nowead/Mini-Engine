@@ -1,6 +1,7 @@
 # Mini-Engine — 다음 단계 계획서
 
 **작성일**: 2026-05-20
+**최종 수정일**: 2026-05-20 (A+B 통합으로 첫 작업 재정의)
 **관점**: 커리어 마일스톤이 아니라 **엔진 자체의 성숙도**. 무엇이 만들어졌고,
 무엇이 만들어진 것을 가리고 있는가, 다음에 무엇을 짚어야 가장 큰 잠금이 풀리는가.
 
@@ -77,38 +78,54 @@ G-Buffer1, 이미시브는 별도 채널에 들어가도록 자리가 있음). �
 
 위 진단에서 끌어낼 수 있는 작업 단위 5개:
 
-### A. 머티리얼 텍스처 확장 (권장)
+### AB. glTF 2.0 ingest + PBR 머티리얼 파이프라인 (권장 — 첫 작업)
 
-**작업 내용**: `ObjectData`에 `normalIdx / mrIdx / emissiveIdx / aoIdx` 슬롯 추가
-(이미 있는 단일 알베도 인덱스를 4개로 확장). 셰이더에서 노멀 맵 → TBN으로
-변환 → G-Buffer에 픽셀 노멀로 기록. MR 맵 → 픽셀별 metalness/roughness로 G-Buffer
-기록. 이미시브 맵 → HDR 색에 추가. AO 맵 → SSAO와 합성.
+> **2026-05-20 갱신**: 원안의 A(머티리얼 텍스처 확장)와 B(glTF 로더)를 단일
+> 작업 단위로 합친다. 이유는 §3 시퀀스 근거 참조.
 
-**작업량**: 1~2주.
+**작업 내용**: cgltf 단일 헤더 도입으로 glTF/glb 파싱 + 바이너리 버퍼 디코딩
+처리. 그 위에 **AssetImporter 해석 레이어**를 직접 작성 — glTF의 mesh /
+material / texture / sampler / node를 엔진 표현으로 매핑. 머티리얼 시스템은
+glTF 컨벤션(pbrMetallicRoughness + normalTexture + occlusionTexture +
+emissiveTexture)을 그대로 1:1 수용하도록 설계 — 외부 표준에서 우리 표현을
+역추론하는 방식.
 
-**얻는 것**: 모든 데모 스크린샷이 즉시 달라짐. PBR 수학이 그제서야 보이게 됨.
-"PBR 구현했다"고 면접에서 말하려면 노멀 맵부터는 있어야 함.
+수반되는 변경:
 
-**의존성**: 없음 — 기존 인프라(bindless 4096 슬롯, G-Buffer, PBR 셰이더) 위에서
-인덱스 슬롯 늘리고 셰이더 샘플 4번 추가만. 가장 깨끗한 작업.
+- `ObjectData`(현재 단일 알베도 인덱스만 보유)를 4-텍스처 슬롯(albedo / normal /
+  metallicRoughness / emissive)으로 확장. AO는 glTF 컨벤션대로 occlusion 텍스처의
+  R 채널을 별도 슬롯으로 받거나 MR 텍스처 R에 통합 — 데이터를 보고 결정.
+- `Vertex`에 tangent 추가. glTF 자산은 vertex tangent를 자산 측에서 제공하는
+  경우가 많아 첫 작업이 자연스러움.
+- G-Buffer 프래그먼트 셰이더에서 4-텍스처 분기 처리 — 텍스처 있으면 픽셀별
+  값, 없으면 기존 상수.
+- G-Buffer에 이미시브 채널 자리 확보(현재 GBuffer2의 g/b/a 빈 슬롯에 패킹).
+- `SceneNode` 신설 — glTF 노드 계층을 받기 위한 최소한의 트리 표현. 첫
+  마일스톤은 깊이 1(단일 메시 자산)이라도 무방.
 
-**리스크**: 낮음. 셰이더 코드와 SSBO 레이아웃만 손대고 RHI는 안 건드림.
+**작업량**: 3~4주. 분할 시 합보다 짧음(서로의 정답이 같은 자산에서 나옴).
 
-### B. glTF 2.0 로더
+**얻는 것**:
 
-**작업 내용**: tinygltf 또는 cgltf 도입. glTF의 mesh / material / texture / node
-계층을 엔진 내부 표현(BuildingEntity는 더 이상 적절치 않으니 `SceneNode` 신설
-필요)으로 매핑. 머티리얼 텍스처(A 단계의 산물)와 자연스럽게 결합.
+- Khronos Sample Models(DamagedHelmet, Sponza, FlightHelmet 등) 직접 로딩·렌더링.
+- 데모 스크린샷이 즉시 "회색 큐브 격자"에서 "실제 PBR 자산"으로 변환.
+- 머티리얼 시스템이 임의의 자체 설계가 아니라 **업계 표준(glTF) 컨벤션을 그대로
+  수용**하는 형태로 정착 — 후속 자산은 별도 변환 없이 들어옴.
+- 향후 작업(TAA·메시 셰이더 등)의 시연이 풍부한 자산 위에서 측정 가능.
 
-**작업량**: 2~3주. 노드 계층 / 인덱스 버퍼 단위 / 머티리얼 베이크 등 분량이 큼.
+**의존성**: 없음 — 기존 인프라(bindless 4096 슬롯, G-Buffer, PBR 셰이더, RHI
+sampler) 위에서 SSBO 슬롯 확장 + 셰이더 분기 + 신규 `AssetImporter` /
+`SceneNode` 모듈만 추가.
 
-**얻는 것**: 외부 어셋 라이브러리(Sketchfab, glTF-Sample-Models) 직접 사용
-가능. 데모 다양성 폭발적 증가.
+**리스크**: 중. glTF 스펙의 코너 케이스(sparse accessor, non-interleaved
+attribute, double-sided, alphaMode=MASK/BLEND 등) 전부 처리하면 작업 폭증.
+**최소 viable 경로를 먼저 — 단일 메시 / opaque / PBR-MR만** 우선 처리하고
+나머지는 후속.
 
-**의존성**: A를 먼저 끝내야 의미 있음(머티리얼이 없으면 glTF 머티리얼 정보를
-받아도 쓸 데가 없음).
-
-**리스크**: 중. 노드 트리 처리와 머티리얼 변환에서 코너 케이스 다수.
+**라이브러리 선택**: cgltf (단일 헤더, 의존성 0, bgfx·sokol 채택). 파싱·바이너리
+디코딩만 위임하고 해석 레이어는 전부 직접 작성 — 상업 엔진의 실제 패턴과 일치
+(Unity는 Newtonsoft.Json, bgfx는 cgltf, Unreal은 자체 utility 위에서 glTF 전용
+해석 레이어만 자체 작성).
 
 ### C. TAA (Temporal Anti-Aliasing)
 
@@ -165,123 +182,185 @@ RHI에 Secondary CB 타입 추가. Render Graph 스케줄러가 의존성 없는
 
 ## 3. 권장 시퀀스와 근거
 
-**A → B → C → D → E** 순서가 의존성·작업량·시연 임팩트 모두를 만족.
+**AB → C → D → E** 순서.
 
-근거:
+### 왜 A와 B를 합쳤나 (2026-05-20 결정)
 
-1. **A를 먼저 하는 이유** — 가장 작고 가장 임팩트가 큼. 인프라가 이미
-   준비되어 있고 (bindless · G-Buffer · PBR 셰이더) 셰이더 일부 + SSBO 슬롯
-   확장만 손대면 됨. 모든 후속 작업의 시각적 결과를 풍성하게 만듦.
-2. **B를 두 번째로** — A 없이는 glTF 머티리얼이 도착해도 받을 그릇이 없음.
-   A가 끝나면 glTF 머티리얼 → ObjectData 매핑이 직선적.
-3. **C(TAA)를 세 번째로** — 풍부한 머티리얼이 있어야 안티앨리어싱 차이가
-   드러남. velocity 채널 추가는 G-Buffer 포맷 확장이라 D·E 이전이 깔끔.
-4. **D(멀티스레드)는 그 다음** — 시각 작업이 끝난 뒤 성능 작업으로 자연스럽게
-   전환. 면접 가치가 가장 큰 단일 작업이지만, "보이는 것"이 충분히 풍성한
-   다음에 가야 시연이 살아남.
-5. **E(메시 셰이더)는 마지막** — 가장 큰 작업량, 가장 모던, 그러나 D 없이도
-   가능. A~D를 먼저 끝내면 메시 셰이더의 컬링 비교 시연이 단단해짐.
+원안은 A(머티리얼) → B(glTF)였다. 그러나 사용자 지적:
 
-**A만 하더라도** 엔진의 데모 인상이 즉시 격상되며 면접·포트폴리오 모두 다음
-대화 단계로 진입 가능. 그 뒤 어디까지 진행할지는 그때 다시 판단.
+> "오브젝트 로더를 직접 구현하는 것보다 glTF 로더를 갖고 오는 것이 합리적인지
+> 고려하고 문제 없다면 진행하자."
+
+이 지적의 정답을 따라가면 A·B 분리가 인위적이라는 결론에 도달한다:
+
+1. **A 단독 진행 시 테스트 자산의 빈곤** — 머티리얼 텍스처 시스템을 만들어도
+   적용할 자산이 "코드에서 만든 큐브 + 손으로 PBR 텍스처 묶음"뿐. 시스템 설계의
+   타당성이 실제 자산에서 검증되지 않음.
+2. **glTF 자산은 vertex tangent를 자산 측에서 제공** — A의 첫 서브태스크였던
+   "tangent 직접 계산"이 B와 함께면 자연 해결.
+3. **머티리얼 시스템 설계의 표준 입력** — 임의의 자체 설계가 아니라 glTF의
+   pbrMetallicRoughness 모델을 그대로 받는 형태로 정착 → 후속 자산은 별도
+   변환 없이 들어옴. A를 먼저 하면 "우리 표현"이 먼저 굳어버려 glTF 매핑에서
+   불필요한 어댑터 코드가 생김.
+4. **합치면 두 번 안 손댐** — 분리 시 머티리얼 정의를 두 번(A에서 자체 설계 →
+   B에서 glTF 매핑) 손대야 함. 합치면 한 번에 정답.
+
+→ **AB 단일 작업 단위로 통합**, 첫 작업으로 진입.
+
+### 이후 시퀀스
+
+1. **C(TAA)를 두 번째로** — AB로 풍부한 머티리얼이 들어와야 안티앨리어싱
+   차이가 시각적으로 드러남. velocity 채널 추가는 G-Buffer 포맷 확장이라
+   D·E 이전이 깔끔.
+2. **D(멀티스레드)는 그 다음** — 시각 작업이 끝난 뒤 성능 작업으로 자연스럽게
+   전환. AB로 들어온 풍부한 씬에서 CPU 측 병목이 비로소 측정 가능.
+3. **E(메시 셰이더)는 마지막** — 가장 큰 작업량, 가장 모던. AB~D가 만든 풍부한
+   씬에서 컬링 비교 시연이 단단해짐.
+
+**AB만 하더라도** 엔진의 데모 인상이 즉시 격상되며 외부 자산 라이브러리를 받을
+수 있게 됨. 그 뒤 어디까지 진행할지는 그때 다시 판단.
 
 ---
 
-## 4. 첫 작업 — 머티리얼 텍스처 확장 구체화
+## 4. 첫 작업 — AB (glTF ingest + PBR 머티리얼 파이프라인) 구체화
 
 ### 4.1 목표 정의
 
-`ObjectData`의 단일 알베도 인덱스를 **4개의 텍스처 인덱스**(albedo, normal,
-metallicRoughness, emissive)로 확장하고, 각 셰이더에서 텍스처가 있으면 픽셀별
-값을, 없으면 기존 상수를 사용하도록 분기. AO 맵은 별도 슬롯이 아닌 MR 텍스처의
-R 채널(glTF 컨벤션)에 통합.
+**최소 viable 마일스톤**: Khronos Sample Models의 [DamagedHelmet.glb](https://github.com/KhronosGroup/glTF-Sample-Models)
+한 자산이 화면에 PBR 머티리얼(노멀 맵 · MR 맵 · 이미시브 맵 포함) 그대로 렌더링.
+G-Buffer 디버그 뷰 다섯 채널(Normals/Albedo/Metallic/Roughness/AO)이 새 자산에서
+픽셀별로 의도대로 다양해질 것.
 
-성공 기준:
-- 노멀 맵을 적용한 오브젝트에서 디테일 음영이 보이고 G-Buffer 노멀 디버그
-  뷰에 픽셀별 노멀이 나타날 것.
-- 메탈릭/러프니스 텍스처를 적용한 오브젝트에서 metalness·roughness G-Buffer
-  디버그 뷰가 균일하지 않을 것.
-- 이미시브가 켜진 오브젝트가 Bloom 임계를 통과해 자체 발광으로 보일 것.
-- 기존(텍스처 없는) 회색 큐브가 회귀 없이 동일하게 보일 것.
+**최종 마일스톤**: 다중 메시 자산(예: Sponza)이 노드 계층까지 받아져 렌더링.
+A/B 분할에 "머티리얼 텍스처 on/off" 비교 모드 추가.
 
-### 4.2 변경 면적 (예상)
+### 4.2 모듈 설계 (신규)
 
-**SSBO 레이아웃**:
-- `ObjectData`에 텍스처 인덱스 4개 추가 — 현재 128B 한도가 깨지므로 16B 확장
-  (`textureIndices: uvec4` 한 줄 추가 → 144B). 셰이더 측 `ObjectData`(GBuffer
-  + Shadow + Frustum-cull) 동기, 그리고 **2026-05-19 셰도우 스트라이드 사고**의
-  교훈을 살려 한 번에 세 셰이더 동시 갱신 + 주석 명시.
-- 또는: 기존 `roughnessAOPad.b`에 알베도 인덱스 1개만 들어있는 구조를 폐기하고
-  `uvec4 textureIndices`로 일원화 → 128B 유지 가능 여부 재검토.
+```text
+src/assets/
+├── AssetImporter.hpp / .cpp     ← cgltf → 엔진 표현 해석 레이어 (자체 구현)
+├── ImportedAsset.hpp            ← 메시·머티리얼·노드 트리 묶음
+└── MaterialDescriptor.hpp       ← PBR 머티리얼 정의 (glTF 컨벤션 그대로)
+
+src/scene/
+├── SceneNode.hpp / .cpp         ← 최소 노드 계층 (transform + children)
+└── (장기) Scene.hpp             ← SceneNode 루트 보유, 카메라/조명 컨테이너
+
+third_party/cgltf/
+└── cgltf.h                       ← 단일 헤더 (드롭만, vcpkg 안 거침)
+```
+
+`AssetImporter`만이 cgltf의 C API를 인식. 그 이외 엔진 코드는 `ImportedAsset`
+같은 엔진 표현으로만 상호작용 — 라이브러리 격리 원칙.
+
+### 4.3 변경 면적 (예상)
+
+**자산 파이프라인 (신규)**:
+
+- `third_party/cgltf/cgltf.h` 드롭. CMakeLists.txt에 include path 한 줄.
+- `src/assets/AssetImporter.{hpp,cpp}` 신설 — cgltf 호출 → ImportedAsset 반환.
+- `ResourceManager`에 glTF 경로 추가(기존 OBJ 경로 옆에). OBJ 로더는 보조로 유지.
+
+**SSBO 레이아웃 (ObjectData 확장)**:
+
+- 현재 `ObjectData` 128B에 텍스처 인덱스가 알베도 하나만 패킹됨
+  (`roughnessAOPad.b` 자리). 4-텍스처로 확장 필요.
+- **선택지 1**: `glm::uvec4 textureIndices` (16B) 한 줄 추가 → 144B. 셰이더
+  3곳 동기.
+- **선택지 2**: 기존 `roughnessAOPad.b`의 단일 인덱스 패킹 폐기 + 빈 슬롯
+  재배치 → 128B 유지 가능 여부 확인. 더 깨끗하지만 패킹 더 복잡.
+- 결정은 구현 시 — 128B 유지 가능하면 그쪽, 아니면 144B 확장.
 
 **셰이더**:
-- `gbuffer.frag.glsl` / `gbuffer.wgsl` — 노멀 맵 샘플 후 TBN 변환, MR 맵 샘플
-  후 metalness·roughness 픽셀별 기록, 이미시브 맵 샘플 후 별도 채널에 기록
-  (G-Buffer에 이미시브 채널이 이미 있는지 확인 필요).
-- TBN 계산을 위해 vertex 셰이더에서 tangent를 출력해야 함. 현재 `Vertex` 구조
-  체는 `pos / normal / texCoord`만 있어 **tangent 추가**가 선행.
-- 이미시브가 G-Buffer에 자리가 없으면 G-Buffer 4-target으로 확장하거나, HDR
-  버퍼에 직접 가산.
 
-**자산 파이프라인**:
-- 텍스처 로더는 이미 `ResourceManager`에 있음. 단일 텍스처 로딩 패턴을 4개로
-  확장 + `BindlessTextureManager`에 등록. 단순 호출 추가 수준.
-- 데모용 테스트 텍스처 한 세트 — 노멀 맵 + MR 맵 + 이미시브 맵 — 외부 자산
-  필요(혹은 절차적 생성).
+- `Vertex`에 `tangent: vec3` 추가 — `pos / normal / texCoord / tangent`.
+- `gbuffer.vert.glsl` / `gbuffer.wgsl` vertex 출력에 tangent 추가, fragment에
+  TBN 구성.
+- `gbuffer.frag.glsl` / `gbuffer.wgsl` fragment에서 4-텍스처 분기:
+  - normalIdx != sentinel → sample → TBN 변환 → G-Buffer normal에 픽셀별 노멀
+  - mrIdx != sentinel → sample.b/g → G-Buffer metallic/roughness 픽셀별
+  - emissiveIdx != sentinel → sample → G-Buffer 이미시브 채널에 기록
+  - aoIdx != sentinel → sample.r → G-Buffer AO 채널에 기록
+- G-Buffer 이미시브 위치: 현재 GBuffer2 `(ao, 0, 0, 1)`의 g/b/a 빈 슬롯 →
+  `(ao, emissive.r, emissive.g, emissive.b)` 패킹. 4번째 G-Buffer 안 만들어도 됨.
+- Deferred lighting에서 이미시브를 HDR 색에 가산.
 
 **RHI**: 변경 없음.
 
-### 4.3 진행 순서 (서브 작업)
+**2026-05-19 스트라이드 사고 재발 방지**:
 
-1. **Vertex tangent 출력 + TBN 구성** — vertex 구조체에 tangent 추가, OBJ
-   로더에서 계산(없으면 derived), G-Buffer vertex 셰이더에 출력.
-2. **`ObjectData` 텍스처 인덱스 4개 슬롯 확보** — 셰이더 세 곳 동기. 모든 슬롯
-   기본값 `0xFFFFFFFF` = "없음" 센티넬.
-3. **G-Buffer 프래그먼트에서 텍스처 분기 처리** — 노멀 맵부터 시작.
-   `textureIndices.normalIdx != 0xFFFFFFFF`면 샘플 후 TBN 변환, 아니면 vertex
-   노멀 사용. Vulkan + WebGPU 양쪽 동시.
-4. **MR · 이미시브 · AO 동일 패턴으로 추가**.
-5. **G-Buffer 이미시브 채널 처리** — 현재 G-Buffer 레이아웃에 자리가 있는지
-   확인. 없으면 deferred lighting에서 별도 텍스처 추가 또는 HDR 버퍼 직접
-   접근.
-6. **테스트 자산 1개로 적용** — 가로등 또는 건물 한 개에 4-텍스처 머티리얼
-   주입. 디버그 뷰로 채널별 확인.
-7. **시연**: A/B 모드와 결합 — 좌측 = 텍스처 없음(현 베이스라인), 우측 =
-   풀 머티리얼.
+- `ObjectData` 변경 시 C++ 정의 → 셰이더 정의(gbuffer/shadow/frustum-cull)
+  세 곳을 한 커밋에서 동기.
+- 주석에 "Must match X bytes, fields listed in order" 명시.
+- `static_assert(sizeof(ObjectData) == N)` 추가.
 
-### 4.4 알려진 위험과 대응
+### 4.4 진행 순서 (서브 작업)
 
-- **glTF 컨벤션 vs 자체 컨벤션**: glTF는 MR을 `metallicRoughnessTexture`의 BG
-  채널에 패킹(B=metallic, G=roughness), AO는 별도 텍스처 또는 occlusion 텍스처
-  R채널. 처음부터 **glTF 컨벤션을 따르기로 결정** — B 단계 glTF 로더가 자연스럽게
-  연결됨.
-- **TBN 정확도**: 모델에 tangent가 없으면 derived가 부정확. OBJ 로더에서
-  MikkTSpace 같은 도구 도입 또는 단순 화면 공간 derived(`derivative` 사용)로
-  fallback. derived는 노멀 맵 품질 손실이지만 의존성 없음.
-- **2026-05-19 스트라이드 사고 재발 방지**: ObjectData 변경 시 (a) C++ 측 정의
-  → 셰이더 측 정의(gbuffer/shadow/frustum-cull) 세 곳을 한 커밋에서 동기,
-  (b) 주석에 "Must match X bytes, fields listed in order" 명시, (c)
-  `static_assert(sizeof(ObjectData) == N)` 추가.
+각 단계가 빌드·실행 가능한 단위가 되도록 분할.
 
-### 4.5 측정·시연
+1. **cgltf 도입 + AssetImporter 골격** — `third_party/cgltf/cgltf.h` 드롭, CMake
+   include path, `AssetImporter::load(path) → ImportedAsset` 빈 구현이 빌드까지
+   되는 것 확인.
+2. **메시 ingest** — glTF accessor → 엔진 VertexBuffer/IndexBuffer 변환. 첫
+   자산(DamagedHelmet)을 기존 머티리얼(회색)로라도 화면에 띄움. 다음 단계의
+   전제 — 자산이 일단 보여야 머티리얼 작업의 의미가 측정됨.
+3. **Vertex tangent 추가** — 자산이 tangent를 제공하면 그대로, 없으면 derived
+   (`derivative()` 또는 첫 단계는 단순 fallback). G-Buffer vertex 셰이더에 출력.
+4. **`ObjectData` 4-텍스처 슬롯 + 셰이더 동기** — 128B vs 144B 결정. 세 셰이더
+   동시 갱신 + `static_assert`. 이 시점에는 텍스처 인덱스가 전부 sentinel이라
+   동작 변화 없음.
+5. **텍스처 ingest + bindless 등록** — glTF 텍스처(KTX 또는 PNG embedded) →
+   `ResourceManager` → `BindlessTextureManager` 인덱스 회수 → ObjectData에
+   기록.
+6. **G-Buffer fragment 텍스처 분기 (노멀 맵부터)** — `normalIdx != sentinel`이면
+   샘플 + TBN 변환, 아니면 vertex 노멀. Vulkan + WebGPU 동시. DamagedHelmet에서
+   노멀 맵 디테일 확인.
+7. **MR · 이미시브 · AO 동일 패턴으로 추가** — G-Buffer 이미시브 채널 패킹
+   확인. Bloom 임계 통과해 자체 발광 확인.
+8. **SceneNode 최소 구현 + 노드 트리 ingest** — 단일 메시는 깊이 1. Sponza
+   같은 다중 메시 자산이 들어오면 의미가 나타남. 첫 자산은 깊이 1로 충분.
+9. **시연 통합** — A/B 분할에 "머티리얼 텍스처 on/off" 모드 추가(좌측 sentinel
+   강제, 우측 정상). P1.1 인프라 재사용. 가이드 투어에 새 스텝 추가도 가능.
+
+### 4.5 알려진 위험과 대응
+
+- **glTF 스펙 코너 케이스 폭증**: sparse accessor, non-interleaved attributes,
+  multiple primitives per mesh, alphaMode=MASK/BLEND, double-sided, KHR
+  extensions(특히 KHR_materials_unlit, KHR_texture_transform). **최소 viable
+  경로 우선** — opaque + PBR-MR + 단일 primitive만 첫 마일스톤. 나머지는
+  TODO 주석으로 표시하고 후속.
+- **TBN 정확도**: glTF가 tangent를 제공해도 일부 자산은 누락. fallback으로
+  화면 공간 derivative 사용(품질 손실 있음). 장기적으로 MikkTSpace 도입 검토.
+- **텍스처 색 공간**: 알베도·이미시브는 sRGB, 노멀·MR·AO는 linear. 잘못 로드하면
+  PBR 결과가 어긋남. RHI sampler/texture format이 `sRGB` vs `unorm` 구분을
+  지원하는지 확인 필요.
+- **KTX2/Draco**: glTF의 압축 텍스처(KTX2)와 압축 메시(Draco)는 추가 라이브러리
+  필요 — 첫 마일스톤에서는 미지원으로 두고 비압축 자산만 받음.
+- **WASM 자산 임베딩**: Emscripten `--preload-file`로 glTF·텍스처 묶음을
+  바이너리에 굽거나, runtime fetch. 자산이 커지면 첫 로딩 시간 증가 — 데모
+  자산은 합리적 크기(<10MB) 한 개로 시작.
+
+### 4.6 측정·시연
 
 - **G-Buffer 디버그 뷰 회귀 테스트**: Normals/Albedo/Metallic/Roughness/AO 다섯
-  뷰가 새 머티리얼에서 의도대로 픽셀별로 다양해질 것.
-- **A/B 분할**: 기존 A/B에 "머티리얼 텍스처 on/off" 비교 모드 추가도 자연
-  스러움 — 동일 모델, 좌측 텍스처 없음 / 우측 풀 텍스처. P1.1 인프라 재사용.
-- **퍼포먼스**: 4-텍스처 샘플이 G-Buffer 패스 시간을 얼마나 늘리는지 GPU 타이머로
-  측정. 예상은 미미(bindless + cache hit) 하지만 측정값을 다음 작업의 참고로
-  남김.
+  뷰가 새 자산에서 픽셀별로 의도대로 다양해질 것.
+- **A/B 분할에 새 모드**: 좌측 = 텍스처 없음(현 베이스라인), 우측 = 풀 머티리얼.
+  동일 자산을 좌우로 나눠 보면 노멀 맵의 임팩트가 즉시 가시화.
+- **퍼포먼스**: 4-텍스처 샘플 + tangent 추가가 G-Buffer 패스 시간을 얼마나
+  늘리는지 GPU 타이머로 측정. 예상은 미미(bindless + cache hit). 측정값을
+  CHANGELOG에 남김.
+- **자산 검증**: Khronos Sample Models 중 PBR 자산 3종(DamagedHelmet,
+  FlightHelmet, BoomBox) 정상 렌더링 확인 — 다양한 머티리얼 조합 cover.
 
 ---
 
 ## 5. 이후 단기·중기·장기 윤곽
 
-이번 작업(A) 완료 후의 큰 그림:
+이번 작업(AB) 완료 후의 큰 그림:
 
-- **단기(다음 1~2 작업)**: B(glTF 로더) → C(TAA). 시각 품질·자산 다양성·AA를
-  한 시즌에 끌어올림.
-- **중기**: D(멀티스레드 커맨드 레코딩). 이때까지 만든 풍부한 씬에서 CPU 측
+- **단기(다음 1 작업)**: C(TAA). AB로 들어온 풍부한 머티리얼 위에서 안티앨리어싱
+  품질 격차가 비로소 시각화됨.
+- **중기**: D(멀티스레드 커맨드 레코딩). AB·C로 만든 풍부한 씬에서 CPU 측
   병목이 비로소 측정 가능해지므로 의미 있는 작업이 됨.
 - **장기**: E(메시 셰이더 + GPU-driven 클러스터 컬링) 또는 [`CAREER_ROADMAP.md`
   Phase 5](../../roadmap/CAREER_ROADMAP.md)의 센서 시뮬레이션 분기. 시점에서
@@ -289,4 +368,4 @@ R 채널(glTF 컨벤션)에 통합.
 
 `CAREER_ROADMAP.md`는 그대로 유지(취업 관점의 또 다른 렌즈). 본 문서는 엔진
 관점의 별개 트랙으로 공존시킴. 두 트랙이 일치하는 항목(예: D는 양쪽 다 권장)도
-있고, 본 문서에만 있는 항목(A, B, C)도 있음.
+있고, 본 문서에만 있는 항목(AB, C)도 있음.
