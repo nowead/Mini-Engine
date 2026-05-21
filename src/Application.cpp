@@ -4,7 +4,10 @@
 #include "src/utils/GpuProfiler.hpp"
 #endif
 #include "src/rendering/InstancedRenderData.hpp"
+#include "src/assets/AssetImporter.hpp"
 #include "src/utils/Logger.hpp"
+
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <iostream>
 #include <stdexcept>
@@ -106,6 +109,43 @@ void Application::initRenderer() {
 }
 
 void Application::initGameLogic() {
+    // Sub-task 2b (ENGINE_ROADMAP §4.4): load DamagedHelmet via AssetImporter,
+    // upload the first mesh as a GPU-resident Mesh, and install it as the
+    // renderer's showcase asset. Drawn at scene center, elevated above the
+    // building grid so it stays visible from the default camera. Materials
+    // and tangents land in subsequent sub-tasks — this milestone only proves
+    // the asset → GPU → G-Buffer path is sound.
+    {
+        assets::AssetImporter importer;
+        if (auto asset = importer.load("models/DamagedHelmet.glb")) {
+            size_t totalVerts = 0, totalIndices = 0;
+            for (const auto& m : asset->meshes) {
+                totalVerts   += m.vertices.size();
+                totalIndices += m.indices.size();
+            }
+            std::printf("[AssetImporter] DamagedHelmet OK -- meshes=%zu vertices=%zu indices=%zu\n",
+                        asset->meshes.size(), totalVerts, totalIndices);
+
+            if (!asset->meshes.empty() && renderer) {
+                // glTF assets are Y-up. DamagedHelmet ships rotated 90 degrees
+                // about X so it appears head-up in viewers that assume +Z forward;
+                // we counter-rotate so the visor faces the default camera. The
+                // helmet is small in absolute units, so scale up generously.
+                const float scale = 4.0f;
+                glm::mat4 m(1.0f);
+                m = glm::translate(m, glm::vec3(0.0f, 8.0f, 0.0f));
+                m = glm::rotate(m, glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+                m = glm::scale(m, glm::vec3(scale));
+
+                renderer->setShowcaseMesh(asset->meshes[0].vertices,
+                                          asset->meshes[0].indices,
+                                          m);
+            }
+        } else {
+            std::printf("[AssetImporter] DamagedHelmet load returned no asset (file missing or unsupported feature)\n");
+        }
+    }
+
     // Get RHI device and queue from renderer
     auto* rhiDevice = renderer->getRHIDevice();
     auto* rhiQueue = renderer->getGraphicsQueue();

@@ -1,5 +1,6 @@
 #include "ShadowRenderer.hpp"
 #include "src/utils/FileUtils.hpp"
+#include "src/utils/Vertex.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 #include <cstring>
@@ -210,13 +211,17 @@ bool ShadowRenderer::createPipeline(void* nativeRenderPass, rhi::RHIBindGroupLay
     pipelineDesc.vertexShader   = m_vertexShader.get();
     pipelineDesc.fragmentShader = m_fragmentShader.get();
 
+    // Vertex layout MUST match the engine Vertex struct (pos / normal / texCoord
+    // / tangent). The shadow shader consumes only pos but the buffer is shared
+    // with the building/G-Buffer pipeline, so we declare every attribute.
     rhi::VertexBufferLayout vertexLayout;
-    vertexLayout.stride    = sizeof(float) * 8;
+    vertexLayout.stride    = sizeof(Vertex);
     vertexLayout.inputRate = rhi::VertexInputRate::Vertex;
     vertexLayout.attributes = {
-        rhi::VertexAttribute(0, 0, rhi::TextureFormat::RGB32Float, 0),
-        rhi::VertexAttribute(1, 0, rhi::TextureFormat::RGB32Float, sizeof(float) * 3),
-        rhi::VertexAttribute(2, 0, rhi::TextureFormat::RG32Float,  sizeof(float) * 6)
+        rhi::VertexAttribute(0, 0, rhi::TextureFormat::RGB32Float, offsetof(Vertex, pos)),
+        rhi::VertexAttribute(1, 0, rhi::TextureFormat::RGB32Float, offsetof(Vertex, normal)),
+        rhi::VertexAttribute(2, 0, rhi::TextureFormat::RG32Float,  offsetof(Vertex, texCoord)),
+        rhi::VertexAttribute(3, 0, rhi::TextureFormat::RGB32Float, offsetof(Vertex, tangent))
     };
     pipelineDesc.vertex.buffers.push_back(vertexLayout);
 

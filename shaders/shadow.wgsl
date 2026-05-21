@@ -27,12 +27,13 @@ struct ObjectBuffer {
 
 @group(1) @binding(0) var<storage, read> objectBuffer: ObjectBuffer;
 
-// Vertex input (per-vertex only)
+// Vertex input (per-vertex only) — keep in sync with shared engine Vertex layout
 struct VertexInput {
     @builtin(instance_index) instanceIndex: u32,
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) texCoord: vec2<f32>,
+    @location(3) tangent: vec3<f32>,  // unused in shadow pass; declared to match shared layout
 }
 
 // Vertex output

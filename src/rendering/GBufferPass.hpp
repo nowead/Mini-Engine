@@ -75,6 +75,13 @@ public:
 
     /**
      * @brief Record the G-Buffer pass into the given encoder.
+     *
+     * Buildings are drawn first via the indirect path. If showcase parameters
+     * are provided (mesh + SSBO bind group + index count > 0), a single
+     * non-indirect drawIndexed follows inside the same render pass, sharing
+     * the building pipeline and set-0 bind group but swapping set 1 to point
+     * at the showcase's own ObjectData/visibleIndices buffers.
+     *
      * @param bindlessSet  Vulkan-only: VkDescriptorSet for bindless texture array (null = disabled)
      */
     void execute(rhi::RHICommandEncoder* encoder,
@@ -84,7 +91,12 @@ public:
                  rhi::RHIBuffer*    indexBuffer,
                  rhi::RHIBuffer*    indirectBuffer,
                  uint32_t width, uint32_t height,
-                 VkDescriptorSet bindlessSet = VK_NULL_HANDLE);
+                 VkDescriptorSet bindlessSet = VK_NULL_HANDLE,
+                 // Optional showcase asset — pass nullptr/0 to skip.
+                 rhi::RHIBindGroup* showcaseSsboBindGroup = nullptr,
+                 rhi::RHIBuffer*    showcaseVertexBuffer  = nullptr,
+                 rhi::RHIBuffer*    showcaseIndexBuffer   = nullptr,
+                 uint32_t           showcaseIndexCount    = 0);
 
 private:
     bool createTextures(uint32_t width, uint32_t height);

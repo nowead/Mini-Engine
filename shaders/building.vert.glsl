@@ -4,6 +4,7 @@
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec2 inTexCoord;
+layout(location = 3) in vec3 inTangent;  // consumed by normal-map fragment path in a later sub-task
 
 // Uniform buffer (camera matrices + lighting + CSM shadow)
 layout(set = 0, binding = 0) uniform UniformBufferObject {

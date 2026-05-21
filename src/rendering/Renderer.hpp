@@ -6,6 +6,7 @@
 
 #include "src/resources/ResourceManager.hpp"
 #include "src/scene/SceneManager.hpp"
+#include "src/scene/Mesh.hpp"
 #include "src/utils/Vertex.hpp"
 #include "src/rendering/RendererBridge.hpp"
 #include "src/rendering/InstancedRenderData.hpp"
@@ -74,6 +75,27 @@ public:
      * @param modelPath Path to model file
      */
     void loadModel(const std::string& modelPath);
+
+    /**
+     * @brief Install a single "showcase" mesh that gets drawn at a fixed
+     *        position in the G-Buffer pass, alongside instanced buildings.
+     *
+     * First milestone of the AB work item from ENGINE_ROADMAP (§4 sub-task 2b):
+     * exercises the AssetImporter end-to-end by getting a real glTF asset on
+     * screen without disturbing the existing building/instancing pipeline. The
+     * mesh is rendered with a uniform grey PBR material and a one-entry
+     * ObjectData SSBO that mirrors the building layout (so the same vertex
+     * shader and G-Buffer fragment shader run unchanged). A later sub-task
+     * generalizes this to a proper SceneNode tree.
+     *
+     * @return true on success; false on RHI allocation failure.
+     */
+    bool setShowcaseMesh(const std::vector<Vertex>&   vertices,
+                         const std::vector<uint32_t>& indices,
+                         const glm::mat4&             worldMatrix);
+
+    /// @brief Remove the currently installed showcase mesh, if any.
+    void clearShowcaseMesh();
 
     /**
      * @brief Load texture from file
@@ -406,6 +428,22 @@ private:
     std::unique_ptr<rhi::RHIBindGroupLayout> ssboBindGroupLayout;
     std::array<std::unique_ptr<rhi::RHIBindGroup>, MAX_FRAMES_IN_FLIGHT> ssboBindGroups;
     std::array<rhi::RHIBuffer*, MAX_FRAMES_IN_FLIGHT> cachedObjectBuffers = {};
+
+    // Showcase asset (single non-instanced mesh, drawn after the building
+    // batch inside the G-Buffer pass). Resources match the building set 1
+    // layout exactly so the same shader runs over it unchanged.
+    struct ShowcaseAsset {
+        std::unique_ptr<Mesh>               mesh;
+        std::unique_ptr<rhi::RHIBuffer>     objectBuffer;    // 1 ObjectData
+        std::unique_ptr<rhi::RHIBuffer>     visibleIndices;  // [0]
+        std::unique_ptr<rhi::RHIBindGroup>  ssboBindGroup;   // set 1
+        uint32_t                            indexCount = 0;
+
+        bool isReady() const {
+            return mesh && mesh->hasData() && ssboBindGroup && indexCount > 0;
+        }
+    };
+    ShowcaseAsset showcaseAsset;
 
     // Phase 2.2: GPU Frustum Culling resources
     std::unique_ptr<rhi::RHIShader> cullComputeShader;

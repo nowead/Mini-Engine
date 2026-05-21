@@ -663,6 +663,21 @@ else()
         COMMENT "Copying WGSL shaders for MiniEngine WASM"
     )
 
+    # Stage model assets into the build dir before link so --preload-file can
+    # package them into MiniEngine.data. Mirrors the WGSL copy above.
+    set(MINIENGINE_MODELS_DIR ${CMAKE_CURRENT_BINARY_DIR}/models)
+    set(MINIENGINE_MODEL_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/models/DamagedHelmet.glb
+    )
+    add_custom_command(
+        TARGET MiniEngine PRE_LINK
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${MINIENGINE_MODELS_DIR}
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${MINIENGINE_MODEL_SOURCES}
+            ${MINIENGINE_MODELS_DIR}/
+        COMMENT "Copying model assets for MiniEngine WASM"
+    )
+
     # Copy the landing index.html into the build dir so localhost:8000/
     # lands on a demo index instead of 404. Re-runs whenever the source
     # template changes (copy_if_different short-circuits otherwise).
@@ -680,7 +695,7 @@ else()
     # running app. Declaring them as LINK_DEPENDS forces a relink (which re-runs
     # the PRE_LINK copy and re-packages the preload/shell) on any such change.
     set_target_properties(MiniEngine PROPERTIES
-        LINK_DEPENDS "${MINIENGINE_WGSL_SOURCES};${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm_shell.html"
+        LINK_DEPENDS "${MINIENGINE_WGSL_SOURCES};${MINIENGINE_MODEL_SOURCES};${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm_shell.html"
     )
 
     target_link_options(MiniEngine PRIVATE
@@ -699,6 +714,7 @@ else()
         "SHELL:-O2"
         "SHELL:--bind"
         "SHELL:--preload-file ${CMAKE_CURRENT_BINARY_DIR}/shaders@/shaders"
+        "SHELL:--preload-file ${CMAKE_CURRENT_BINARY_DIR}/models@/models"
         "SHELL:--shell-file ${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm_shell.html"
     )
     target_compile_options(MiniEngine PRIVATE

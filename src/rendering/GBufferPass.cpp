@@ -1,5 +1,6 @@
 #include "GBufferPass.hpp"
 #include "src/utils/FileUtils.hpp"
+#include "src/utils/Vertex.hpp"
 #include <iostream>
 
 #ifndef __EMSCRIPTEN__
@@ -177,14 +178,18 @@ bool GBufferPass::createPipeline(rhi::RHIBindGroupLayout* buildingBGLayout,
     pipelineDesc.vertexShader   = m_vertexShader.get();
     pipelineDesc.fragmentShader = m_fragmentShader.get();
 
-    // Vertex layout: position(3) + normal(3) + texCoord(2) = 8 floats
+    // Vertex layout: matches engine Vertex (pos / normal / texCoord / tangent).
+    // Tangent (location 3) is consumed by sub-task 3 onward for normal mapping;
+    // declared here so the buffer/shader layout stays consistent across
+    // pipelines that all bind the same mesh data.
     rhi::VertexBufferLayout vbl;
-    vbl.stride    = sizeof(float) * 8;
+    vbl.stride    = sizeof(Vertex);
     vbl.inputRate = rhi::VertexInputRate::Vertex;
     vbl.attributes = {
-        rhi::VertexAttribute(0, 0, rhi::TextureFormat::RGB32Float, 0),
-        rhi::VertexAttribute(1, 0, rhi::TextureFormat::RGB32Float, sizeof(float) * 3),
-        rhi::VertexAttribute(2, 0, rhi::TextureFormat::RG32Float,  sizeof(float) * 6)
+        rhi::VertexAttribute(0, 0, rhi::TextureFormat::RGB32Float, offsetof(Vertex, pos)),
+        rhi::VertexAttribute(1, 0, rhi::TextureFormat::RGB32Float, offsetof(Vertex, normal)),
+        rhi::VertexAttribute(2, 0, rhi::TextureFormat::RG32Float,  offsetof(Vertex, texCoord)),
+        rhi::VertexAttribute(3, 0, rhi::TextureFormat::RGB32Float, offsetof(Vertex, tangent))
     };
     pipelineDesc.vertex.buffers.push_back(vbl);
 
@@ -225,7 +230,11 @@ void GBufferPass::execute(rhi::RHICommandEncoder* encoder,
                            rhi::RHIBuffer*     indexBuffer,
                            rhi::RHIBuffer*     indirectBuffer,
                            uint32_t width, uint32_t height,
-                           VkDescriptorSet bindlessSet) {
+                           VkDescriptorSet bindlessSet,
+                           rhi::RHIBindGroup* showcaseSsboBindGroup,
+                           rhi::RHIBuffer*    showcaseVertexBuffer,
+                           rhi::RHIBuffer*    showcaseIndexBuffer,
+                           uint32_t           showcaseIndexCount) {
     if (!m_initialized || !encoder) return;
 
     rhi::RenderPassDesc passDesc;
@@ -286,6 +295,19 @@ void GBufferPass::execute(rhi::RHICommandEncoder* encoder,
         pass->setVertexBuffer(0, vertexBuffer, 0);
         pass->setIndexBuffer(indexBuffer, rhi::IndexFormat::Uint32, 0);
         pass->drawIndexedIndirect(indirectBuffer, 0);
+    }
+
+    // Showcase asset draw — same pipeline, same set 0; swap set 1 to the
+    // showcase's own ObjectData/visibleIndices buffers and issue a single
+    // non-indirect indexed draw. Skipped silently if any input is null.
+    if (showcaseSsboBindGroup
+        && showcaseVertexBuffer
+        && showcaseIndexBuffer
+        && showcaseIndexCount > 0) {
+        pass->setBindGroup(1, showcaseSsboBindGroup);
+        pass->setVertexBuffer(0, showcaseVertexBuffer, 0);
+        pass->setIndexBuffer(showcaseIndexBuffer, rhi::IndexFormat::Uint32, 0);
+        pass->drawIndexed(showcaseIndexCount, 1, 0, 0, 0);
     }
 
     pass->end();

@@ -7,6 +7,7 @@
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;      // Unused in shadow pass
 layout(location = 2) in vec2 inTexCoord;    // Unused in shadow pass
+layout(location = 3) in vec3 inTangent;     // Unused in shadow pass; declared to match shared vertex layout
 
 // Light space matrix uniform
 layout(set = 0, binding = 0) uniform LightSpaceUBO {

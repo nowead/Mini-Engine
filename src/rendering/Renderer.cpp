@@ -229,6 +229,112 @@ void Renderer::loadTexture(const std::string& texturePath) {
     // Descriptor updates handled via RHI bind groups
 }
 
+bool Renderer::setShowcaseMesh(const std::vector<Vertex>&   vertices,
+                                const std::vector<uint32_t>& indices,
+                                const glm::mat4&             worldMatrix) {
+    if (vertices.empty() || indices.empty()) {
+        LOG_ERROR("Renderer") << "setShowcaseMesh: empty vertex/index data";
+        return false;
+    }
+    if (!ssboBindGroupLayout) {
+        LOG_ERROR("Renderer") << "setShowcaseMesh: SSBO layout not ready -- call after Renderer init";
+        return false;
+    }
+
+    auto* device = rhiBridge->getDevice();
+    auto* queue  = rhiBridge->getGraphicsQueue();
+
+    // Drop any previously-installed showcase before creating new resources.
+    clearShowcaseMesh();
+
+    showcaseAsset.mesh = std::make_unique<Mesh>(device, queue, vertices, indices);
+    if (!showcaseAsset.mesh->hasData()) {
+        LOG_ERROR("Renderer") << "setShowcaseMesh: Mesh creation failed";
+        clearShowcaseMesh();
+        return false;
+    }
+    showcaseAsset.indexCount = static_cast<uint32_t>(showcaseAsset.mesh->getIndexCount());
+
+    // Build the single ObjectData entry — matches the GPU layout used by
+    // buildings (see src/rendering/InstancedRenderData.hpp). Bindless texture
+    // index is set to the sentinel 0xFFFFFFFF so the shader falls back to the
+    // scalar colorAndMetallic / roughnessAOPad inputs.
+    glm::vec3 aabbMin( std::numeric_limits<float>::max());
+    glm::vec3 aabbMax(-std::numeric_limits<float>::max());
+    for (const auto& v : vertices) {
+        aabbMin = glm::min(aabbMin, v.pos);
+        aabbMax = glm::max(aabbMax, v.pos);
+    }
+
+    rendering::ObjectData od{};
+    od.worldMatrix      = worldMatrix;
+    od.boundingBoxMin   = glm::vec4(aabbMin, 0.0f);
+    od.boundingBoxMax   = glm::vec4(aabbMax, 0.0f);
+    od.colorAndMetallic = glm::vec4(0.78f, 0.78f, 0.80f, 0.6f);   // neutral grey, moderate metal
+    od.roughnessAOPad   = glm::vec4(0.45f, 1.0f,
+                                    glm::uintBitsToFloat(0xFFFFFFFFu),  // no bindless texture
+                                    0.0f);
+
+    {
+        rhi::BufferDesc bd;
+        bd.size  = sizeof(rendering::ObjectData);
+        bd.usage = rhi::BufferUsage::Storage | rhi::BufferUsage::CopyDst;
+        bd.label = "ShowcaseObjectData";
+        showcaseAsset.objectBuffer = device->createBuffer(bd);
+    }
+    if (!showcaseAsset.objectBuffer) {
+        LOG_ERROR("Renderer") << "setShowcaseMesh: failed to allocate ObjectData buffer";
+        clearShowcaseMesh();
+        return false;
+    }
+    showcaseAsset.objectBuffer->write(&od, sizeof(od));
+
+    // visibleIndices buffer — set 1 binding 1 in the building shader. The
+    // building pipeline expects a uint32 array; for the showcase we feed a
+    // single zero so the shader reads ObjectData[0].
+    {
+        rhi::BufferDesc bd;
+        bd.size  = sizeof(uint32_t);
+        bd.usage = rhi::BufferUsage::Storage | rhi::BufferUsage::CopyDst;
+        bd.label = "ShowcaseVisibleIndices";
+        showcaseAsset.visibleIndices = device->createBuffer(bd);
+    }
+    if (!showcaseAsset.visibleIndices) {
+        LOG_ERROR("Renderer") << "setShowcaseMesh: failed to allocate visibleIndices buffer";
+        clearShowcaseMesh();
+        return false;
+    }
+    const uint32_t zero = 0u;
+    showcaseAsset.visibleIndices->write(&zero, sizeof(zero));
+
+    {
+        rhi::BindGroupDesc bgDesc;
+        bgDesc.layout = ssboBindGroupLayout.get();
+        bgDesc.entries.push_back(rhi::BindGroupEntry::Buffer(0, showcaseAsset.objectBuffer.get()));
+        bgDesc.entries.push_back(rhi::BindGroupEntry::Buffer(1, showcaseAsset.visibleIndices.get()));
+        bgDesc.label = "ShowcaseSSBOBindGroup";
+        showcaseAsset.ssboBindGroup = device->createBindGroup(bgDesc);
+    }
+    if (!showcaseAsset.ssboBindGroup) {
+        LOG_ERROR("Renderer") << "setShowcaseMesh: failed to create SSBO bind group";
+        clearShowcaseMesh();
+        return false;
+    }
+
+    LOG_INFO("Renderer") << "Showcase mesh installed: "
+                         << vertices.size() << " vertices, "
+                         << indices.size()  << " indices";
+    return true;
+}
+
+void Renderer::clearShowcaseMesh() {
+    showcaseAsset.ssboBindGroup.reset();
+    showcaseAsset.visibleIndices.reset();
+    showcaseAsset.objectBuffer.reset();
+    showcaseAsset.mesh.reset();
+    showcaseAsset.indexCount = 0;
+}
+
 void Renderer::waitIdle() {
     rhiBridge->waitIdle();
 }
@@ -522,14 +628,15 @@ void Renderer::createRHIPipeline() {
         return;
     }
 
-    // Setup vertex state - matches Vertex struct
+    // Setup vertex state - matches Vertex struct (pos / normal / texCoord / tangent)
     rhi::VertexBufferLayout vertexLayout;
     vertexLayout.stride = sizeof(Vertex);
     vertexLayout.inputRate = rhi::VertexInputRate::Vertex;
     vertexLayout.attributes = {
-        rhi::VertexAttribute(0, 0, rhi::TextureFormat::RGB32Float, offsetof(Vertex, pos)),    // position
+        rhi::VertexAttribute(0, 0, rhi::TextureFormat::RGB32Float, offsetof(Vertex, pos)),     // position
         rhi::VertexAttribute(1, 0, rhi::TextureFormat::RGB32Float, offsetof(Vertex, normal)),  // normal
-        rhi::VertexAttribute(2, 0, rhi::TextureFormat::RG32Float, offsetof(Vertex, texCoord)) // texCoord
+        rhi::VertexAttribute(2, 0, rhi::TextureFormat::RG32Float,  offsetof(Vertex, texCoord)),// texCoord
+        rhi::VertexAttribute(3, 0, rhi::TextureFormat::RGB32Float, offsetof(Vertex, tangent))  // tangent
     };
 
     // Create render pipeline descriptor
@@ -865,9 +972,10 @@ void Renderer::createBuildingPipeline() {
     vertexLayout.stride = sizeof(Vertex);
     vertexLayout.inputRate = rhi::VertexInputRate::Vertex;
     vertexLayout.attributes = {
-        rhi::VertexAttribute(0, 0, rhi::TextureFormat::RGB32Float, offsetof(Vertex, pos)),    // inPosition
+        rhi::VertexAttribute(0, 0, rhi::TextureFormat::RGB32Float, offsetof(Vertex, pos)),     // inPosition
         rhi::VertexAttribute(1, 0, rhi::TextureFormat::RGB32Float, offsetof(Vertex, normal)),  // inNormal
-        rhi::VertexAttribute(2, 0, rhi::TextureFormat::RG32Float, offsetof(Vertex, texCoord)) // inTexCoord
+        rhi::VertexAttribute(2, 0, rhi::TextureFormat::RG32Float,  offsetof(Vertex, texCoord)),// inTexCoord
+        rhi::VertexAttribute(3, 0, rhi::TextureFormat::RGB32Float, offsetof(Vertex, tangent))  // inTangent
     };
 
     // Create render pipeline descriptor
@@ -3174,6 +3282,11 @@ void Renderer::drawFrame() {
             if (bindlessTextureManager && bindlessTextureManager->isAvailable())
                 bindlessSet = bindlessTextureManager->getVkDescriptorSet();
 #endif
+            rhi::RHIBindGroup* scBG  = showcaseAsset.isReady() ? showcaseAsset.ssboBindGroup.get()        : nullptr;
+            rhi::RHIBuffer*    scVB  = showcaseAsset.isReady() ? showcaseAsset.mesh->getVertexBuffer()   : nullptr;
+            rhi::RHIBuffer*    scIB  = showcaseAsset.isReady() ? showcaseAsset.mesh->getIndexBuffer()    : nullptr;
+            uint32_t           scIdx = showcaseAsset.isReady() ? showcaseAsset.indexCount                : 0u;
+
             gBufferPass->execute(encoder.get(),
                                  bg0,
                                  ssboBindGroups[frameIndex].get(),
@@ -3181,7 +3294,8 @@ void Renderer::drawFrame() {
                                  mesh->getIndexBuffer(),
                                  indirectDrawBuffers[frameIndex].get(),
                                  W, H,
-                                 bindlessSet);
+                                 bindlessSet,
+                                 scBG, scVB, scIB, scIdx);
         }
     }
     if (pendingInstancedData) pendingInstancedData.reset();

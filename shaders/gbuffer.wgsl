@@ -57,6 +57,7 @@ struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) normal:   vec3<f32>,
     @location(2) texCoord: vec2<f32>,
+    @location(3) tangent:  vec3<f32>,  // consumed by normal-map fragment path in a later sub-task
 }
 
 struct VertexOutput {

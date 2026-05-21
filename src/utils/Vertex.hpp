@@ -8,16 +8,28 @@ struct Vertex {
 	glm::vec3 pos;
 	glm::vec3 normal;
 	glm::vec2 texCoord;
+	// Surface tangent in object space. Required for sampling tangent-space
+	// normal maps; default-initialized to zero so OBJ assets that ship no
+	// tangent data still satisfy the vertex layout. Asset importers should
+	// populate from source (glTF supplies per-vertex tangent for PBR
+	// materials) or compute via MikkTSpace; until then the G-Buffer fragment
+	// shader falls back to screen-space derivatives.
+	glm::vec3 tangent = glm::vec3(0.0f);
 
 	bool operator==(const Vertex& other) const {
-		return pos == other.pos && normal == other.normal && texCoord == other.texCoord;
+		return pos == other.pos && normal == other.normal
+		    && texCoord == other.texCoord && tangent == other.tangent;
 	}
 };
 
 // Hash specialization for Vertex (must be in std namespace)
 template<> struct std::hash<Vertex> {
 	size_t operator()(Vertex const& vertex) const noexcept {
-		return ((hash<glm::vec3>()(vertex.pos) ^ (hash<glm::vec3>()(vertex.normal) << 1)) >> 1) ^ (hash<glm::vec2>()(vertex.texCoord) << 1);
+		size_t h = hash<glm::vec3>()(vertex.pos);
+		h = (h * 31) ^ hash<glm::vec3>()(vertex.normal);
+		h = (h * 31) ^ hash<glm::vec2>()(vertex.texCoord);
+		h = (h * 31) ^ hash<glm::vec3>()(vertex.tangent);
+		return h;
 	}
 };
 
