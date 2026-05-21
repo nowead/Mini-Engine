@@ -11,6 +11,7 @@
 // embeds PNG/JPG bytes in buffer views).
 #include <stb_image.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <memory>
@@ -267,6 +268,19 @@ bool translatePrimitive(const cgltf_primitive* prim,
         for (cgltf_size i = 0; i < vertexCount; ++i) {
             outMesh.indices.push_back(static_cast<uint32_t>(i));
         }
+    }
+
+    // Winding fix: glTF 2.0 spec mandates CCW front faces, but the engine's
+    // building pipeline currently expects CW (the procedural cube in
+    // BuildingManager was authored that way). Without this swap the helmet's
+    // outward-facing triangles get culled by CullMode::Back and only the
+    // back-facing interior shows. Reversing the second and third index of
+    // every triangle flips winding to CW without mirroring geometry.
+    //
+    // TODO(engine-roadmap): migrate the cube + GBuffer pipeline to CCW so
+    // glTF assets render natively without this asset-side rewrite.
+    for (size_t i = 0; i + 2 < outMesh.indices.size(); i += 3) {
+        std::swap(outMesh.indices[i + 1], outMesh.indices[i + 2]);
     }
 
     // Material binding — index into data->materials, or sentinel.

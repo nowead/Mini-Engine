@@ -137,15 +137,21 @@ void Application::initGameLogic() {
                 m = glm::rotate(m, glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
                 m = glm::scale(m, glm::vec3(scale));
 
+                // Pass the glTF material so ObjectData picks up baseColorFactor,
+                // metallicFactor, roughnessFactor (step 6 baseColor sampling
+                // multiplies the texture by these factors).
+                const uint32_t matIdx = asset->meshes[0].materialIndex;
+                const assets::ImportedMaterial* matPtr =
+                    (matIdx < asset->materials.size()) ? &asset->materials[matIdx] : nullptr;
+
                 renderer->setShowcaseMesh(asset->meshes[0].vertices,
                                           asset->meshes[0].indices,
-                                          m);
+                                          m,
+                                          matPtr);
 
-                // Step 5c: upload PBR textures for the showcase asset's first
-                // material to the GPU. Sampling lands in step 6; this only
-                // proves the upload path. Missing material is non-fatal.
-                const uint32_t matIdx = asset->meshes[0].materialIndex;
-                if (matIdx < asset->materials.size()) {
+                // Step 5c: upload PBR textures + build the WebGPU material
+                // bind group. Missing material is non-fatal.
+                if (matPtr) {
                     renderer->uploadShowcaseMaterialTextures(*asset, matIdx);
                 }
             }
@@ -448,21 +454,14 @@ void Application::processInput() {
         glfwSetWindowShouldClose(window, true);
     }
 
-    // WASD for camera translation
-    float moveSpeed = 2.0f;
-    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
-        camera->translate(0.0f, moveSpeed);
-    }
-    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
-        camera->translate(0.0f, -moveSpeed);
-    }
-    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
-        camera->translate(-moveSpeed, 0.0f);
-    }
-    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
-        camera->translate(moveSpeed, 0.0f);
-    }
-
+    // WASD-QE for camera pan. Args: (right, forward, up). World up is Y.
+    const float moveSpeed = 2.0f;
+    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) camera->translate(0.0f,        moveSpeed, 0.0f);
+    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) camera->translate(0.0f,       -moveSpeed, 0.0f);
+    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) camera->translate(-moveSpeed, 0.0f,       0.0f);
+    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) camera->translate( moveSpeed, 0.0f,       0.0f);
+    if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) camera->translate(0.0f, 0.0f, -moveSpeed);
+    if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) camera->translate(0.0f, 0.0f,  moveSpeed);
 }
 
 void Application::framebufferResizeCallback(GLFWwindow* window, int width, int height) {

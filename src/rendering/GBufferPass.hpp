@@ -57,7 +57,8 @@ public:
                     rhi::RHIBindGroupLayout* buildingBGLayout,
                     rhi::RHIBindGroupLayout* ssboLayout,
                     rhi::RHITextureView* depthView,
-                    VkDescriptorSetLayout bindlessLayout = VK_NULL_HANDLE);
+                    VkDescriptorSetLayout bindlessLayout = VK_NULL_HANDLE,
+                    rhi::RHIBindGroupLayout* materialLayout = nullptr);
 
     void resize(uint32_t width, uint32_t height,
                 rhi::RHITextureView* newDepthView);
@@ -96,7 +97,11 @@ public:
                  rhi::RHIBindGroup* showcaseSsboBindGroup = nullptr,
                  rhi::RHIBuffer*    showcaseVertexBuffer  = nullptr,
                  rhi::RHIBuffer*    showcaseIndexBuffer   = nullptr,
-                 uint32_t           showcaseIndexCount    = 0);
+                 uint32_t           showcaseIndexCount    = 0,
+                 // Optional WebGPU material bind groups (set 2). Native Vulkan
+                 // uses bindless instead and ignores both.
+                 rhi::RHIBindGroup* defaultMaterialBindGroup  = nullptr,
+                 rhi::RHIBindGroup* showcaseMaterialBindGroup = nullptr);
 
 private:
     bool createTextures(uint32_t width, uint32_t height);
@@ -110,9 +115,10 @@ private:
     void destroyLinuxFramebuffer();
 #endif
 
-    rhi::RHIDevice*      m_device;
-    rhi::RHITextureView* m_depthView    = nullptr;
-    bool                 m_initialized  = false;
+    rhi::RHIDevice*          m_device;
+    rhi::RHITextureView*     m_depthView      = nullptr;
+    rhi::RHIBindGroupLayout* m_materialLayout = nullptr;  // WebGPU set 2
+    bool                     m_initialized    = false;
 
 #ifndef __EMSCRIPTEN__
     VkDescriptorSetLayout m_bindlessLayout = VK_NULL_HANDLE;

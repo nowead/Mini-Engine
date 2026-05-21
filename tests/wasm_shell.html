@@ -637,8 +637,16 @@
 
             // Pass timing poller — real GPU ms when timestamp-query is supported,
             // CPU command-recording ms otherwise. Label auto-updates on first read.
+            //
+            // GATED on Module._wasmBusy: that flag is initialized true in the
+            // Module declaration below and stays true during init (texture
+            // uploads, etc.) and during every drawFrame (the BusyFlagGuard in
+            // Renderer::drawFrame toggles it). If we call into wasm while it
+            // is suspended in emscripten_sleep (fence wait), ASYNCIFY aborts
+            // with "Cannot have multiple async operations in flight".
             var _timingsLabelSet = false;
             setInterval(function() {
+                if (Module._wasmBusy) return;  // wasm is mid-async, skip this tick
                 try {
                     if (!_timingsLabelSet && typeof Module.isGPUTimingAvailable === 'function') {
                         var gpuOk = Module.isGPUTimingAvailable();
@@ -779,6 +787,11 @@
 
         // ── Emscripten Module ─────────────────────────────────────────────────
         var Module = {
+            // Default true until wasm signals otherwise. Renderer::drawFrame
+            // toggles this flag via EM_ASM around each frame. JS callbacks
+            // that need to enter wasm (the timing poller below, etc.) MUST
+            // check this first to avoid the ASYNCIFY multi-async assertion.
+            _wasmBusy: true,
             onRuntimeInitialized: function() {
                 wireControls();
             },

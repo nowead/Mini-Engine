@@ -107,18 +107,49 @@ std::unique_ptr<rhi::RHITexture> ResourceManager::uploadRGBA8FromMemory(
 
     if (!pixels || width == 0 || height == 0) return nullptr;
 
-    const uint64_t imageSize = static_cast<uint64_t>(width) * height * 4u;
+    const uint32_t tightBytesPerRow = width * 4u;
 
-    // Staging buffer
+    // RHI BufferTextureCopyInfo::bytesPerRow is interpreted differently per
+    // backend:
+    //   - Vulkan: → VkBufferImageCopy::bufferRowLength (TEXELS).
+    //             0 = tightly packed. Pass 0 for the simple case.
+    //   - WebGPU: → WGPUTexelCopyBufferLayout::bytesPerRow (BYTES).
+    //             Must be a MULTIPLE OF 256, regardless of texture height
+    //             (Dawn enforces this even for 1×1). Pad the staging buffer
+    //             accordingly: copy each source row of `tightBytesPerRow`
+    //             bytes into a 256-aligned destination stride.
+#ifdef __EMSCRIPTEN__
+    const uint32_t kRowAlignment    = 256u;
+    const uint32_t paddedBytesPerRow = (tightBytesPerRow + kRowAlignment - 1u)
+                                        & ~(kRowAlignment - 1u);
+    const uint64_t imageSize         = static_cast<uint64_t>(paddedBytesPerRow) * height;
+#else
+    const uint64_t imageSize         = static_cast<uint64_t>(tightBytesPerRow) * height;
+#endif
+
+    // Staging buffer (sized for padded rows on WebGPU).
     rhi::BufferDesc stagingDesc{};
     stagingDesc.size  = imageSize;
     stagingDesc.usage = rhi::BufferUsage::CopySrc | rhi::BufferUsage::MapWrite;
     auto stagingBuffer = rhiDevice->createBuffer(stagingDesc);
     if (!stagingBuffer) return nullptr;
 
-    void* mapped = stagingBuffer->map();
-    std::memcpy(mapped, pixels, imageSize);
-    stagingBuffer->unmap();
+    {
+        void* mapped = stagingBuffer->map();
+#ifdef __EMSCRIPTEN__
+        // Copy per-row to respect the padded stride. The trailing bytes in
+        // each row are left undefined — the GPU never samples outside the
+        // copyExtent, so they don't matter.
+        for (uint32_t y = 0; y < height; ++y) {
+            std::memcpy(static_cast<uint8_t*>(mapped) + y * paddedBytesPerRow,
+                        pixels + y * tightBytesPerRow,
+                        tightBytesPerRow);
+        }
+#else
+        std::memcpy(mapped, pixels, imageSize);
+#endif
+        stagingBuffer->unmap();
+    }
 
     // Texture
     rhi::TextureDesc textureDesc{};
@@ -138,12 +169,16 @@ std::unique_ptr<rhi::RHITexture> ResourceManager::uploadRGBA8FromMemory(
                                      rhi::TextureLayout::Undefined,
                                      rhi::TextureLayout::TransferDst);
 
-    // NOTE: bytesPerRow / rowsPerImage = 0 means tightly packed.
     rhi::BufferTextureCopyInfo bufferCopyInfo{};
     bufferCopyInfo.buffer       = stagingBuffer.get();
     bufferCopyInfo.offset       = 0;
-    bufferCopyInfo.bytesPerRow  = 0;
-    bufferCopyInfo.rowsPerImage = 0;
+#ifdef __EMSCRIPTEN__
+    bufferCopyInfo.bytesPerRow  = paddedBytesPerRow;       // bytes, 256-aligned
+    bufferCopyInfo.rowsPerImage = height;                  // rows
+#else
+    bufferCopyInfo.bytesPerRow  = 0;                       // tightly packed (texels)
+    bufferCopyInfo.rowsPerImage = 0;                       // tightly packed
+#endif
 
     rhi::TextureCopyInfo textureCopyInfo{};
     textureCopyInfo.texture  = texture.get();

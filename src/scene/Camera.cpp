@@ -43,16 +43,30 @@ void Camera::rotate(float deltaX, float deltaY) {
     updateCameraVectors();
 }
 
-void Camera::translate(float deltaX, float deltaY) {
-    // Calculate right and up vectors
-    glm::vec3 forward = glm::normalize(target - position);
-    glm::vec3 right = glm::normalize(glm::cross(forward, up));
-    glm::vec3 upVector = glm::normalize(glm::cross(right, forward));
+void Camera::translate(float deltaRight, float deltaForward, float deltaUp) {
+    // Pan position+target together. Forward uses the horizontal projection
+    // of the view direction so W/S don't tilt the camera when the user is
+    // looking down at the scene. Up is world Y so Q/E is a clean elevator.
+    glm::vec3 viewDir = glm::normalize(target - position);
+    glm::vec3 right   = glm::normalize(glm::cross(viewDir, up));
 
-    // Translate both position and target to maintain view direction (inverted)
-    glm::vec3 translation = right * -deltaX * 0.05f + upVector * -deltaY * 0.05f;
+    glm::vec3 forwardHoriz = glm::vec3(viewDir.x, 0.0f, viewDir.z);
+    float horizLen = glm::length(forwardHoriz);
+    if (horizLen > 1e-4f) {
+        forwardHoriz /= horizLen;
+    } else {
+        // Camera is looking nearly straight up/down — fall back to the
+        // strafe-orthogonal direction so forward still does something sane.
+        forwardHoriz = glm::normalize(glm::cross(up, right));
+    }
+
+    constexpr float kPanSpeed = 0.05f;
+    glm::vec3 translation = right       * deltaRight   * kPanSpeed
+                          + forwardHoriz * deltaForward * kPanSpeed
+                          + up           * deltaUp      * kPanSpeed;
+
     position += translation;
-    target += translation;
+    target   += translation;
 }
 
 void Camera::zoom(float delta) {

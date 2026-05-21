@@ -47,6 +47,20 @@ struct VisibleIndicesBuffer {
 @group(1) @binding(1) var<storage, read> visibleIndices: VisibleIndicesBuffer;
 
 // =============================================================================
+// Bind Group 2: PBR material textures + sampler (WebGPU only)
+// =============================================================================
+// Buildings receive a default bind group (dummy 1×1 textures: white baseColor,
+// flat normal, MR=(0,1,0), black emissive) so the shader can sample
+// unconditionally. The showcase asset rebinds set 2 with its own glTF
+// textures before its draw call. Step 6a wires baseColor only; normal / MR /
+// emissive sampling lands in 6b/6c.
+@group(2) @binding(0) var baseColorTex: texture_2d<f32>;
+@group(2) @binding(1) var normalTex:    texture_2d<f32>;
+@group(2) @binding(2) var mrTex:        texture_2d<f32>;
+@group(2) @binding(3) var emissiveTex:  texture_2d<f32>;
+@group(2) @binding(4) var materialSampler: sampler;
+
+// =============================================================================
 // Vertex I/O
 // =============================================================================
 struct VertexInput {
@@ -65,6 +79,7 @@ struct VertexOutput {
     @location(3) metallic:  f32,
     @location(4) roughness: f32,
     @location(5) ao:        f32,
+    @location(6) texCoord:  vec2<f32>,
 }
 
 @vertex
@@ -91,6 +106,7 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     out.metallic  = obj.colorAndMetallic.a;
     out.roughness = obj.roughnessAOPad.r;
     out.ao        = obj.roughnessAOPad.g;
+    out.texCoord  = input.texCoord;
     return out;
 }
 
@@ -107,8 +123,14 @@ struct GBufferOutput {
 fn fs_main(input: VertexOutput) -> GBufferOutput {
     let N = normalize(input.normal);
 
-    // sRGB → linear (same as gbuffer_nobindless.frag.glsl)
-    let albedoLinear = pow(input.albedo, vec3<f32>(2.2));
+    // Step 6a: sample baseColor from set 2 and combine with the per-object
+    // baseColorFactor (already in input.albedo). Buildings use a 1×1 white
+    // dummy → identity; the showcase asset rebinds its glTF baseColor so the
+    // helmet shows its actual diffuse texture. Sample returns linear color
+    // automatically because the bind layout was created with an sRGB format
+    // for baseColor.
+    let baseColorSample = textureSample(baseColorTex, materialSampler, input.texCoord);
+    let albedoLinear    = baseColorSample.rgb * input.albedo;
 
     var out: GBufferOutput;
     out.gBuffer0 = vec4<f32>(N,              input.roughness);

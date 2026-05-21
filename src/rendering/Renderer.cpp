@@ -23,6 +23,10 @@
 
 #include <stdexcept>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
 // Phase 7: LegacyCommandBufferAdapter removed - ImGui now uses RHI directly
 
 Renderer::Renderer(GLFWwindow* window,
@@ -105,6 +109,11 @@ Renderer::Renderer(GLFWwindow* window,
 #endif
 
     // Phase 3: G-Buffer + Deferred Lighting (created after shadow + IBL are ready)
+#ifdef __EMSCRIPTEN__
+    // Step 6: WebGPU material bind-group infrastructure must exist BEFORE the
+    // G-Buffer pipeline layout is built (it consumes the layout at set 2).
+    createMaterialBindGroupInfrastructure();
+#endif
     createGBufferPass();
     createDeferredLightingPass();
 
@@ -229,9 +238,10 @@ void Renderer::loadTexture(const std::string& texturePath) {
     // Descriptor updates handled via RHI bind groups
 }
 
-bool Renderer::setShowcaseMesh(const std::vector<Vertex>&   vertices,
-                                const std::vector<uint32_t>& indices,
-                                const glm::mat4&             worldMatrix) {
+bool Renderer::setShowcaseMesh(const std::vector<Vertex>&         vertices,
+                                const std::vector<uint32_t>&       indices,
+                                const glm::mat4&                   worldMatrix,
+                                const assets::ImportedMaterial*    material) {
     if (vertices.empty() || indices.empty()) {
         LOG_ERROR("Renderer") << "setShowcaseMesh: empty vertex/index data";
         return false;
@@ -267,13 +277,26 @@ bool Renderer::setShowcaseMesh(const std::vector<Vertex>&   vertices,
     }
 
     rendering::ObjectData od{};
-    od.worldMatrix      = worldMatrix;
-    od.boundingBoxMin   = glm::vec4(aabbMin, 0.0f);
-    od.boundingBoxMax   = glm::vec4(aabbMax, 0.0f);
-    od.colorAndMetallic = glm::vec4(0.78f, 0.78f, 0.80f, 0.6f);   // neutral grey, moderate metal
-    od.roughnessAOPad   = glm::vec4(0.45f, 1.0f,
-                                    glm::uintBitsToFloat(0xFFFFFFFFu),  // no bindless texture
-                                    0.0f);
+    od.worldMatrix    = worldMatrix;
+    od.boundingBoxMin = glm::vec4(aabbMin, 0.0f);
+    od.boundingBoxMax = glm::vec4(aabbMax, 0.0f);
+    if (material) {
+        // glTF metallic-roughness factors. baseColorTexture is multiplied with
+        // baseColorFactor at sample time; for textured assets the factor is
+        // typically (1,1,1,1) so the texture color comes through unchanged.
+        od.colorAndMetallic = glm::vec4(glm::vec3(material->baseColorFactor),
+                                        material->metallicFactor);
+        od.roughnessAOPad   = glm::vec4(material->roughnessFactor,
+                                        1.0f,
+                                        glm::uintBitsToFloat(0xFFFFFFFFu),
+                                        0.0f);
+    } else {
+        // No material provided — neutral grey defaults (legacy showcase look).
+        od.colorAndMetallic = glm::vec4(0.78f, 0.78f, 0.80f, 0.6f);
+        od.roughnessAOPad   = glm::vec4(0.45f, 1.0f,
+                                        glm::uintBitsToFloat(0xFFFFFFFFu),
+                                        0.0f);
+    }
 
     {
         rhi::BufferDesc bd;
@@ -328,6 +351,14 @@ bool Renderer::setShowcaseMesh(const std::vector<Vertex>&   vertices,
 }
 
 void Renderer::clearShowcaseMesh() {
+#ifdef __EMSCRIPTEN__
+    showcaseAsset.materialBindGroup.reset();
+#endif
+    showcaseAsset.baseColorView = nullptr;
+    showcaseAsset.normalView    = nullptr;
+    showcaseAsset.mrView        = nullptr;
+    showcaseAsset.emissiveView  = nullptr;
+    showcaseAsset.materialTextureViews.clear();
     showcaseAsset.materialTextures.clear();
     showcaseAsset.ssboBindGroup.reset();
     showcaseAsset.visibleIndices.reset();
@@ -365,6 +396,8 @@ size_t Renderer::uploadShowcaseMaterialTextures(const assets::ImportedAsset& ass
 
     showcaseAsset.materialTextures.clear();
     showcaseAsset.materialTextures.resize(asset.textures.size());
+    showcaseAsset.materialTextureViews.clear();
+    showcaseAsset.materialTextureViews.resize(asset.textures.size());
 
     size_t uploaded = 0;
     uint64_t bytesUploaded = 0;
@@ -380,10 +413,57 @@ size_t Renderer::uploadShowcaseMaterialTextures(const assets::ImportedAsset& ass
             LOG_ERROR("Renderer") << "uploadShowcaseMaterialTextures: upload failed for texture " << i;
             continue;
         }
-        showcaseAsset.materialTextures[i] = std::move(tex);
+
+        // Create a view for this texture so bind groups can reference it.
+        rhi::TextureViewDesc vd;
+        vd.dimension = rhi::TextureViewDimension::View2D;
+        vd.format    = formatByIndex[i];
+        auto view = tex->createView(vd);
+
+        showcaseAsset.materialTextures[i]     = std::move(tex);
+        showcaseAsset.materialTextureViews[i] = std::move(view);
         ++uploaded;
         bytesUploaded += static_cast<uint64_t>(src.width) * src.height * 4u;
     }
+
+    // Resolve per-slot view pointers using the material's texture indices.
+    auto resolveView = [&](uint32_t idx) -> rhi::RHITextureView* {
+        if (idx < showcaseAsset.materialTextureViews.size()
+            && showcaseAsset.materialTextureViews[idx]) {
+            return showcaseAsset.materialTextureViews[idx].get();
+        }
+        return nullptr;
+    };
+    showcaseAsset.baseColorView = resolveView(mat.baseColorTextureIndex);
+    showcaseAsset.normalView    = resolveView(mat.normalTextureIndex);
+    showcaseAsset.mrView        = resolveView(mat.metallicRoughnessTextureIndex);
+    showcaseAsset.emissiveView  = resolveView(mat.emissiveTextureIndex);
+
+#ifdef __EMSCRIPTEN__
+    // Build the WebGPU set 2 bind group: each slot picks the helmet's own
+    // view if available, otherwise the Renderer's default dummy view. This
+    // means the shader can always sample unconditionally.
+    if (materialBindGroupLayout && defaultBaseColorView && defaultNormalView
+        && defaultMRView && defaultEmissiveView && materialSampler) {
+        rhi::RHITextureView* bcV = showcaseAsset.baseColorView ? showcaseAsset.baseColorView : defaultBaseColorView.get();
+        rhi::RHITextureView* nV  = showcaseAsset.normalView    ? showcaseAsset.normalView    : defaultNormalView.get();
+        rhi::RHITextureView* mV  = showcaseAsset.mrView        ? showcaseAsset.mrView        : defaultMRView.get();
+        rhi::RHITextureView* eV  = showcaseAsset.emissiveView  ? showcaseAsset.emissiveView  : defaultEmissiveView.get();
+
+        rhi::BindGroupDesc bgDesc;
+        bgDesc.layout = materialBindGroupLayout.get();
+        bgDesc.label  = "ShowcaseMaterialBindGroup";
+        bgDesc.entries.push_back(rhi::BindGroupEntry::TextureView(0, bcV));
+        bgDesc.entries.push_back(rhi::BindGroupEntry::TextureView(1, nV));
+        bgDesc.entries.push_back(rhi::BindGroupEntry::TextureView(2, mV));
+        bgDesc.entries.push_back(rhi::BindGroupEntry::TextureView(3, eV));
+        bgDesc.entries.push_back(rhi::BindGroupEntry::Sampler    (4, materialSampler.get()));
+        showcaseAsset.materialBindGroup = rhiBridge->getDevice()->createBindGroup(bgDesc);
+        if (!showcaseAsset.materialBindGroup) {
+            LOG_ERROR("Renderer") << "Failed to create showcase material bind group";
+        }
+    }
+#endif
 
     LOG_INFO("Renderer") << "Uploaded " << uploaded << "/" << asset.textures.size()
                          << " showcase textures (" << (bytesUploaded / 1024u)
@@ -1432,6 +1512,118 @@ void Renderer::createBindlessResources() {
 }
 #endif  // !__EMSCRIPTEN__
 
+#ifdef __EMSCRIPTEN__
+void Renderer::createMaterialBindGroupInfrastructure() {
+    if (materialBindGroupLayout) return;  // idempotent
+    if (!rhiBridge || !rhiBridge->isReady() || !resourceManager) return;
+    auto* device = rhiBridge->getDevice();
+    if (!device) return;
+
+    // ----------------------------------------------------------------------
+    // Layout (set 2): 4 sampled textures + 1 shared sampler. All fragment-only.
+    // ----------------------------------------------------------------------
+    rhi::BindGroupLayoutDesc layoutDesc;
+    layoutDesc.label = "MaterialBindGroupLayout";
+    auto addTexEntry = [&](uint32_t binding) {
+        rhi::BindGroupLayoutEntry e;
+        e.binding              = binding;
+        e.visibility           = rhi::ShaderStage::Fragment;
+        e.type                 = rhi::BindingType::SampledTexture;
+        e.textureViewDimension = rhi::TextureViewDimension::View2D;
+        layoutDesc.entries.push_back(e);
+    };
+    addTexEntry(0);  // baseColor
+    addTexEntry(1);  // normal
+    addTexEntry(2);  // metallicRoughness
+    addTexEntry(3);  // emissive
+    {
+        rhi::BindGroupLayoutEntry samp;
+        samp.binding    = 4;
+        samp.visibility = rhi::ShaderStage::Fragment;
+        samp.type       = rhi::BindingType::Sampler;
+        layoutDesc.entries.push_back(samp);
+    }
+    materialBindGroupLayout = device->createBindGroupLayout(layoutDesc);
+    if (!materialBindGroupLayout) {
+        LOG_ERROR("Renderer") << "Failed to create material bind group layout";
+        return;
+    }
+
+    // ----------------------------------------------------------------------
+    // Shared sampler — linear filter, repeat. glTF samplers can override per
+    // texture; the showcase uses one global default for now.
+    // ----------------------------------------------------------------------
+    {
+        rhi::SamplerDesc sd;
+        sd.magFilter      = rhi::FilterMode::Linear;
+        sd.minFilter      = rhi::FilterMode::Linear;
+        sd.mipmapFilter   = rhi::MipmapMode::Linear;
+        sd.addressModeU   = rhi::AddressMode::Repeat;
+        sd.addressModeV   = rhi::AddressMode::Repeat;
+        sd.addressModeW   = rhi::AddressMode::Repeat;
+        sd.maxAnisotropy  = 1;
+        sd.label          = "MaterialSampler";
+        materialSampler   = device->createSampler(sd);
+    }
+
+    // ----------------------------------------------------------------------
+    // Dummy 1×1 textures. Color choices follow the glTF "neutral" convention:
+    //   baseColor white = sample × factor preserves factor color
+    //   normal flat     = decodes to (0,0,1) → identity in tangent space
+    //   MR (B=metallic, G=roughness): metallic=0, roughness=1 → diffuse dielectric
+    //   emissive black  = no self-emission
+    // ----------------------------------------------------------------------
+    auto upload1x1 = [&](uint8_t r, uint8_t g, uint8_t b, uint8_t a,
+                          rhi::TextureFormat fmt) {
+        const uint8_t px[4] = { r, g, b, a };
+        return resourceManager->uploadRGBA8FromMemory(px, 1, 1, fmt);
+    };
+    defaultBaseColorTex = upload1x1(255, 255, 255, 255, rhi::TextureFormat::RGBA8UnormSrgb);
+    defaultNormalTex    = upload1x1(128, 128, 255, 255, rhi::TextureFormat::RGBA8Unorm);
+    defaultMRTex        = upload1x1(  0, 255,   0, 255, rhi::TextureFormat::RGBA8Unorm);
+    defaultEmissiveTex  = upload1x1(  0,   0,   0, 255, rhi::TextureFormat::RGBA8UnormSrgb);
+    if (!materialSampler || !defaultBaseColorTex || !defaultNormalTex
+        || !defaultMRTex || !defaultEmissiveTex) {
+        LOG_ERROR("Renderer") << "Material default resources failed";
+        return;
+    }
+
+    // Views — one per dummy texture, all 2D color aspect.
+    auto makeView = [&](rhi::RHITexture* tex, rhi::TextureFormat fmt, const char* label) {
+        rhi::TextureViewDesc vd;
+        vd.dimension = rhi::TextureViewDimension::View2D;
+        vd.format    = fmt;
+        vd.label     = label;
+        return tex->createView(vd);
+    };
+    defaultBaseColorView = makeView(defaultBaseColorTex.get(), rhi::TextureFormat::RGBA8UnormSrgb, "Default_BaseColorView");
+    defaultNormalView    = makeView(defaultNormalTex.get(),    rhi::TextureFormat::RGBA8Unorm,     "Default_NormalView");
+    defaultMRView        = makeView(defaultMRTex.get(),        rhi::TextureFormat::RGBA8Unorm,     "Default_MRView");
+    defaultEmissiveView  = makeView(defaultEmissiveTex.get(),  rhi::TextureFormat::RGBA8UnormSrgb, "Default_EmissiveView");
+
+    // ----------------------------------------------------------------------
+    // Default material bind group (used by buildings and any showcase slot
+    // that has no glTF texture supplied).
+    // ----------------------------------------------------------------------
+    rhi::BindGroupDesc bgDesc;
+    bgDesc.layout = materialBindGroupLayout.get();
+    bgDesc.label  = "DefaultMaterialBindGroup";
+    bgDesc.entries.push_back(rhi::BindGroupEntry::TextureView(0, defaultBaseColorView.get()));
+    bgDesc.entries.push_back(rhi::BindGroupEntry::TextureView(1, defaultNormalView.get()));
+    bgDesc.entries.push_back(rhi::BindGroupEntry::TextureView(2, defaultMRView.get()));
+    bgDesc.entries.push_back(rhi::BindGroupEntry::TextureView(3, defaultEmissiveView.get()));
+    bgDesc.entries.push_back(rhi::BindGroupEntry::Sampler    (4, materialSampler.get()));
+    defaultMaterialBindGroup = device->createBindGroup(bgDesc);
+
+    if (!defaultMaterialBindGroup) {
+        LOG_ERROR("Renderer") << "Failed to create default material bind group";
+        return;
+    }
+
+    LOG_INFO("Renderer") << "Material bind group infrastructure ready (set 2, WebGPU)";
+}
+#endif  // __EMSCRIPTEN__
+
 void Renderer::createGBufferPass() {
     if (!rhiBridge || !rhiBridge->isReady()) return;
     auto* device = rhiBridge->getDevice();
@@ -1446,12 +1638,18 @@ void Renderer::createGBufferPass() {
         bindlessLayout = bindlessTextureManager->getVkDescriptorSetLayout();
 #endif
 
+    rhi::RHIBindGroupLayout* matLayout = nullptr;
+#ifdef __EMSCRIPTEN__
+    matLayout = materialBindGroupLayout.get();
+#endif
+
     gBufferPass = std::make_unique<rendering::GBufferPass>(device);
     if (!gBufferPass->initialize(W, H,
                                   buildingBindGroupLayout.get(),
                                   ssboBindGroupLayout.get(),
                                   rhiDepthImageView.get(),
-                                  bindlessLayout)) {
+                                  bindlessLayout,
+                                  matLayout)) {
         LOG_ERROR("Renderer") << "GBufferPass initialization failed";
         gBufferPass.reset();
     } else {
@@ -2978,6 +3176,19 @@ void Renderer::drawFrame() {
     // Complete RHI rendering path using RHI abstractions
     // Phase 7: Replaces legacy Vulkan rendering (now drawFrameLegacy)
 
+#ifdef __EMSCRIPTEN__
+    // Tell JS we are inside wasm-side work, including the fence-wait
+    // emscripten_sleep windows. JS callbacks (setInterval timing poll, etc.)
+    // gate their wasm calls on Module._wasmBusy to avoid the ASYNCIFY
+    // "multiple async operations in flight" assertion. RAII guard so every
+    // early-return path resets the flag cleanly.
+    struct BusyFlagGuard {
+        BusyFlagGuard()  { EM_ASM({ Module._wasmBusy = true;  }); }
+        ~BusyFlagGuard() { EM_ASM({ Module._wasmBusy = false; }); }
+    };
+    BusyFlagGuard _busyGuard;
+#endif
+
     if (!rhiBridge || !rhiBridge->isReady()) {
         return;
     }
@@ -3343,6 +3554,13 @@ void Renderer::drawFrame() {
             rhi::RHIBuffer*    scIB  = showcaseAsset.isReady() ? showcaseAsset.mesh->getIndexBuffer()    : nullptr;
             uint32_t           scIdx = showcaseAsset.isReady() ? showcaseAsset.indexCount                : 0u;
 
+            rhi::RHIBindGroup* matDefaultBG  = nullptr;
+            rhi::RHIBindGroup* matShowcaseBG = nullptr;
+#ifdef __EMSCRIPTEN__
+            matDefaultBG  = defaultMaterialBindGroup.get();
+            matShowcaseBG = showcaseAsset.materialBindGroup.get();
+#endif
+
             gBufferPass->execute(encoder.get(),
                                  bg0,
                                  ssboBindGroups[frameIndex].get(),
@@ -3351,7 +3569,8 @@ void Renderer::drawFrame() {
                                  indirectDrawBuffers[frameIndex].get(),
                                  W, H,
                                  bindlessSet,
-                                 scBG, scVB, scIB, scIdx);
+                                 scBG, scVB, scIB, scIdx,
+                                 matDefaultBG, matShowcaseBG);
         }
     }
     if (pendingInstancedData) pendingInstancedData.reset();

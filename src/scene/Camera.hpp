@@ -38,11 +38,18 @@ public:
     void rotate(float deltaX, float deltaY);
 
     /**
-     * @brief Translate camera
-     * @param deltaX Translation along X axis
-     * @param deltaY Translation along Y axis
+     * @brief Translate the camera (pans both position and target together so
+     *        the view direction is preserved). All three axes are in the
+     *        camera's local frame:
+     *
+     *   @param deltaRight    +right  / -left   (strafe along the right vector)
+     *   @param deltaForward  +forward/ -back   (move along the horizontal
+     *                                           projection of the view dir,
+     *                                           so W doesn't tilt the camera
+     *                                           when you are looking down)
+     *   @param deltaUp       +up     / -down   (move along world Y)
      */
-    void translate(float deltaX, float deltaY);
+    void translate(float deltaRight, float deltaForward, float deltaUp = 0.0f);
 
     /**
      * @brief Zoom camera (move along view direction)

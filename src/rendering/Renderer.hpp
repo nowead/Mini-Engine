@@ -91,9 +91,10 @@ public:
      *
      * @return true on success; false on RHI allocation failure.
      */
-    bool setShowcaseMesh(const std::vector<Vertex>&   vertices,
-                         const std::vector<uint32_t>& indices,
-                         const glm::mat4&             worldMatrix);
+    bool setShowcaseMesh(const std::vector<Vertex>&         vertices,
+                         const std::vector<uint32_t>&       indices,
+                         const glm::mat4&                   worldMatrix,
+                         const assets::ImportedMaterial*    material = nullptr);
 
     /// @brief Remove the currently installed showcase mesh, if any.
     void clearShowcaseMesh();
@@ -445,6 +446,34 @@ private:
     std::array<std::unique_ptr<rhi::RHIBindGroup>, MAX_FRAMES_IN_FLIGHT> ssboBindGroups;
     std::array<rhi::RHIBuffer*, MAX_FRAMES_IN_FLIGHT> cachedObjectBuffers = {};
 
+    // Step 6: Material bind group (set 2) — WebGPU only.
+    // Five entries: baseColor / normal / metallicRoughness / emissive textures
+    // plus a shared sampler. Vulkan keeps set 2 for the bindless texture array
+    // (BindlessTextureManager), so this layout / default bind group are only
+    // constructed and used on Emscripten builds.
+#ifdef __EMSCRIPTEN__
+    std::unique_ptr<rhi::RHIBindGroupLayout> materialBindGroupLayout;
+    std::unique_ptr<rhi::RHISampler>         materialSampler;       // shared linear/repeat
+
+    // Dummy 1×1 textures used by buildings (which have no glTF material) and
+    // by the showcase asset for slots its material doesn't supply. Texture +
+    // view pair, the view borrowed by every bind group that needs it.
+    std::unique_ptr<rhi::RHITexture>         defaultBaseColorTex;   // white  (sRGB)
+    std::unique_ptr<rhi::RHITextureView>     defaultBaseColorView;
+    std::unique_ptr<rhi::RHITexture>         defaultNormalTex;      // flat (0,0,1) (linear)
+    std::unique_ptr<rhi::RHITextureView>     defaultNormalView;
+    std::unique_ptr<rhi::RHITexture>         defaultMRTex;          // metallic=0 roughness=1 (linear)
+    std::unique_ptr<rhi::RHITextureView>     defaultMRView;
+    std::unique_ptr<rhi::RHITexture>         defaultEmissiveTex;    // black (sRGB)
+    std::unique_ptr<rhi::RHITextureView>     defaultEmissiveView;
+
+    std::unique_ptr<rhi::RHIBindGroup>       defaultMaterialBindGroup;
+
+    /// Step 6 helper: create materialBindGroupLayout, the four dummy 1×1
+    /// textures, the shared sampler, and defaultMaterialBindGroup. Idempotent.
+    void createMaterialBindGroupInfrastructure();
+#endif
+
     // Showcase asset (single non-instanced mesh, drawn after the building
     // batch inside the G-Buffer pass). Resources match the building set 1
     // layout exactly so the same shader runs over it unchanged.
@@ -456,10 +485,26 @@ private:
         uint32_t                            indexCount = 0;
 
         // PBR material textures from the source glTF, indexed in parallel to
-        // ImportedAsset::textures. Slots with no texture stay null. Sampling
-        // wires up in step 6 (WebGPU material bind group + WGSL changes);
-        // step 5c just gets the GPU residency right.
-        std::vector<std::unique_ptr<rhi::RHITexture>> materialTextures;
+        // ImportedAsset::textures. Slots with no texture stay null. The
+        // showcase's per-material bind group below references the four
+        // standard PBR slots (baseColor / normal / MR / emissive); missing
+        // slots fall back to the Renderer's default dummy textures.
+        std::vector<std::unique_ptr<rhi::RHITexture>>     materialTextures;
+        std::vector<std::unique_ptr<rhi::RHITextureView>> materialTextureViews;
+
+        // Borrowed view pointers resolved by glTF material slot.
+        // nullptr means "use Renderer default for this slot".
+        rhi::RHITextureView* baseColorView = nullptr;
+        rhi::RHITextureView* normalView    = nullptr;
+        rhi::RHITextureView* mrView        = nullptr;
+        rhi::RHITextureView* emissiveView  = nullptr;
+
+#ifdef __EMSCRIPTEN__
+        // WebGPU set 2 bind group for this asset. Built by Renderer once the
+        // textures are uploaded. Vulkan handles materials via the bindless
+        // path, so this stays empty on native.
+        std::unique_ptr<rhi::RHIBindGroup> materialBindGroup;
+#endif
 
         bool isReady() const {
             return mesh && mesh->hasData() && ssboBindGroup && indexCount > 0;

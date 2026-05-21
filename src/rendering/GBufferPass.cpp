@@ -34,11 +34,13 @@ bool GBufferPass::initialize(uint32_t width, uint32_t height,
                               rhi::RHIBindGroupLayout* buildingBGLayout,
                               rhi::RHIBindGroupLayout* ssboLayout,
                               rhi::RHITextureView* depthView,
-                              VkDescriptorSetLayout bindlessLayout) {
+                              VkDescriptorSetLayout bindlessLayout,
+                              rhi::RHIBindGroupLayout* materialLayout) {
     m_depthView = depthView;
 #ifndef __EMSCRIPTEN__
     m_bindlessLayout = bindlessLayout;
 #endif
+    m_materialLayout = materialLayout;  // WebGPU only; nullptr elsewhere
 
     if (!createTextures(width, height)) { std::cerr << "[GBufferPass] createTextures failed\n"; return false; }
     if (!createSampler())               { std::cerr << "[GBufferPass] createSampler failed\n";  return false; }
@@ -164,6 +166,10 @@ bool GBufferPass::createPipeline(rhi::RHIBindGroupLayout* buildingBGLayout,
     if (ssboLayout)       layoutDesc.bindGroupLayouts.push_back(ssboLayout);
 #ifndef __EMSCRIPTEN__
     if (bindlessLayout)   layoutDesc.nativeExtraSetLayouts.push_back(bindlessLayout);
+#else
+    // WebGPU set 2 = per-material textures (baseColor / normal / MR / emissive + sampler).
+    // Native Vulkan uses bindless at set 2 instead.
+    if (m_materialLayout) layoutDesc.bindGroupLayouts.push_back(m_materialLayout);
 #endif
     layoutDesc.label = "GBufferPipelineLayout";
     m_pipelineLayout = m_device->createPipelineLayout(layoutDesc);
@@ -234,7 +240,9 @@ void GBufferPass::execute(rhi::RHICommandEncoder* encoder,
                            rhi::RHIBindGroup* showcaseSsboBindGroup,
                            rhi::RHIBuffer*    showcaseVertexBuffer,
                            rhi::RHIBuffer*    showcaseIndexBuffer,
-                           uint32_t           showcaseIndexCount) {
+                           uint32_t           showcaseIndexCount,
+                           rhi::RHIBindGroup* defaultMaterialBindGroup,
+                           rhi::RHIBindGroup* showcaseMaterialBindGroup) {
     if (!m_initialized || !encoder) return;
 
     rhi::RenderPassDesc passDesc;
@@ -289,6 +297,13 @@ void GBufferPass::execute(rhi::RHICommandEncoder* encoder,
             vulkanPass->bindNativeDescriptorSet(2, bindlessSet);
         }
     }
+    (void)defaultMaterialBindGroup;
+    (void)showcaseMaterialBindGroup;
+#else
+    // WebGPU set 2: per-material PBR texture bind group. Buildings use the
+    // default (dummy 1×1 white/flat textures so multiplication is identity);
+    // the showcase draw below swaps in its own bind group.
+    if (defaultMaterialBindGroup) pass->setBindGroup(2, defaultMaterialBindGroup);
 #endif
 
     if (vertexBuffer && indexBuffer && indirectBuffer) {
@@ -297,14 +312,19 @@ void GBufferPass::execute(rhi::RHICommandEncoder* encoder,
         pass->drawIndexedIndirect(indirectBuffer, 0);
     }
 
-    // Showcase asset draw — same pipeline, same set 0; swap set 1 to the
-    // showcase's own ObjectData/visibleIndices buffers and issue a single
+    // Showcase asset draw — same pipeline, same set 0; swap set 1 (and on
+    // WebGPU set 2) to the showcase's own bind groups and issue a single
     // non-indirect indexed draw. Skipped silently if any input is null.
     if (showcaseSsboBindGroup
         && showcaseVertexBuffer
         && showcaseIndexBuffer
         && showcaseIndexCount > 0) {
         pass->setBindGroup(1, showcaseSsboBindGroup);
+#ifdef __EMSCRIPTEN__
+        // If the showcase has no material bind group of its own, keep the
+        // default bound (already set above). Otherwise swap.
+        if (showcaseMaterialBindGroup) pass->setBindGroup(2, showcaseMaterialBindGroup);
+#endif
         pass->setVertexBuffer(0, showcaseVertexBuffer, 0);
         pass->setIndexBuffer(showcaseIndexBuffer, rhi::IndexFormat::Uint32, 0);
         pass->drawIndexed(showcaseIndexCount, 1, 0, 0, 0);
