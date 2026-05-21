@@ -58,6 +58,24 @@ public:
      */
     void clearCache();
 
+    /**
+     * @brief Upload a tightly-packed RGBA8 pixel buffer to a new RHI texture.
+     *
+     * Used by the asset pipeline to push glTF embedded images that have
+     * already been decoded into CPU memory (see AssetImporter::decodeImage)
+     * onto the GPU. The format argument selects the color space:
+     *   - RGBA8UnormSrgb for albedo / emissive textures (sRGB)
+     *   - RGBA8Unorm    for normal / metallicRoughness / occlusion (linear)
+     *
+     * Caller retains ownership of @p pixels; the function copies into a
+     * staging buffer and waits for the upload to complete before returning.
+     */
+    std::unique_ptr<rhi::RHITexture> uploadRGBA8FromMemory(
+        const uint8_t*     pixels,
+        uint32_t           width,
+        uint32_t           height,
+        rhi::TextureFormat format);
+
 private:
     rhi::RHIDevice* rhiDevice;
     rhi::RHIQueue* graphicsQueue;

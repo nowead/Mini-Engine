@@ -140,6 +140,14 @@ void Application::initGameLogic() {
                 renderer->setShowcaseMesh(asset->meshes[0].vertices,
                                           asset->meshes[0].indices,
                                           m);
+
+                // Step 5c: upload PBR textures for the showcase asset's first
+                // material to the GPU. Sampling lands in step 6; this only
+                // proves the upload path. Missing material is non-fatal.
+                const uint32_t matIdx = asset->meshes[0].materialIndex;
+                if (matIdx < asset->materials.size()) {
+                    renderer->uploadShowcaseMaterialTextures(*asset, matIdx);
+                }
             }
         } else {
             std::printf("[AssetImporter] DamagedHelmet load returned no asset (file missing or unsupported feature)\n");

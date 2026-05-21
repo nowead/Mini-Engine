@@ -50,3 +50,5 @@ CAREER_ROADMAP.md
 # Learning documents (personal study materials)
 docs/learning/
 !docs/learning/.gitkeep
+# Local-only temporary files (commit message scratch etc.)
+*.tmp

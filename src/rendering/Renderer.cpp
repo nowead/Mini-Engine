@@ -328,11 +328,67 @@ bool Renderer::setShowcaseMesh(const std::vector<Vertex>&   vertices,
 }
 
 void Renderer::clearShowcaseMesh() {
+    showcaseAsset.materialTextures.clear();
     showcaseAsset.ssboBindGroup.reset();
     showcaseAsset.visibleIndices.reset();
     showcaseAsset.objectBuffer.reset();
     showcaseAsset.mesh.reset();
     showcaseAsset.indexCount = 0;
+}
+
+size_t Renderer::uploadShowcaseMaterialTextures(const assets::ImportedAsset& asset,
+                                                 uint32_t materialIndex) {
+    if (materialIndex >= asset.materials.size()) {
+        LOG_ERROR("Renderer") << "uploadShowcaseMaterialTextures: materialIndex out of range";
+        return 0;
+    }
+    if (!resourceManager) {
+        LOG_ERROR("Renderer") << "uploadShowcaseMaterialTextures: ResourceManager not ready";
+        return 0;
+    }
+
+    const auto& mat = asset.materials[materialIndex];
+
+    // Tag each texture slot in the source asset with the color space its
+    // material binding implies. Linear is the default (data textures); only
+    // baseColor and emissive get sRGB. Iterating per-material is enough for
+    // the showcase: a single material owns at most one of each slot.
+    std::vector<rhi::TextureFormat> formatByIndex(
+        asset.textures.size(), rhi::TextureFormat::RGBA8Unorm);
+
+    auto tagSrgb = [&](uint32_t idx) {
+        if (idx < formatByIndex.size()) formatByIndex[idx] = rhi::TextureFormat::RGBA8UnormSrgb;
+    };
+    tagSrgb(mat.baseColorTextureIndex);
+    tagSrgb(mat.emissiveTextureIndex);
+    // normal / metallicRoughness / occlusion stay linear (default above).
+
+    showcaseAsset.materialTextures.clear();
+    showcaseAsset.materialTextures.resize(asset.textures.size());
+
+    size_t uploaded = 0;
+    uint64_t bytesUploaded = 0;
+    for (uint32_t i = 0; i < asset.textures.size(); ++i) {
+        const auto& src = asset.textures[i];
+        if (src.pixelsRGBA8.empty() || src.width == 0 || src.height == 0) {
+            // Texture decode failed earlier in AssetImporter; leave slot null.
+            continue;
+        }
+        auto tex = resourceManager->uploadRGBA8FromMemory(
+            src.pixelsRGBA8.data(), src.width, src.height, formatByIndex[i]);
+        if (!tex) {
+            LOG_ERROR("Renderer") << "uploadShowcaseMaterialTextures: upload failed for texture " << i;
+            continue;
+        }
+        showcaseAsset.materialTextures[i] = std::move(tex);
+        ++uploaded;
+        bytesUploaded += static_cast<uint64_t>(src.width) * src.height * 4u;
+    }
+
+    LOG_INFO("Renderer") << "Uploaded " << uploaded << "/" << asset.textures.size()
+                         << " showcase textures (" << (bytesUploaded / 1024u)
+                         << " KiB total) for material " << materialIndex;
+    return uploaded;
 }
 
 void Renderer::waitIdle() {

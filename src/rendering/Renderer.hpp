@@ -8,6 +8,7 @@
 #include "src/scene/SceneManager.hpp"
 #include "src/scene/Mesh.hpp"
 #include "src/utils/Vertex.hpp"
+#include "src/assets/ImportedAsset.hpp"
 #include "src/rendering/RendererBridge.hpp"
 #include "src/rendering/InstancedRenderData.hpp"
 #include "src/effects/ParticleRenderer.hpp"
@@ -96,6 +97,21 @@ public:
 
     /// @brief Remove the currently installed showcase mesh, if any.
     void clearShowcaseMesh();
+
+    /**
+     * @brief Upload an imported asset's textures to the GPU, attaching them
+     *        to the currently-installed showcase asset.
+     *
+     * Color space is derived from material usage (baseColor / emissive →
+     * sRGB, normal / metallicRoughness / occlusion → linear). Indexes
+     * match the source ImportedAsset::textures array so material indices
+     * stay valid after upload. Step 6 wires these into a per-material
+     * bind group and starts sampling them in the G-Buffer fragment shader.
+     *
+     * Returns the number of textures successfully uploaded.
+     */
+    size_t uploadShowcaseMaterialTextures(const assets::ImportedAsset& asset,
+                                          uint32_t materialIndex);
 
     /**
      * @brief Load texture from file
@@ -438,6 +454,12 @@ private:
         std::unique_ptr<rhi::RHIBuffer>     visibleIndices;  // [0]
         std::unique_ptr<rhi::RHIBindGroup>  ssboBindGroup;   // set 1
         uint32_t                            indexCount = 0;
+
+        // PBR material textures from the source glTF, indexed in parallel to
+        // ImportedAsset::textures. Slots with no texture stay null. Sampling
+        // wires up in step 6 (WebGPU material bind group + WGSL changes);
+        // step 5c just gets the GPU residency right.
+        std::vector<std::unique_ptr<rhi::RHITexture>> materialTextures;
 
         bool isReady() const {
             return mesh && mesh->hasData() && ssboBindGroup && indexCount > 0;

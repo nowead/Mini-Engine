@@ -309,12 +309,20 @@ third_party/cgltf/
 4. **`ObjectData` 4-텍스처 슬롯 + 셰이더 동기** — 128B vs 144B 결정. 세 셰이더
    동시 갱신 + `static_assert`. 이 시점에는 텍스처 인덱스가 전부 sentinel이라
    동작 변화 없음.
-5. **텍스처 ingest + bindless 등록** — glTF 텍스처(KTX 또는 PNG embedded) →
-   `ResourceManager` → `BindlessTextureManager` 인덱스 회수 → ObjectData에
-   기록.
-6. **G-Buffer fragment 텍스처 분기 (노멀 맵부터)** — `normalIdx != sentinel`이면
-   샘플 + TBN 변환, 아니면 vertex 노멀. Vulkan + WebGPU 동시. DamagedHelmet에서
-   노멀 맵 디테일 확인.
+5. **텍스처 ingest + GPU 업로드** — 분할 진행:
+   - **5a/5b** ✅ (commit `161ada6`): AssetImporter가 glTF 임베디드 이미지를
+     `stbi_load_from_memory`로 RGBA8 디코드 + 머티리얼(`pbrMetallicRoughness`
+     factors + 4-텍스처 인덱스 + emissiveFactor) 추출.
+   - **5c** ✅ (commit `<this>`): `ResourceManager::uploadRGBA8FromMemory`
+     공개 메서드 추가 → Renderer가 ImportedAsset 텍스처를 RHI 텍스처로 업로드,
+     `ShowcaseAsset.materialTextures`에 저장. 머티리얼 사용처(baseColor/emissive
+     = sRGB, normal/MR/AO = linear)에 따라 포맷 자동 선택. 시각 변화 없음 —
+     `[Renderer] Uploaded K/N showcase textures (B KiB total)` 로그가 검증점.
+6. **G-Buffer fragment 텍스처 분기 (노멀 맵부터)** — WebGPU material bind
+   group set 2 신설(baseColor + normal + MR + emissive + sampler), helmet 자산은
+   업로드된 텍스처를 거기에 바인딩, 기존 buildings는 default 1×1 텍스처. WGSL
+   fragment에서 sample + TBN(per-vertex tangent 우선, fallback derivative). 첫
+   시각 효과: 헬멧 albedo + 노멀 맵 디테일.
 7. **MR · 이미시브 · AO 동일 패턴으로 추가** — G-Buffer 이미시브 채널 패킹
    확인. Bloom 임계 통과해 자체 발광 확인.
 8. **SceneNode 최소 구현 + 노드 트리 ingest** — 단일 메시는 깊이 1. Sponza

@@ -1,9 +1,12 @@
 #include "ResourceManager.hpp"
 
-#ifndef __EMSCRIPTEN__
+// stb_image is needed on both backends: native loadTexture reads from disk,
+// and WASM AssetImporter::decodeImage uses stbi_load_from_memory on glTF
+// embedded images. STB_IMAGE_IMPLEMENTATION is defined HERE (single TU) so
+// the symbols exist for both build paths. The on-disk loadTexture body
+// stays ifdef-guarded below because there's no host filesystem on WASM.
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
-#endif
 
 #include <stdexcept>
 #include <cstring>
@@ -96,82 +99,85 @@ void ResourceManager::clearCache() {
     textureCache.clear();
 }
 
-std::unique_ptr<rhi::RHITexture> ResourceManager::uploadTexture(
-    unsigned char* pixels,
-    int width,
-    int height,
-    int channels) {
+std::unique_ptr<rhi::RHITexture> ResourceManager::uploadRGBA8FromMemory(
+    const uint8_t*     pixels,
+    uint32_t           width,
+    uint32_t           height,
+    rhi::TextureFormat format) {
 
-    uint64_t imageSize = static_cast<uint64_t>(width) * height * channels;
+    if (!pixels || width == 0 || height == 0) return nullptr;
 
-    // ========================================================================
-    // Create Staging Buffer
-    // ========================================================================
+    const uint64_t imageSize = static_cast<uint64_t>(width) * height * 4u;
+
+    // Staging buffer
     rhi::BufferDesc stagingDesc{};
-    stagingDesc.size = imageSize;
+    stagingDesc.size  = imageSize;
     stagingDesc.usage = rhi::BufferUsage::CopySrc | rhi::BufferUsage::MapWrite;
     auto stagingBuffer = rhiDevice->createBuffer(stagingDesc);
+    if (!stagingBuffer) return nullptr;
 
-    // Copy pixel data to staging buffer
     void* mapped = stagingBuffer->map();
     std::memcpy(mapped, pixels, imageSize);
     stagingBuffer->unmap();
 
-    // ========================================================================
-    // Create Texture
-    // ========================================================================
+    // Texture
     rhi::TextureDesc textureDesc{};
-    textureDesc.size = rhi::Extent3D{static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1};
-    textureDesc.dimension = rhi::TextureDimension::Texture2D;
-    textureDesc.format = rhi::TextureFormat::RGBA8UnormSrgb;
+    textureDesc.size          = rhi::Extent3D{width, height, 1};
+    textureDesc.dimension     = rhi::TextureDimension::Texture2D;
+    textureDesc.format        = format;
     textureDesc.mipLevelCount = 1;
-    textureDesc.sampleCount = 1;
-    textureDesc.usage = rhi::TextureUsage::CopyDst | rhi::TextureUsage::Sampled;
+    textureDesc.sampleCount   = 1;
+    textureDesc.usage         = rhi::TextureUsage::CopyDst | rhi::TextureUsage::Sampled;
     auto texture = rhiDevice->createTexture(textureDesc);
+    if (!texture) return nullptr;
 
-    // ========================================================================
-    // Copy Staging Buffer to Texture (Direct RHI usage, no CommandManager)
-    // ========================================================================
+    // Staging -> Texture copy
     auto encoder = rhiDevice->createCommandEncoder();
 
-    // CRITICAL: Transition image layout from UNDEFINED to TRANSFER_DST_OPTIMAL
     encoder->transitionTextureLayout(texture.get(),
                                      rhi::TextureLayout::Undefined,
                                      rhi::TextureLayout::TransferDst);
 
-    // Setup buffer-to-texture copy info
-    // NOTE: bytesPerRow is actually "row length in pixels" for Vulkan, not bytes!
-    // Setting to 0 means "tightly packed" (use image width)
+    // NOTE: bytesPerRow / rowsPerImage = 0 means tightly packed.
     rhi::BufferTextureCopyInfo bufferCopyInfo{};
-    bufferCopyInfo.buffer = stagingBuffer.get();
-    bufferCopyInfo.offset = 0;
-    bufferCopyInfo.bytesPerRow = 0;  // 0 = tightly packed (use image width)
-    bufferCopyInfo.rowsPerImage = 0; // 0 = tightly packed (use image height)
+    bufferCopyInfo.buffer       = stagingBuffer.get();
+    bufferCopyInfo.offset       = 0;
+    bufferCopyInfo.bytesPerRow  = 0;
+    bufferCopyInfo.rowsPerImage = 0;
 
     rhi::TextureCopyInfo textureCopyInfo{};
-    textureCopyInfo.texture = texture.get();
+    textureCopyInfo.texture  = texture.get();
     textureCopyInfo.mipLevel = 0;
-    textureCopyInfo.origin = {0, 0, 0};
-    textureCopyInfo.aspect = 0;  // Color aspect
+    textureCopyInfo.origin   = {0, 0, 0};
+    textureCopyInfo.aspect   = 0;  // color
 
-    rhi::Extent3D copySize{static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1};
-
-    // Copy buffer to texture
+    rhi::Extent3D copySize{width, height, 1};
     encoder->copyBufferToTexture(bufferCopyInfo, textureCopyInfo, copySize);
 
-    // Transition image layout from TRANSFER_DST_OPTIMAL to SHADER_READ_ONLY_OPTIMAL
     encoder->transitionTextureLayout(texture.get(),
                                      rhi::TextureLayout::TransferDst,
                                      rhi::TextureLayout::ShaderReadOnly);
 
     auto cmdBuffer = encoder->finish();
-
-    // Submit and wait for completion
     graphicsQueue->submit(cmdBuffer.get());
     graphicsQueue->waitIdle();
 
-    // Staging buffer will be automatically destroyed when going out of scope
     return texture;
+}
+
+// Legacy entrypoint preserved for the on-disk loadTexture path. Always
+// uploads as sRGB (matches prior behavior). New code paths should call
+// uploadRGBA8FromMemory directly with an explicit format.
+std::unique_ptr<rhi::RHITexture> ResourceManager::uploadTexture(
+    unsigned char* pixels,
+    int width,
+    int height,
+    int channels) {
+    (void)channels;  // legacy parameter; only RGBA8 (channels=4) is supported
+    return uploadRGBA8FromMemory(pixels,
+                                 static_cast<uint32_t>(width),
+                                 static_cast<uint32_t>(height),
+                                 rhi::TextureFormat::RGBA8UnormSrgb);
 }
 
 std::unique_ptr<rhi::RHITexture> ResourceManager::uploadHDRTexture(
