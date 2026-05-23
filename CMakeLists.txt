@@ -890,7 +890,7 @@ if(BUILD_TESTS)
     if(NOT EMSCRIPTEN)
         target_link_libraries(pbr_demo PRIVATE Stb::stb tinyobjloader::tinyobjloader)
     else()
-        target_link_libraries(pbr_demo PRIVATE tinyobjloader)
+        target_link_libraries(pbr_demo PRIVATE tinyobjloader stb)
     endif()
 
     # Compile PBR demo shaders (GLSL -> SPIR-V)
