@@ -66,8 +66,12 @@ public:
         float sunIntensity = 1.2f;
         glm::vec3 sunColor{1.0f, 0.95f, 0.85f};  // Soft daylight
         float ambientIntensity = 0.12f;
-        // Shadow settings
-        float shadowBias = 0.008f;      // Depth bias to prevent shadow acne
+        // Shadow settings. Application pushes this to Renderer::setShadowBias
+        // every frame, so this UI default is the authoritative startup value.
+        // 0.008 detached building shadows from their base (peter-panning); the
+        // shadow pass front-face-culls and the ground is excluded from the map,
+        // so a small bias suffices. Kept in sync with Renderer's own default.
+        float shadowBias = 0.0015f;     // Depth bias to prevent shadow acne
         float shadowStrength = 0.7f;    // Shadow darkness (0-1)
         bool  debugCascades = false;    // Cascade region color overlay
         // PBR tone mapping

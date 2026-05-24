@@ -10,12 +10,19 @@
 namespace assets {
 
 /// One vertex stream + index buffer extracted from a single glTF primitive.
-/// Vertex layout matches the engine's `Vertex` (pos / normal / texCoord) for
-/// the first ingest milestone; `tangent` is added in a later sub-task.
+/// Vertex layout matches the engine's `Vertex` (pos / normal / texCoord /
+/// tangent).
 struct ImportedMesh {
     std::vector<Vertex>   vertices;
     std::vector<uint32_t> indices;
     uint32_t              materialIndex = UINT32_MAX;  ///< Index into ImportedAsset::materials, or UINT32_MAX for none.
+
+    /// World-space transform of the node that references this primitive's mesh,
+    /// flattened from the glTF node tree (full parent chain folded in via
+    /// cgltf_node_transform_world). Identity if the asset has no node tree.
+    /// The renderer multiplies this by a scene-placement matrix. A mesh
+    /// instanced by multiple nodes is duplicated, one ImportedMesh per node.
+    glm::mat4             worldMatrix = glm::mat4(1.0f);
 };
 
 /// PBR material descriptor following the glTF 2.0 metallic-roughness convention.

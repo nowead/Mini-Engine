@@ -242,40 +242,115 @@ void Renderer::loadTexture(const std::string& texturePath) {
     // Descriptor updates handled via RHI bind groups
 }
 
-bool Renderer::setShowcaseMesh(const std::vector<Vertex>&         vertices,
-                                const std::vector<uint32_t>&       indices,
-                                const glm::mat4&                   worldMatrix,
-                                const assets::ImportedMaterial*    material) {
-    if (vertices.empty() || indices.empty()) {
-        LOG_ERROR("Renderer") << "setShowcaseMesh: empty vertex/index data";
+bool Renderer::setShowcaseAsset(const assets::ImportedAsset& asset,
+                                 const glm::mat4&             placement) {
+    if (asset.meshes.empty()) {
+        LOG_ERROR("Renderer") << "setShowcaseAsset: asset has no meshes";
         return false;
     }
     if (!ssboBindGroupLayout) {
-        LOG_ERROR("Renderer") << "setShowcaseMesh: SSBO layout not ready -- call after Renderer init";
+        LOG_ERROR("Renderer") << "setShowcaseAsset: SSBO layout not ready -- call after Renderer init";
         return false;
     }
-
-    auto* device = rhiBridge->getDevice();
-    auto* queue  = rhiBridge->getGraphicsQueue();
+    if (!resourceManager) {
+        LOG_ERROR("Renderer") << "setShowcaseAsset: ResourceManager not ready";
+        return false;
+    }
 
     // Drop any previously-installed showcase before creating new resources.
     clearShowcaseMesh();
 
-    showcaseAsset.mesh = std::make_unique<Mesh>(device, queue, vertices, indices);
-    if (!showcaseAsset.mesh->hasData()) {
-        LOG_ERROR("Renderer") << "setShowcaseMesh: Mesh creation failed";
+    // ---- Upload all textures once (shared across sub-meshes) --------------
+    // Color space per texture is sRGB if ANY material references it as
+    // baseColor or emissive; linear otherwise (normal / metallicRoughness /
+    // occlusion). A texture used inconsistently is rare; first sRGB use wins.
+    std::vector<rhi::TextureFormat> formatByIndex(
+        asset.textures.size(), rhi::TextureFormat::RGBA8Unorm);
+    auto tagSrgb = [&](uint32_t idx) {
+        if (idx < formatByIndex.size()) formatByIndex[idx] = rhi::TextureFormat::RGBA8UnormSrgb;
+    };
+    for (const auto& m : asset.materials) {
+        tagSrgb(m.baseColorTextureIndex);
+        tagSrgb(m.emissiveTextureIndex);
+    }
+
+    showcaseAsset.materialTextures.resize(asset.textures.size());
+    showcaseAsset.materialTextureViews.resize(asset.textures.size());
+    size_t   uploaded      = 0;
+    uint64_t bytesUploaded = 0;
+    for (uint32_t i = 0; i < asset.textures.size(); ++i) {
+        const auto& src = asset.textures[i];
+        if (src.pixelsRGBA8.empty() || src.width == 0 || src.height == 0) {
+            continue;  // decode failed earlier; leave slot null
+        }
+        auto tex = resourceManager->uploadRGBA8FromMemory(
+            src.pixelsRGBA8.data(), src.width, src.height, formatByIndex[i]);
+        if (!tex) {
+            LOG_ERROR("Renderer") << "setShowcaseAsset: upload failed for texture " << i;
+            continue;
+        }
+        rhi::TextureViewDesc vd;
+        vd.dimension = rhi::TextureViewDimension::View2D;
+        vd.format    = formatByIndex[i];
+        auto view = tex->createView(vd);
+        showcaseAsset.materialTextures[i]     = std::move(tex);
+        showcaseAsset.materialTextureViews[i] = std::move(view);
+        ++uploaded;
+        bytesUploaded += static_cast<uint64_t>(src.width) * src.height * 4u;
+    }
+
+    // ---- One sub-mesh draw per ImportedMesh -------------------------------
+    showcaseAsset.subMeshes.reserve(asset.meshes.size());
+    for (const auto& mesh : asset.meshes) {
+        ShowcaseSubMesh sm;
+        const glm::mat4 world = placement * mesh.worldMatrix;
+        if (!buildShowcaseSubMesh(asset, mesh, world, sm)) {
+            LOG_ERROR("Renderer") << "setShowcaseAsset: sub-mesh build failed (skipped)";
+            continue;
+        }
+        showcaseAsset.subMeshes.push_back(std::move(sm));
+    }
+
+    if (showcaseAsset.subMeshes.empty()) {
+        LOG_ERROR("Renderer") << "setShowcaseAsset: no sub-meshes built";
         clearShowcaseMesh();
         return false;
     }
-    showcaseAsset.indexCount = static_cast<uint32_t>(showcaseAsset.mesh->getIndexCount());
 
-    // Build the single ObjectData entry — matches the GPU layout used by
-    // buildings (see src/rendering/InstancedRenderData.hpp). Bindless texture
-    // index is set to the sentinel 0xFFFFFFFF so the shader falls back to the
-    // scalar colorAndMetallic / roughnessAOPad inputs.
+    LOG_INFO("Renderer") << "Showcase asset installed: "
+                         << showcaseAsset.subMeshes.size() << " sub-mesh(es), "
+                         << uploaded << "/" << asset.textures.size() << " textures ("
+                         << (bytesUploaded / 1024u) << " KiB)";
+    return true;
+}
+
+bool Renderer::buildShowcaseSubMesh(const assets::ImportedAsset& asset,
+                                     const assets::ImportedMesh&  mesh,
+                                     const glm::mat4&             worldMatrix,
+                                     ShowcaseSubMesh&             out) {
+    if (mesh.vertices.empty() || mesh.indices.empty()) {
+        LOG_ERROR("Renderer") << "buildShowcaseSubMesh: empty vertex/index data";
+        return false;
+    }
+    auto* device = rhiBridge->getDevice();
+    auto* queue  = rhiBridge->getGraphicsQueue();
+
+    out.mesh = std::make_unique<Mesh>(device, queue, mesh.vertices, mesh.indices);
+    if (!out.mesh->hasData()) {
+        LOG_ERROR("Renderer") << "buildShowcaseSubMesh: Mesh creation failed";
+        return false;
+    }
+    out.indexCount = static_cast<uint32_t>(out.mesh->getIndexCount());
+
+    const assets::ImportedMaterial* material =
+        (mesh.materialIndex < asset.materials.size()) ? &asset.materials[mesh.materialIndex] : nullptr;
+
+    // ObjectData — matches the GPU layout used by buildings (see
+    // InstancedRenderData.hpp). textureIndices default to the 0xFFFFFFFF
+    // sentinel; the Vulkan path below patches them after bindless registration.
     glm::vec3 aabbMin( std::numeric_limits<float>::max());
     glm::vec3 aabbMax(-std::numeric_limits<float>::max());
-    for (const auto& v : vertices) {
+    for (const auto& v : mesh.vertices) {
         aabbMin = glm::min(aabbMin, v.pos);
         aabbMax = glm::max(aabbMax, v.pos);
     }
@@ -285,21 +360,14 @@ bool Renderer::setShowcaseMesh(const std::vector<Vertex>&         vertices,
     od.boundingBoxMin = glm::vec4(aabbMin, 0.0f);
     od.boundingBoxMax = glm::vec4(aabbMax, 0.0f);
     if (material) {
-        // glTF metallic-roughness factors. baseColorTexture is multiplied with
-        // baseColorFactor at sample time; for textured assets the factor is
-        // typically (1,1,1,1) so the texture color comes through unchanged.
         od.colorAndMetallic = glm::vec4(glm::vec3(material->baseColorFactor),
                                         material->metallicFactor);
-        od.roughnessAOPad   = glm::vec4(material->roughnessFactor,
-                                        1.0f,
-                                        glm::uintBitsToFloat(0xFFFFFFFFu),
-                                        0.0f);
+        od.roughnessAOPad   = glm::vec4(material->roughnessFactor, 1.0f,
+                                        glm::uintBitsToFloat(0xFFFFFFFFu), 0.0f);
     } else {
-        // No material provided — neutral grey defaults (legacy showcase look).
         od.colorAndMetallic = glm::vec4(0.78f, 0.78f, 0.80f, 0.6f);
         od.roughnessAOPad   = glm::vec4(0.45f, 1.0f,
-                                        glm::uintBitsToFloat(0xFFFFFFFFu),
-                                        0.0f);
+                                        glm::uintBitsToFloat(0xFFFFFFFFu), 0.0f);
     }
 
     {
@@ -307,136 +375,44 @@ bool Renderer::setShowcaseMesh(const std::vector<Vertex>&         vertices,
         bd.size  = sizeof(rendering::ObjectData);
         bd.usage = rhi::BufferUsage::Storage | rhi::BufferUsage::CopyDst;
         bd.label = "ShowcaseObjectData";
-        showcaseAsset.objectBuffer = device->createBuffer(bd);
+        out.objectBuffer = device->createBuffer(bd);
     }
-    if (!showcaseAsset.objectBuffer) {
-        LOG_ERROR("Renderer") << "setShowcaseMesh: failed to allocate ObjectData buffer";
-        clearShowcaseMesh();
+    if (!out.objectBuffer) {
+        LOG_ERROR("Renderer") << "buildShowcaseSubMesh: failed to allocate ObjectData buffer";
         return false;
     }
-    // Keep a CPU copy: the Vulkan bindless path patches the texture indices
-    // into it after the textures are registered (uploadShowcaseMaterialTextures)
-    // and re-uploads. At this point all texture slots are still the 0xFFFFFFFF
-    // sentinel, so the first upload renders with scalar factors only.
-    showcaseAsset.objectData = od;
-    showcaseAsset.objectBuffer->write(&od, sizeof(od));
+    out.objectData = od;
+    out.objectBuffer->write(&od, sizeof(od));
 
-    // visibleIndices buffer — set 1 binding 1 in the building shader. The
-    // building pipeline expects a uint32 array; for the showcase we feed a
-    // single zero so the shader reads ObjectData[0].
+    // visibleIndices [0] so the shared shader reads ObjectData[0].
     {
         rhi::BufferDesc bd;
         bd.size  = sizeof(uint32_t);
         bd.usage = rhi::BufferUsage::Storage | rhi::BufferUsage::CopyDst;
         bd.label = "ShowcaseVisibleIndices";
-        showcaseAsset.visibleIndices = device->createBuffer(bd);
+        out.visibleIndices = device->createBuffer(bd);
     }
-    if (!showcaseAsset.visibleIndices) {
-        LOG_ERROR("Renderer") << "setShowcaseMesh: failed to allocate visibleIndices buffer";
-        clearShowcaseMesh();
+    if (!out.visibleIndices) {
+        LOG_ERROR("Renderer") << "buildShowcaseSubMesh: failed to allocate visibleIndices buffer";
         return false;
     }
     const uint32_t zero = 0u;
-    showcaseAsset.visibleIndices->write(&zero, sizeof(zero));
+    out.visibleIndices->write(&zero, sizeof(zero));
 
     {
         rhi::BindGroupDesc bgDesc;
         bgDesc.layout = ssboBindGroupLayout.get();
-        bgDesc.entries.push_back(rhi::BindGroupEntry::Buffer(0, showcaseAsset.objectBuffer.get()));
-        bgDesc.entries.push_back(rhi::BindGroupEntry::Buffer(1, showcaseAsset.visibleIndices.get()));
+        bgDesc.entries.push_back(rhi::BindGroupEntry::Buffer(0, out.objectBuffer.get()));
+        bgDesc.entries.push_back(rhi::BindGroupEntry::Buffer(1, out.visibleIndices.get()));
         bgDesc.label = "ShowcaseSSBOBindGroup";
-        showcaseAsset.ssboBindGroup = device->createBindGroup(bgDesc);
+        out.ssboBindGroup = device->createBindGroup(bgDesc);
     }
-    if (!showcaseAsset.ssboBindGroup) {
-        LOG_ERROR("Renderer") << "setShowcaseMesh: failed to create SSBO bind group";
-        clearShowcaseMesh();
+    if (!out.ssboBindGroup) {
+        LOG_ERROR("Renderer") << "buildShowcaseSubMesh: failed to create SSBO bind group";
         return false;
     }
 
-    LOG_INFO("Renderer") << "Showcase mesh installed: "
-                         << vertices.size() << " vertices, "
-                         << indices.size()  << " indices";
-    return true;
-}
-
-void Renderer::clearShowcaseMesh() {
-#ifdef __EMSCRIPTEN__
-    showcaseAsset.materialBindGroup.reset();
-#endif
-    showcaseAsset.baseColorView = nullptr;
-    showcaseAsset.normalView    = nullptr;
-    showcaseAsset.mrView        = nullptr;
-    showcaseAsset.emissiveView  = nullptr;
-    showcaseAsset.aoView        = nullptr;
-    showcaseAsset.materialTextureViews.clear();
-    showcaseAsset.materialTextures.clear();
-    showcaseAsset.ssboBindGroup.reset();
-    showcaseAsset.visibleIndices.reset();
-    showcaseAsset.objectBuffer.reset();
-    showcaseAsset.mesh.reset();
-    showcaseAsset.indexCount = 0;
-}
-
-size_t Renderer::uploadShowcaseMaterialTextures(const assets::ImportedAsset& asset,
-                                                 uint32_t materialIndex) {
-    if (materialIndex >= asset.materials.size()) {
-        LOG_ERROR("Renderer") << "uploadShowcaseMaterialTextures: materialIndex out of range";
-        return 0;
-    }
-    if (!resourceManager) {
-        LOG_ERROR("Renderer") << "uploadShowcaseMaterialTextures: ResourceManager not ready";
-        return 0;
-    }
-
-    const auto& mat = asset.materials[materialIndex];
-
-    // Tag each texture slot in the source asset with the color space its
-    // material binding implies. Linear is the default (data textures); only
-    // baseColor and emissive get sRGB. Iterating per-material is enough for
-    // the showcase: a single material owns at most one of each slot.
-    std::vector<rhi::TextureFormat> formatByIndex(
-        asset.textures.size(), rhi::TextureFormat::RGBA8Unorm);
-
-    auto tagSrgb = [&](uint32_t idx) {
-        if (idx < formatByIndex.size()) formatByIndex[idx] = rhi::TextureFormat::RGBA8UnormSrgb;
-    };
-    tagSrgb(mat.baseColorTextureIndex);
-    tagSrgb(mat.emissiveTextureIndex);
-    // normal / metallicRoughness / occlusion stay linear (default above).
-
-    showcaseAsset.materialTextures.clear();
-    showcaseAsset.materialTextures.resize(asset.textures.size());
-    showcaseAsset.materialTextureViews.clear();
-    showcaseAsset.materialTextureViews.resize(asset.textures.size());
-
-    size_t uploaded = 0;
-    uint64_t bytesUploaded = 0;
-    for (uint32_t i = 0; i < asset.textures.size(); ++i) {
-        const auto& src = asset.textures[i];
-        if (src.pixelsRGBA8.empty() || src.width == 0 || src.height == 0) {
-            // Texture decode failed earlier in AssetImporter; leave slot null.
-            continue;
-        }
-        auto tex = resourceManager->uploadRGBA8FromMemory(
-            src.pixelsRGBA8.data(), src.width, src.height, formatByIndex[i]);
-        if (!tex) {
-            LOG_ERROR("Renderer") << "uploadShowcaseMaterialTextures: upload failed for texture " << i;
-            continue;
-        }
-
-        // Create a view for this texture so bind groups can reference it.
-        rhi::TextureViewDesc vd;
-        vd.dimension = rhi::TextureViewDimension::View2D;
-        vd.format    = formatByIndex[i];
-        auto view = tex->createView(vd);
-
-        showcaseAsset.materialTextures[i]     = std::move(tex);
-        showcaseAsset.materialTextureViews[i] = std::move(view);
-        ++uploaded;
-        bytesUploaded += static_cast<uint64_t>(src.width) * src.height * 4u;
-    }
-
-    // Resolve per-slot view pointers using the material's texture indices.
+    // Resolve per-slot view pointers from the shared uploaded textures.
     auto resolveView = [&](uint32_t idx) -> rhi::RHITextureView* {
         if (idx < showcaseAsset.materialTextureViews.size()
             && showcaseAsset.materialTextureViews[idx]) {
@@ -444,27 +420,24 @@ size_t Renderer::uploadShowcaseMaterialTextures(const assets::ImportedAsset& ass
         }
         return nullptr;
     };
-    showcaseAsset.baseColorView = resolveView(mat.baseColorTextureIndex);
-    showcaseAsset.normalView    = resolveView(mat.normalTextureIndex);
-    showcaseAsset.mrView        = resolveView(mat.metallicRoughnessTextureIndex);
-    showcaseAsset.emissiveView  = resolveView(mat.emissiveTextureIndex);
-    showcaseAsset.aoView        = resolveView(mat.occlusionTextureIndex);
+    if (material) {
+        out.baseColorView = resolveView(material->baseColorTextureIndex);
+        out.normalView    = resolveView(material->normalTextureIndex);
+        out.mrView        = resolveView(material->metallicRoughnessTextureIndex);
+        out.emissiveView  = resolveView(material->emissiveTextureIndex);
+        out.aoView        = resolveView(material->occlusionTextureIndex);
+    }
 
 #ifndef __EMSCRIPTEN__
-    // ----------------------------------------------------------------------
-    // Vulkan: register the resolved views in the bindless texture array and
-    // patch their slot indices into the showcase ObjectData. The G-Buffer
-    // shader samples allTextures[index] for any slot whose index != INVALID,
-    // and falls back to the scalar ObjectData factors otherwise — exactly the
-    // way buildings already work for their albedo slot. Slot mapping:
+    // Vulkan: register the resolved views in the bindless array and patch their
+    // slot indices into ObjectData. The G-Buffer shader samples
+    // allTextures[index] for any slot != INVALID, else uses the scalar factors
+    // (the same way buildings work). Slot mapping:
     //   roughnessAOPad.b = baseColor   (legacy slot, shared with buildings)
-    //   textureIndices.x = normal
-    //   textureIndices.y = metallicRoughness
-    //   textureIndices.z = emissive
-    //   textureIndices.w = occlusion (AO)
-    if (bindlessTextureManager && bindlessTextureManager->isAvailable()
-        && showcaseAsset.objectBuffer) {
-        // Linear sampler for the helmet's high-res maps (created once).
+    //   textureIndices.x = normal, .y = MR, .z = emissive, .w = occlusion (AO)
+    // A material shared by multiple sub-meshes re-registers its views (a few
+    // extra bindless slots out of 4096) — acceptable for the assets we ingest.
+    if (bindlessTextureManager && bindlessTextureManager->isAvailable()) {
         if (!showcaseMaterialSampler) {
             rhi::SamplerDesc sd{};
             sd.magFilter     = rhi::FilterMode::Linear;
@@ -484,35 +457,33 @@ size_t Renderer::uploadShowcaseMaterialTextures(const assets::ImportedAsset& ass
             return bindlessTextureManager->registerTexture(view, showcaseMaterialSampler.get());
         };
 
-        const uint32_t baseColorIdx = reg(showcaseAsset.baseColorView);
-        const uint32_t normalIdx    = reg(showcaseAsset.normalView);
-        const uint32_t mrIdx        = reg(showcaseAsset.mrView);
-        const uint32_t emissiveIdx  = reg(showcaseAsset.emissiveView);
-        const uint32_t aoIdx        = reg(showcaseAsset.aoView);
+        const uint32_t baseColorIdx = reg(out.baseColorView);
+        const uint32_t normalIdx    = reg(out.normalView);
+        const uint32_t mrIdx        = reg(out.mrView);
+        const uint32_t emissiveIdx  = reg(out.emissiveView);
+        const uint32_t aoIdx        = reg(out.aoView);
 
-        showcaseAsset.objectData.roughnessAOPad.b = glm::uintBitsToFloat(baseColorIdx);
-        showcaseAsset.objectData.textureIndices    = glm::uvec4(normalIdx, mrIdx, emissiveIdx, aoIdx);
-        showcaseAsset.objectBuffer->write(&showcaseAsset.objectData,
-                                          sizeof(showcaseAsset.objectData));
+        out.objectData.roughnessAOPad.b = glm::uintBitsToFloat(baseColorIdx);
+        out.objectData.textureIndices   = glm::uvec4(normalIdx, mrIdx, emissiveIdx, aoIdx);
+        out.objectBuffer->write(&out.objectData, sizeof(out.objectData));
 
-        LOG_INFO("Renderer") << "Showcase bindless slots: baseColor=" << baseColorIdx
+        LOG_INFO("Renderer") << "Showcase sub-mesh bindless slots: baseColor=" << baseColorIdx
                              << " normal=" << normalIdx << " mr=" << mrIdx
-                             << " emissive=" << emissiveIdx << " ao=" << aoIdx
-                             << " (0xFFFFFFFF = none)";
+                             << " emissive=" << emissiveIdx << " ao=" << aoIdx;
     }
 #endif
 
 #ifdef __EMSCRIPTEN__
-    // Build the WebGPU set 2 bind group: each slot picks the helmet's own
-    // view if available, otherwise the Renderer's default dummy view. This
-    // means the shader can always sample unconditionally.
+    // WebGPU: build the set 2 material bind group — each slot picks this
+    // sub-mesh's own view if present, else the Renderer default dummy, so the
+    // shader can always sample unconditionally.
     if (materialBindGroupLayout && defaultBaseColorView && defaultNormalView
         && defaultMRView && defaultEmissiveView && defaultAOView && materialSampler) {
-        rhi::RHITextureView* bcV = showcaseAsset.baseColorView ? showcaseAsset.baseColorView : defaultBaseColorView.get();
-        rhi::RHITextureView* nV  = showcaseAsset.normalView    ? showcaseAsset.normalView    : defaultNormalView.get();
-        rhi::RHITextureView* mV  = showcaseAsset.mrView        ? showcaseAsset.mrView        : defaultMRView.get();
-        rhi::RHITextureView* eV  = showcaseAsset.emissiveView  ? showcaseAsset.emissiveView  : defaultEmissiveView.get();
-        rhi::RHITextureView* aV  = showcaseAsset.aoView        ? showcaseAsset.aoView        : defaultAOView.get();
+        rhi::RHITextureView* bcV = out.baseColorView ? out.baseColorView : defaultBaseColorView.get();
+        rhi::RHITextureView* nV  = out.normalView    ? out.normalView    : defaultNormalView.get();
+        rhi::RHITextureView* mV  = out.mrView        ? out.mrView        : defaultMRView.get();
+        rhi::RHITextureView* eV  = out.emissiveView  ? out.emissiveView  : defaultEmissiveView.get();
+        rhi::RHITextureView* aV  = out.aoView        ? out.aoView        : defaultAOView.get();
 
         rhi::BindGroupDesc bgDesc;
         bgDesc.layout = materialBindGroupLayout.get();
@@ -524,29 +495,22 @@ size_t Renderer::uploadShowcaseMaterialTextures(const assets::ImportedAsset& ass
         bgDesc.entries.push_back(rhi::BindGroupEntry::TextureView(4, aV));
         bgDesc.entries.push_back(rhi::BindGroupEntry::Sampler    (5, materialSampler.get()));
         bgDesc.entries.push_back(rhi::BindGroupEntry::Buffer     (6, materialFrameUBO.get()));
-        showcaseAsset.materialBindGroup = rhiBridge->getDevice()->createBindGroup(bgDesc);
-        if (!showcaseAsset.materialBindGroup) {
-            LOG_ERROR("Renderer") << "Failed to create showcase material bind group";
+        out.materialBindGroup = device->createBindGroup(bgDesc);
+        if (!out.materialBindGroup) {
+            LOG_ERROR("Renderer") << "buildShowcaseSubMesh: failed to create material bind group";
         }
     }
 #endif
 
-    LOG_INFO("Renderer") << "Uploaded " << uploaded << "/" << asset.textures.size()
-                         << " showcase textures (" << (bytesUploaded / 1024u)
-                         << " KiB total) for material " << materialIndex;
+    return true;
+}
 
-    // Diagnostic: report which material slots resolved to real glTF textures
-    // vs the engine default dummies. If a slot says "dummy" but the source
-    // material was supposed to provide it, that points at AssetImporter or
-    // texture-index resolution rather than the upload itself.
-    auto slotTag = [](const rhi::RHITextureView* v) { return v ? "real" : "dummy"; };
-    LOG_INFO("Renderer") << "Showcase material slot resolution: "
-                         << "baseColor=" << slotTag(showcaseAsset.baseColorView)
-                         << " normal="    << slotTag(showcaseAsset.normalView)
-                         << " mr="        << slotTag(showcaseAsset.mrView)
-                         << " emissive="  << slotTag(showcaseAsset.emissiveView)
-                         << " ao="        << slotTag(showcaseAsset.aoView);
-    return uploaded;
+void Renderer::clearShowcaseMesh() {
+    // Destroy sub-meshes first: their bind groups reference the shared material
+    // texture views, so they must go before the views/textures below.
+    showcaseAsset.subMeshes.clear();
+    showcaseAsset.materialTextureViews.clear();
+    showcaseAsset.materialTextures.clear();
 }
 
 void Renderer::waitIdle() {
@@ -3682,16 +3646,25 @@ void Renderer::drawFrame() {
             if (bindlessTextureManager && bindlessTextureManager->isAvailable())
                 bindlessSet = bindlessTextureManager->getVkDescriptorSet();
 #endif
-            rhi::RHIBindGroup* scBG  = showcaseAsset.isReady() ? showcaseAsset.ssboBindGroup.get()        : nullptr;
-            rhi::RHIBuffer*    scVB  = showcaseAsset.isReady() ? showcaseAsset.mesh->getVertexBuffer()   : nullptr;
-            rhi::RHIBuffer*    scIB  = showcaseAsset.isReady() ? showcaseAsset.mesh->getIndexBuffer()    : nullptr;
-            uint32_t           scIdx = showcaseAsset.isReady() ? showcaseAsset.indexCount                : 0u;
-
-            rhi::RHIBindGroup* matDefaultBG  = nullptr;
-            rhi::RHIBindGroup* matShowcaseBG = nullptr;
+            // Build one draw per showcase sub-mesh (node-tree-flattened glTF).
+            std::vector<rendering::GBufferPass::ShowcaseDraw> showcaseDraws;
+            showcaseDraws.reserve(showcaseAsset.subMeshes.size());
+            for (auto& sm : showcaseAsset.subMeshes) {
+                if (!sm.isReady()) continue;
+                rendering::GBufferPass::ShowcaseDraw d;
+                d.ssboBindGroup = sm.ssboBindGroup.get();
+                d.vertexBuffer  = sm.mesh->getVertexBuffer();
+                d.indexBuffer   = sm.mesh->getIndexBuffer();
+                d.indexCount    = sm.indexCount;
 #ifdef __EMSCRIPTEN__
-            matDefaultBG  = defaultMaterialBindGroup.get();
-            matShowcaseBG = showcaseAsset.materialBindGroup.get();
+                d.materialBindGroup = sm.materialBindGroup.get();
+#endif
+                showcaseDraws.push_back(d);
+            }
+
+            rhi::RHIBindGroup* matDefaultBG = nullptr;
+#ifdef __EMSCRIPTEN__
+            matDefaultBG = defaultMaterialBindGroup.get();
 
             // Step 9: refresh the per-frame A/B state the G-Buffer fragment
             // reads from material set 2 binding 6. Layout matches the WGSL
@@ -3711,8 +3684,8 @@ void Renderer::drawFrame() {
                                  indirectDrawBuffers[frameIndex].get(),
                                  W, H,
                                  bindlessSet,
-                                 scBG, scVB, scIB, scIdx,
-                                 matDefaultBG, matShowcaseBG);
+                                 matDefaultBG,
+                                 showcaseDraws);
         }
     }
     if (pendingInstancedData) pendingInstancedData.reset();

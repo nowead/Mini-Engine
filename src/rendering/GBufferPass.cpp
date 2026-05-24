@@ -237,12 +237,8 @@ void GBufferPass::execute(rhi::RHICommandEncoder* encoder,
                            rhi::RHIBuffer*     indirectBuffer,
                            uint32_t width, uint32_t height,
                            VkDescriptorSet bindlessSet,
-                           rhi::RHIBindGroup* showcaseSsboBindGroup,
-                           rhi::RHIBuffer*    showcaseVertexBuffer,
-                           rhi::RHIBuffer*    showcaseIndexBuffer,
-                           uint32_t           showcaseIndexCount,
                            rhi::RHIBindGroup* defaultMaterialBindGroup,
-                           rhi::RHIBindGroup* showcaseMaterialBindGroup) {
+                           const std::vector<ShowcaseDraw>& showcaseDraws) {
     if (!m_initialized || !encoder) return;
 
     rhi::RenderPassDesc passDesc;
@@ -298,11 +294,10 @@ void GBufferPass::execute(rhi::RHICommandEncoder* encoder,
         }
     }
     (void)defaultMaterialBindGroup;
-    (void)showcaseMaterialBindGroup;
 #else
     // WebGPU set 2: per-material PBR texture bind group. Buildings use the
     // default (dummy 1×1 white/flat textures so multiplication is identity);
-    // the showcase draw below swaps in its own bind group.
+    // each showcase sub-mesh draw below swaps in its own bind group.
     if (defaultMaterialBindGroup) pass->setBindGroup(2, defaultMaterialBindGroup);
 #endif
 
@@ -312,22 +307,22 @@ void GBufferPass::execute(rhi::RHICommandEncoder* encoder,
         pass->drawIndexedIndirect(indirectBuffer, 0);
     }
 
-    // Showcase asset draw — same pipeline, same set 0; swap set 1 (and on
-    // WebGPU set 2) to the showcase's own bind groups and issue a single
-    // non-indirect indexed draw. Skipped silently if any input is null.
-    if (showcaseSsboBindGroup
-        && showcaseVertexBuffer
-        && showcaseIndexBuffer
-        && showcaseIndexCount > 0) {
-        pass->setBindGroup(1, showcaseSsboBindGroup);
+    // Showcase asset draws — one per sub-mesh (node-tree-flattened glTF). Same
+    // pipeline + set 0; each swaps set 1 (its own ObjectData / visibleIndices)
+    // and, on WebGPU, set 2 (its own material bind group). Native Vulkan keeps
+    // the bindless set 2 bound above and reads per-sub-mesh indices from
+    // ObjectData. Entries with null buffers or zero indices are skipped.
+    for (const ShowcaseDraw& d : showcaseDraws) {
+        if (!d.ssboBindGroup || !d.vertexBuffer || !d.indexBuffer || d.indexCount == 0) {
+            continue;
+        }
+        pass->setBindGroup(1, d.ssboBindGroup);
 #ifdef __EMSCRIPTEN__
-        // If the showcase has no material bind group of its own, keep the
-        // default bound (already set above). Otherwise swap.
-        if (showcaseMaterialBindGroup) pass->setBindGroup(2, showcaseMaterialBindGroup);
+        if (d.materialBindGroup) pass->setBindGroup(2, d.materialBindGroup);
 #endif
-        pass->setVertexBuffer(0, showcaseVertexBuffer, 0);
-        pass->setIndexBuffer(showcaseIndexBuffer, rhi::IndexFormat::Uint32, 0);
-        pass->drawIndexed(showcaseIndexCount, 1, 0, 0, 0);
+        pass->setVertexBuffer(0, d.vertexBuffer, 0);
+        pass->setIndexBuffer(d.indexBuffer, rhi::IndexFormat::Uint32, 0);
+        pass->drawIndexed(d.indexCount, 1, 0, 0, 0);
     }
 
     pass->end();

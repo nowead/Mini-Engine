@@ -387,3 +387,87 @@ AO를 별도 슬롯으로 받음.
 
 빌딩 색: bindless가 켜지며 빌딩은 의도된 3개 머티리얼 색(콘크리트/메탈/
 글래스)으로 렌더링. 사용자 확인 후 이 동작 유지로 확정.
+
+---
+
+## 변경 이력 (3부) — sub-task 8: 다중 메시 + 노드 트리 ingest
+
+> 작업 범위: ENGINE_ROADMAP §4.4 sub-task 8. 지금까지 showcase는 단일 메시
+> (헬멧)만 처리했다. glTF의 노드 트리를 읽어 메시별 world transform을
+> 만들고, showcase를 서브메시 리스트로 일반화해 Sponza 같은 다중 메시 자산을
+> 받을 수 있게 한다. (디버깅 여정 없이 한 번에 통과 — 설계 결정만 기록.)
+
+### 12. 시작 상태
+
+`ImportedAsset`은 이미 `nodes`/`rootNodes`/`ImportedNode` 필드를 갖고 있었지만
+**AssetImporter가 채우지 않았다** — `raw->meshes`만 순회해 primitive를
+`meshes[]`에 평탄화하고 transform/계층은 버렸다. Application은 `meshes[0]`
+하나만 쓰고 방향을 하드코딩(`rotate(90°, X)`)했다. `scene::SceneNode` 클래스는
+존재했지만 자산 ingest에 쓰이지 않았다.
+
+### 13. 설계 결정 — 라이브 씬그래프 대신 "노드 트리 평탄화"
+
+"SceneNode 최소 구현"의 가장 작은 검증 가능한 형태를 택했다: 노드 트리를
+**읽되**, 라이브 `scene::SceneNode` 계층을 만들지 않고 메시별 world 행렬로
+평탄화한다. cgltf의 `cgltf_node_transform_world()`가 부모 체인을 접어 노드의
+글로벌 행렬을 바로 주므로 수동 트리 워크가 불필요하다.
+
+- **Stage 1** — AssetImporter를 **노드 중심** 순회로 전환: mesh를 참조하는
+  모든 노드에 대해 world 행렬을 구하고, 그 mesh의 primitive마다 `ImportedMesh`
+  를 만들어 `worldMatrix`를 태그. mesh를 참조하는 노드가 없으면(드묾) identity로
+  폴백. 단일 메시(헬멧)는 깊이-1, 계층 자산(BoxAnimated)은 노드 2개.
+  - `ImportedMesh`에 `glm::mat4 worldMatrix` 필드 추가. mesh를 N개 노드가
+    인스턴싱하면 N벌 복제(정점 데이터 중복) — 작은 자산엔 허용, 한계로 기록.
+  - 헬멧 검증: 노드 행렬이 `Rx(+90°)`(col0=(1,0,0) col1=(0,0,1) col2=(0,-1,0))
+    임을 로그로 확인. 균등 스케일이라 `placement(translate*scale) * Rx ==
+    옛 translate * Rx * scale` → 헬멧 방향 불변. 하드코딩 회전을 노드에서
+    가져오도록 제거.
+- **Stage 2** — showcase를 서브메시 리스트로 일반화:
+  - `ShowcaseAsset` = 공유 텍스처(한 번 업로드) + `vector<ShowcaseSubMesh>`.
+    각 `ShowcaseSubMesh`는 자신의 Mesh / ObjectData / visibleIndices / SSBO
+    bind group / (WebGPU) material bind group을 가짐.
+  - `setShowcaseMesh` + `uploadShowcaseMaterialTextures`(단일 메시 2단계 API)를
+    **`setShowcaseAsset(asset, placement)`** + private `buildShowcaseSubMesh`로
+    교체. 텍스처는 자산 단위로 한 번만 업로드(모든 머티리얼을 스캔해 sRGB/linear
+    포맷 결정), 서브메시별로 머티리얼 슬롯 뷰 resolve + bindless 등록/인덱스
+    패치(Vulkan) 또는 set-2 bind group(WebGPU).
+  - `GBufferPass::execute`가 단일 showcase 파라미터 5개 대신
+    `const std::vector<ShowcaseDraw>&`를 받아 루프로 그림. 빌딩 indirect draw
+    뒤에 서브메시마다 set 1(+WebGPU set 2)만 스왑하고 `drawIndexed`. Vulkan은
+    bindless set 2가 그대로 유지되고 서브메시별 인덱스는 ObjectData에서 읽음.
+
+### 14. 검증 자산 — BoxAnimated.glb
+
+다중 메시/계층을 실제로 검증하려면 자산이 필요했다(로컬엔 단일 메시 헬멧뿐).
+Khronos 공식 샘플 `BoxAnimated.glb`(~12KB)를 추가 — 부모-자식 노드 2개, 메시
+2개, 텍스처 없는 factor 머티리얼 2개. (애니메이션 채널은 임포터가 무시하고
+rest-pose TRS만 읽음.) 로그로 `2 mesh(es) from 2 node(s)`, 서브메시 2개,
+bindless 슬롯 전부 sentinel(텍스처 없음 → 스칼라 factor) 확인. 화면에서 큰
+박스 + 오프셋된 작은 박스가 계층 위치대로 렌더됨을 사용자 확인. 검증 후
+showcase 자산은 헬멧으로 복원(BoxAnimated는 저장소에 검증용으로만 동봉).
+
+### 15. 수정 파일 요약 (3부)
+
+| 파일 | 변경 |
+| --- | --- |
+| `src/assets/ImportedAsset.hpp` | `ImportedMesh`에 `worldMatrix` 필드 + 주석 |
+| `src/assets/AssetImporter.cpp` | 메시 중심 → 노드 중심 순회(`cgltf_node_transform_world`), 노드 미참조 폴백, `glm::make_mat4` 헤더 |
+| `src/rendering/Renderer.hpp` | `ShowcaseAsset` → 공유 텍스처 + `ShowcaseSubMesh` 리스트, API를 `setShowcaseAsset` + `buildShowcaseSubMesh`로 교체 |
+| `src/rendering/Renderer.cpp` | `setShowcaseAsset`/`buildShowcaseSubMesh` 구현, `clearShowcaseMesh` 갱신, drawFrame이 서브메시 draw 리스트 빌드 |
+| `src/rendering/GBufferPass.{hpp,cpp}` | `ShowcaseDraw` 구조체, `execute`가 단일 showcase 파라미터 → 서브메시 draw 리스트(루프) |
+| `src/Application.cpp` | `setShowcaseMesh`+upload 2단계 호출 → `setShowcaseAsset(*asset, placement)`, 하드코딩 회전 제거 |
+| `models/BoxAnimated.glb` | 검증용 다중 메시 샘플 추가 (~12KB) |
+
+### 16. 후속 (갱신)
+
+| 항목 | 상태 |
+| --- | --- |
+| AB sub-task 1–9 + Vulkan parity | ✅ |
+| **AB sub-task 8 (다중 메시 + 노드 ingest)** | ✅ (이 3부) — AB 작업 단위 종결 |
+| C (TAA) | ⬜ **다음** — AB로 풍부한 머티리얼이 들어왔으니 안티앨리어싱 가치 측정 가능 |
+
+새 한계(다중 메시 관련): 인스턴싱된 mesh는 정점 데이터 복제(노드별 1벌);
+머티리얼 공유 시 bindless 슬롯 중복 등록; 라이브 `scene::SceneNode` 트리는
+아직 안 만들고 평탄화만 함(애니메이션·런타임 노드 조작은 향후). 텍스처 없는
+factor 머티리얼은 sentinel albedo 경로의 `pow(2.2)`로 약간 어둡게 — glTF
+baseColorFactor는 linear라 엄밀히는 부정확하나 기존 폴백 동작 유지.

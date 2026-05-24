@@ -78,41 +78,27 @@ public:
     void loadModel(const std::string& modelPath);
 
     /**
-     * @brief Install a single "showcase" mesh that gets drawn at a fixed
-     *        position in the G-Buffer pass, alongside instanced buildings.
+     * @brief Install an imported glTF asset as the "showcase", drawn after the
+     *        instanced buildings in the G-Buffer pass.
      *
-     * First milestone of the AB work item from ENGINE_ROADMAP (§4 sub-task 2b):
-     * exercises the AssetImporter end-to-end by getting a real glTF asset on
-     * screen without disturbing the existing building/instancing pipeline. The
-     * mesh is rendered with a uniform grey PBR material and a one-entry
-     * ObjectData SSBO that mirrors the building layout (so the same vertex
-     * shader and G-Buffer fragment shader run unchanged). A later sub-task
-     * generalizes this to a proper SceneNode tree.
+     * (ENGINE_ROADMAP §4.4 sub-task 8.) The asset's node tree is flattened by
+     * AssetImporter into per-mesh world transforms; this builds one sub-mesh
+     * draw per ImportedMesh — geometry + a one-entry ObjectData SSBO mirroring
+     * the building layout (same vertex + G-Buffer fragment shader), the
+     * material's scalar factors, and its textures. On Vulkan the textures are
+     * registered in the bindless array and their slot indices baked into
+     * ObjectData; on WebGPU each sub-mesh gets a set-2 material bind group.
+     * A single-mesh asset (DamagedHelmet) yields a list of length 1.
      *
-     * @return true on success; false on RHI allocation failure.
+     * @param placement World matrix applied on top of each mesh's node
+     *                   transform (scene position / scale).
+     * @return true if at least one sub-mesh was installed.
      */
-    bool setShowcaseMesh(const std::vector<Vertex>&         vertices,
-                         const std::vector<uint32_t>&       indices,
-                         const glm::mat4&                   worldMatrix,
-                         const assets::ImportedMaterial*    material = nullptr);
+    bool setShowcaseAsset(const assets::ImportedAsset& asset,
+                          const glm::mat4&             placement);
 
-    /// @brief Remove the currently installed showcase mesh, if any.
+    /// @brief Remove the currently installed showcase asset, if any.
     void clearShowcaseMesh();
-
-    /**
-     * @brief Upload an imported asset's textures to the GPU, attaching them
-     *        to the currently-installed showcase asset.
-     *
-     * Color space is derived from material usage (baseColor / emissive →
-     * sRGB, normal / metallicRoughness / occlusion → linear). Indexes
-     * match the source ImportedAsset::textures array so material indices
-     * stay valid after upload. Step 6 wires these into a per-material
-     * bind group and starts sampling them in the G-Buffer fragment shader.
-     *
-     * Returns the number of textures successfully uploaded.
-     */
-    size_t uploadShowcaseMaterialTextures(const assets::ImportedAsset& asset,
-                                          uint32_t materialIndex);
 
     /**
      * @brief Load texture from file
@@ -484,33 +470,27 @@ private:
     void createMaterialBindGroupInfrastructure();
 #endif
 
-    // Showcase asset (single non-instanced mesh, drawn after the building
-    // batch inside the G-Buffer pass). Resources match the building set 1
-    // layout exactly so the same shader runs over it unchanged.
-    struct ShowcaseAsset {
+    // Showcase asset — one glTF file flattened from its node tree into a list
+    // of sub-meshes, each drawn after the building batch inside the G-Buffer
+    // pass. Resources match the building set 1 layout exactly so the same
+    // shader runs over them unchanged. A single-mesh asset (DamagedHelmet) is
+    // just a list of length 1.
+    struct ShowcaseSubMesh {
         std::unique_ptr<Mesh>               mesh;
         std::unique_ptr<rhi::RHIBuffer>     objectBuffer;    // 1 ObjectData
         std::unique_ptr<rhi::RHIBuffer>     visibleIndices;  // [0]
         std::unique_ptr<rhi::RHIBindGroup>  ssboBindGroup;   // set 1
         uint32_t                            indexCount = 0;
 
-        // CPU-side copy of the single ObjectData entry. setShowcaseMesh writes
-        // it with the scalar material factors; uploadShowcaseMaterialTextures
-        // patches in the bindless texture indices (Vulkan) once the textures
-        // are registered, then re-uploads objectBuffer. Keeping the CPU copy
-        // avoids re-deriving the AABB / factors at patch time.
+        // CPU-side copy of this sub-mesh's ObjectData. Built with the scalar
+        // material factors; the Vulkan path patches in the bindless texture
+        // indices once the material textures are registered, then re-uploads
+        // objectBuffer. Keeping the CPU copy avoids re-deriving it at patch time.
         rendering::ObjectData               objectData{};
 
-        // PBR material textures from the source glTF, indexed in parallel to
-        // ImportedAsset::textures. Slots with no texture stay null. The
-        // showcase's per-material bind group below references the four
-        // standard PBR slots (baseColor / normal / MR / emissive); missing
-        // slots fall back to the Renderer's default dummy textures.
-        std::vector<std::unique_ptr<rhi::RHITexture>>     materialTextures;
-        std::vector<std::unique_ptr<rhi::RHITextureView>> materialTextureViews;
-
-        // Borrowed view pointers resolved by glTF material slot.
-        // nullptr means "use Renderer default for this slot".
+        // Borrowed view pointers resolved by this sub-mesh's glTF material slot
+        // (point into ShowcaseAsset::materialTextureViews). nullptr means "use
+        // Renderer default for this slot".
         rhi::RHITextureView* baseColorView = nullptr;
         rhi::RHITextureView* normalView    = nullptr;
         rhi::RHITextureView* mrView        = nullptr;
@@ -518,15 +498,27 @@ private:
         rhi::RHITextureView* aoView        = nullptr;
 
 #ifdef __EMSCRIPTEN__
-        // WebGPU set 2 bind group for this asset. Built by Renderer once the
-        // textures are uploaded. Vulkan handles materials via the bindless
-        // path, so this stays empty on native.
+        // WebGPU set 2 bind group for this sub-mesh's material. Vulkan handles
+        // materials via the bindless path, so this stays empty on native.
         std::unique_ptr<rhi::RHIBindGroup> materialBindGroup;
 #endif
 
         bool isReady() const {
             return mesh && mesh->hasData() && ssboBindGroup && indexCount > 0;
         }
+    };
+
+    struct ShowcaseAsset {
+        // PBR material textures from the source glTF, uploaded once and indexed
+        // in parallel to ImportedAsset::textures. Shared across sub-meshes.
+        // Slots with no texture (decode failure) stay null.
+        std::vector<std::unique_ptr<rhi::RHITexture>>     materialTextures;
+        std::vector<std::unique_ptr<rhi::RHITextureView>> materialTextureViews;
+
+        // One entry per drawable glTF mesh node.
+        std::vector<ShowcaseSubMesh> subMeshes;
+
+        bool isReady() const { return !subMeshes.empty(); }
     };
     ShowcaseAsset showcaseAsset;
 
@@ -539,7 +531,13 @@ private:
     std::array<std::unique_ptr<rhi::RHIBuffer>, MAX_FRAMES_IN_FLIGHT> indirectDrawBuffers;
     std::array<std::unique_ptr<rhi::RHIBuffer>, MAX_FRAMES_IN_FLIGHT> visibleIndicesBuffers;
     std::array<std::unique_ptr<rhi::RHIBindGroup>, MAX_FRAMES_IN_FLIGHT> cullBindGroups;
-    static constexpr uint32_t MAX_CULL_OBJECTS = 4096;
+    // Capacity of the frustum-cull output (visible-indices) buffer. Must be
+    // >= the largest object count the cull can see. The stress-test slider goes
+    // up to 100,000 buildings (+ ground); at 4096 the compute shader wrote
+    // visibleIndices[] past the buffer end and the indirect draw read garbage
+    // indices -> buildings flickered in/out. 131072 covers the slider max with
+    // headroom; 131072 * 4B = 512KB per frame-in-flight (negligible).
+    static constexpr uint32_t MAX_CULL_OBJECTS = 131072;
 
     // Phase 3.2: Async compute
     std::unique_ptr<rhi::RHITimelineSemaphore> computeTimelineSemaphore;
@@ -652,6 +650,15 @@ private:
     void createIBL();               // Phase 1.2: IBL initialization
     void createGBufferPass();           // Phase 3: G-Buffer geometry pass
     void createDeferredLightingPass();  // Phase 3: Deferred lighting
+
+    // Build one showcase sub-mesh (GPU mesh + ObjectData SSBO + material wiring)
+    // from an ImportedMesh. Textures must already be uploaded into
+    // showcaseAsset.materialTextureViews. Returns false on RHI allocation
+    // failure. Used by setShowcaseAsset.
+    bool buildShowcaseSubMesh(const assets::ImportedAsset& asset,
+                              const assets::ImportedMesh&  mesh,
+                              const glm::mat4&             worldMatrix,
+                              ShowcaseSubMesh&             out);
 #ifndef __EMSCRIPTEN__
     void createBindlessResources();     // Phase 4: Bindless texture manager + material textures
 #endif

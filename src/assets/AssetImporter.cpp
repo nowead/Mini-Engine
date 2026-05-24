@@ -11,6 +11,8 @@
 // embeds PNG/JPG bytes in buffer views).
 #include <stb_image.h>
 
+#include <glm/gtc/type_ptr.hpp>  // glm::make_mat4 (cgltf world matrix -> glm)
+
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -340,12 +342,17 @@ std::optional<ImportedAsset> AssetImporter::load(std::string_view path) {
         translateMaterial(&raw->materials[mi], raw, asset.materials[mi]);
     }
 
-    // ---- Meshes ------------------------------------------------------------
-    // Walk every primitive of every mesh -- multi-primitive meshes become
-    // multiple ImportedMesh entries. Node ingest lives in a later sub-task.
+    // ---- Meshes (node-centric) --------------------------------------------
+    // glTF draws a mesh only when a node references it, and the node tree
+    // carries the transform. Walk every node: for each that references a mesh,
+    // fold the full parent chain into a world matrix
+    // (cgltf_node_transform_world) and emit one ImportedMesh per primitive
+    // tagged with that transform. This flattens the node tree -- the renderer
+    // consumes per-mesh world matrices rather than walking a live scene graph,
+    // which is enough for the assets we ingest (single mesh, or a shallow
+    // hierarchy like BoxAnimated). A mesh instanced by N nodes is duplicated.
     cgltf_size skippedPrimitives = 0;
-    for (cgltf_size mi = 0; mi < raw->meshes_count; ++mi) {
-        const cgltf_mesh& mesh = raw->meshes[mi];
+    auto ingestMesh = [&](const cgltf_mesh& mesh, const glm::mat4& world) {
         for (cgltf_size pi = 0; pi < mesh.primitives_count; ++pi) {
             ImportedMesh out;
             std::string  why;
@@ -354,7 +361,26 @@ std::optional<ImportedAsset> AssetImporter::load(std::string_view path) {
                 logInfo(path, std::string("primitive skipped: ") + why);
                 continue;
             }
+            out.worldMatrix = world;
             asset.meshes.push_back(std::move(out));
+        }
+    };
+
+    cgltf_size nodesWithMesh = 0;
+    for (cgltf_size ni = 0; ni < raw->nodes_count; ++ni) {
+        const cgltf_node& node = raw->nodes[ni];
+        if (!node.mesh) continue;
+        ++nodesWithMesh;
+        cgltf_float world[16];
+        cgltf_node_transform_world(&node, world);
+        ingestMesh(*node.mesh, glm::make_mat4(world));
+    }
+
+    // Fallback: meshes exist but no node references them (rare / malformed
+    // asset). Emit each at identity so the geometry is still visible.
+    if (nodesWithMesh == 0) {
+        for (cgltf_size mi = 0; mi < raw->meshes_count; ++mi) {
+            ingestMesh(raw->meshes[mi], glm::mat4(1.0f));
         }
     }
 
@@ -367,9 +393,10 @@ std::optional<ImportedAsset> AssetImporter::load(std::string_view path) {
     // Format string avoids embedded quotes for PowerShell-safe captures.
     char summary[256];
     std::snprintf(summary, sizeof(summary),
-                  "ingested %zu mesh(es), %zu primitive(s) skipped, "
-                  "%zu material(s), %zu texture(s) decoded (%zu skipped)",
-                  asset.meshes.size(), skippedPrimitives,
+                  "ingested %zu mesh(es) from %zu node(s) w/ mesh, "
+                  "%zu primitive(s) skipped, %zu material(s), "
+                  "%zu texture(s) decoded (%zu skipped)",
+                  asset.meshes.size(), nodesWithMesh, skippedPrimitives,
                   asset.materials.size(),
                   asset.textures.size() - skippedTextures, skippedTextures);
     logInfo(path, summary);

@@ -2,6 +2,7 @@
 
 #include <rhi/RHI.hpp>
 #include <memory>
+#include <vector>
 
 // Vulkan-only forward declarations for Linux native render pass and bindless set.
 // On WebGPU/EMSCRIPTEN these are stubbed to void* so the interface compiles unchanged;
@@ -40,6 +41,18 @@ namespace rendering {
  */
 class GBufferPass {
 public:
+    /// One showcase sub-mesh draw: shares set 0 + the building pipeline, swaps
+    /// set 1 (its own ObjectData / visibleIndices) and, on WebGPU, set 2 (its
+    /// own PBR material bind group). Native Vulkan ignores materialBindGroup
+    /// and samples the bindless array by the indices baked into ObjectData.
+    struct ShowcaseDraw {
+        rhi::RHIBindGroup* ssboBindGroup     = nullptr;
+        rhi::RHIBuffer*    vertexBuffer      = nullptr;
+        rhi::RHIBuffer*    indexBuffer       = nullptr;
+        uint32_t           indexCount        = 0;
+        rhi::RHIBindGroup* materialBindGroup = nullptr;  // WebGPU set 2; null on Vulkan
+    };
+
     GBufferPass(rhi::RHIDevice* device);
     ~GBufferPass();
 
@@ -93,15 +106,12 @@ public:
                  rhi::RHIBuffer*    indirectBuffer,
                  uint32_t width, uint32_t height,
                  VkDescriptorSet bindlessSet = VK_NULL_HANDLE,
-                 // Optional showcase asset — pass nullptr/0 to skip.
-                 rhi::RHIBindGroup* showcaseSsboBindGroup = nullptr,
-                 rhi::RHIBuffer*    showcaseVertexBuffer  = nullptr,
-                 rhi::RHIBuffer*    showcaseIndexBuffer   = nullptr,
-                 uint32_t           showcaseIndexCount    = 0,
-                 // Optional WebGPU material bind groups (set 2). Native Vulkan
-                 // uses bindless instead and ignores both.
-                 rhi::RHIBindGroup* defaultMaterialBindGroup  = nullptr,
-                 rhi::RHIBindGroup* showcaseMaterialBindGroup = nullptr);
+                 // Optional WebGPU default material bind group (set 2) for the
+                 // buildings. Native Vulkan uses bindless instead and ignores it.
+                 rhi::RHIBindGroup* defaultMaterialBindGroup = nullptr,
+                 // Optional showcase sub-meshes — each drawn after the buildings
+                 // in the same render pass. Empty = no showcase asset installed.
+                 const std::vector<ShowcaseDraw>& showcaseDraws = {});
 
 private:
     bool createTextures(uint32_t width, uint32_t height);

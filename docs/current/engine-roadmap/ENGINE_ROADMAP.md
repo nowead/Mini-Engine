@@ -14,12 +14,13 @@
 | §4.4 sub-task 1–7 (cgltf → glTF 풀 PBR sampling) | ✅ WebGPU에서 완료. commit `4f809dd` |
 | §4.4 sub-task 9 (A/B 모드 머티리얼 토글) | ✅ WebGPU에서 완료 (2026-05-24) |
 | Vulkan parity — 헬멧 네이티브 풀 PBR | ✅ bindless 경로로 완료 (2026-05-24). 초기화 순서 버그 + 네이티브 resize 크래시 동시 수정 |
-| §4.4 sub-task 8 (SceneNode 최소 구현) | ⬜ **다음** |
+| §4.4 sub-task 8 (SceneNode 최소 구현 / 노드 트리 ingest) | ✅ 노드 트리 평탄화 + showcase 서브메시 리스트로 완료 (2026-05-24). BoxAnimated로 다중 메시/계층 검증 |
 | §4.5 잔여 한계 | 3개 — tangent.w, emissive HDR, ORM-packed MR fallback |
 
-**다음 시퀀스**: ~~9 (시연 통합)~~ ✅ → ~~Vulkan parity~~ ✅ → **8 (SceneNode, 다음)**
-→ C (TAA). Vulkan parity로 양 백엔드 동등성 확보. 8은 다중 메시 자산을 위한
-인프라. 그 뒤 큰 단위(C, TAA)로 이동.
+**다음 시퀀스**: ~~9 (시연 통합)~~ ✅ → ~~Vulkan parity~~ ✅ → ~~8 (SceneNode)~~ ✅
+→ **C (TAA, 다음)**. AB 작업 단위(sub-task 1–9 + Vulkan parity + 8) 종결 —
+양 백엔드 동등성 + 다중 메시 인프라 확보. 이제 풍부한 머티리얼 위에서
+안티앨리어싱(TAA) 가치를 측정할 수 있다.
 
 상세 디버깅 여정: [`CHANGELOG_2026-05-21.md`](../../archive/changelogs/CHANGELOG_2026-05-21.md)
 (자산 파이프라인 구축 + 함정 3종) ·
@@ -371,9 +372,12 @@ Vulkan parity는 별도 항목.
    - 진단 도구 3종 동봉: slot resolution 로그, WGSL debug view 9
      (Emissive), HTML 라디오. 자세한 내용은
      [`CHANGELOG_2026-05-22.md`](../../archive/changelogs/CHANGELOG_2026-05-22.md).
-8. ⬜ **SceneNode 최소 구현 + 노드 트리 ingest** — 단일 메시는 깊이 1.
-   Sponza 같은 다중 메시 자산이 들어오면 의미가 나타남. 현재 sub-task 9
-   다음에 진행 예정 (§3 시퀀스 참조). 첫 자산은 깊이 1로 충분.
+8. ✅ **노드 트리 ingest + 다중 메시 showcase** (2026-05-24) — AssetImporter를
+   노드 중심 순회로 전환(`cgltf_node_transform_world`로 메시별 world 행렬),
+   showcase를 서브메시 리스트로 일반화(`setShowcaseAsset`), GBufferPass가
+   서브메시 전부 드로우. 라이브 `scene::SceneNode` 트리 대신 노드 트리를
+   평탄화하는 최소 구현. BoxAnimated.glb(노드 2개/메시 2개)로 다중 메시·계층
+   검증. 자세한 내용은 [`CHANGELOG_2026-05-24.md`](../../archive/changelogs/CHANGELOG_2026-05-24.md) 3부.
 9. ✅ **시연 통합** (commit `<this>`, 2026-05-24) — A/B 분할에 "머티리얼 on/off"
    추가. gbuffer fragment가 화면 좌측에서 PBR 텍스처를 무시하고 ObjectData
    스칼라 factor로 fallback(= sentinel 강제), 우측은 풀 PBR. abSplitX를

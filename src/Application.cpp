@@ -117,46 +117,34 @@ void Application::initGameLogic() {
     // the asset → GPU → G-Buffer path is sound.
     {
         assets::AssetImporter importer;
-        if (auto asset = importer.load("models/DamagedHelmet.glb")) {
+        const char* assetPath = "models/DamagedHelmet.glb";
+        if (auto asset = importer.load(assetPath)) {
             size_t totalVerts = 0, totalIndices = 0;
             for (const auto& m : asset->meshes) {
                 totalVerts   += m.vertices.size();
                 totalIndices += m.indices.size();
             }
-            std::printf("[AssetImporter] DamagedHelmet OK -- meshes=%zu vertices=%zu indices=%zu\n",
-                        asset->meshes.size(), totalVerts, totalIndices);
+            std::printf("[AssetImporter] %s OK -- meshes=%zu vertices=%zu indices=%zu\n",
+                        assetPath, asset->meshes.size(), totalVerts, totalIndices);
 
-            if (!asset->meshes.empty() && renderer) {
-                // glTF assets are Y-up. DamagedHelmet ships rotated 90 degrees
-                // about X so it appears head-up in viewers that assume +Z forward;
-                // we counter-rotate so the visor faces the default camera. The
-                // helmet is small in absolute units, so scale up generously.
+            if (renderer) {
+                // Scene placement applied on top of each mesh's own glTF node
+                // transform (sub-task 8). Orientation that used to be a
+                // hardcoded 90-degree X rotation now comes from the node tree;
+                // placement only positions + scales the asset in the world.
                 const float scale = 4.0f;
-                glm::mat4 m(1.0f);
-                m = glm::translate(m, glm::vec3(0.0f, 8.0f, 0.0f));
-                m = glm::rotate(m, glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
-                m = glm::scale(m, glm::vec3(scale));
+                glm::mat4 placement(1.0f);
+                placement = glm::translate(placement, glm::vec3(0.0f, 8.0f, 0.0f));
+                placement = glm::scale(placement, glm::vec3(scale));
 
-                // Pass the glTF material so ObjectData picks up baseColorFactor,
-                // metallicFactor, roughnessFactor (step 6 baseColor sampling
-                // multiplies the texture by these factors).
-                const uint32_t matIdx = asset->meshes[0].materialIndex;
-                const assets::ImportedMaterial* matPtr =
-                    (matIdx < asset->materials.size()) ? &asset->materials[matIdx] : nullptr;
-
-                renderer->setShowcaseMesh(asset->meshes[0].vertices,
-                                          asset->meshes[0].indices,
-                                          m,
-                                          matPtr);
-
-                // Step 5c: upload PBR textures + build the WebGPU material
-                // bind group. Missing material is non-fatal.
-                if (matPtr) {
-                    renderer->uploadShowcaseMaterialTextures(*asset, matIdx);
-                }
+                // setShowcaseAsset flattens the node tree into per-mesh draws,
+                // uploads textures, and wires materials (bindless on Vulkan,
+                // set-2 bind group on WebGPU) for every sub-mesh.
+                renderer->setShowcaseAsset(*asset, placement);
             }
         } else {
-            std::printf("[AssetImporter] DamagedHelmet load returned no asset (file missing or unsupported feature)\n");
+            std::printf("[AssetImporter] %s load returned no asset (file missing or unsupported feature)\n",
+                        assetPath);
         }
     }
 
