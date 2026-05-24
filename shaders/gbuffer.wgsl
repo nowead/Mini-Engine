@@ -62,6 +62,23 @@ struct VisibleIndicesBuffer {
 @group(2) @binding(4) var aoTex:        texture_2d<f32>;
 @group(2) @binding(5) var materialSampler: sampler;
 
+// Step 9: per-frame A/B material toggle state. abSplitX = 0 means off;
+// (0,1) is the screen-space x at which the split sits. Left of the split,
+// the fragment ignores the PBR textures and falls back to the scalar
+// ObjectData factors ("sentinel forced") so the viewer can compare plain
+// shading vs full materials side by side. screenSize converts the
+// fragment's framebuffer position into a [0,1] uv.
+// All-scalar layout to match the C++ write byte-for-byte. A vec2 here would
+// force 8-byte alignment on screenSize and desync from the tightly-packed
+// C++ struct (abSplitX@0, screenW@4, screenH@8, pad@12).
+struct FrameState {
+    abSplitX: f32,
+    screenW:  f32,
+    screenH:  f32,
+    _pad:     f32,
+}
+@group(2) @binding(6) var<uniform> frameState: FrameState;
+
 // =============================================================================
 // Vertex I/O
 // =============================================================================
@@ -130,71 +147,64 @@ struct GBufferOutput {
 fn fs_main(input: VertexOutput) -> GBufferOutput {
     let Nvert = normalize(input.normal);
 
-    // Step 6a: baseColor sampling. Buildings get a 1×1 white dummy ×
-    // grey factor = grey; the helmet rebinds its glTF baseColor for the
-    // showcase draw and the factor stays white, so the texture flows
-    // through unmodified. Sampler returns linear color (the layout uses
-    // an sRGB format for the baseColor slot).
-    let baseColorSample = textureSample(baseColorTex, materialSampler, input.texCoord);
-    let albedoLinear    = baseColorSample.rgb * input.albedo;
+    // Step 9: A/B material toggle. Left of the split, force the "no texture"
+    // path — scalar ObjectData factors only, vertex normal, no emissive —
+    // so the viewer can compare plain shading against full PBR on the same
+    // asset. abSplitX = 0 disables the split (full PBR everywhere).
+    let abActive       = frameState.abSplitX > 0.0;
+    let uvScreenX      = input.position.x / frameState.screenW;
+    let onBaselineSide = abActive && uvScreenX < frameState.abSplitX;
 
-    // Step 6b: tangent-space normal mapping. The default normal texture is
-    // a 1×1 flat (0.5, 0.5, 1.0) so its decoded tangent-space normal is
-    // (0, 0, 1); for an asset with a real glTF normal map the bind group
-    // is rebound for the showcase draw.
-    //
-    // Path A — the source asset supplied per-vertex tangents (length(T) > 0):
-    //   construct a TBN from the interpolated T and N and rotate the
-    //   tangent-space sample into world space. Bitangent sign (glTF
-    //   tangent.w) is not yet stored on the Vertex; this works on every
-    //   DamagedHelmet-style asset without mirrored UVs and is the next
-    //   thing to wire if we hit an asset that needs it.
-    //
-    // Path B — no tangent stream (e.g. the procedural cube). The default
-    //   normal texture decodes to (0,0,1), so the correct world-space
-    //   normal is exactly the vertex normal; skip TBN entirely.
+    // ---- Full-PBR sampling (right of split, or split disabled) ----------
+
+    // Step 6a: baseColor × factor. Buildings get a 1×1 white dummy × grey
+    // factor = grey; the helmet's showcase bind group supplies the real
+    // glTF baseColor with a white factor so the texture passes through.
+    let baseColorSample = textureSample(baseColorTex, materialSampler, input.texCoord);
+    let albedoTextured  = baseColorSample.rgb * input.albedo;
+
+    // Step 6b: tangent-space normal mapping. Path A — per-vertex tangents
+    // present: build a Gram-Schmidt-orthogonalized TBN and rotate the
+    // sampled tangent-space normal into world space. Path B — no tangent
+    // (procedural cube): the default normal decodes to (0,0,1) so the
+    // vertex normal is already correct.
     let nMapTangentSpace = textureSample(normalTex, materialSampler, input.texCoord).rgb
                             * 2.0 - vec3<f32>(1.0);
-    var N: vec3<f32>;
+    var Ntextured: vec3<f32>;
     if (length(input.tangent) > 0.01) {
-        let T = normalize(input.tangent);
-        // Re-orthogonalize T against N (Gram-Schmidt) — rasterizer
-        // interpolation can drift the two slightly out of orthogonality.
+        let T      = normalize(input.tangent);
         let Tortho = normalize(T - Nvert * dot(Nvert, T));
         let B      = cross(Nvert, Tortho);
         let TBN    = mat3x3<f32>(Tortho, B, Nvert);
-        N = normalize(TBN * nMapTangentSpace);
+        Ntextured  = normalize(TBN * nMapTangentSpace);
     } else {
-        N = Nvert;
+        Ntextured = Nvert;
     }
 
-    // Step 6c: metallic-roughness + occlusion sampling. glTF MR convention:
-    //   G = roughness, B = metallic, R unused (sometimes packed AO for ORM
-    //   assets, but the standard spec reads occlusion from a separate
-    //   texture so we honor that here). Dummy MR is (*,1,1,*) so the
-    //   factor passes through unchanged when no asset texture is bound.
-    let mrSample  = textureSample(mrTex, materialSampler, input.texCoord);
-    let roughness = input.roughness * mrSample.g;
-    let metallic  = input.metallic  * mrSample.b;
+    // Step 6c: MR (G=roughness, B=metallic) + occlusion (R). Dummies are
+    // identity so the factor passes through when no texture is bound.
+    let mrSample        = textureSample(mrTex, materialSampler, input.texCoord);
+    let roughnessTextured = input.roughness * mrSample.g;
+    let metallicTextured  = input.metallic  * mrSample.b;
+    let aoTextured        = input.ao * textureSample(aoTex, materialSampler, input.texCoord).r;
 
-    // Occlusion (R channel of the glTF occlusionTexture). Dummy AO is
-    // (1,*,*,*) so factor passes through.
-    let aoSample = textureSample(aoTex, materialSampler, input.texCoord).r;
-    let ao       = input.ao * aoSample;
+    // Step 6d: emissive (sRGB slot → linear sample). Dummy is black.
+    let emissiveTextured = textureSample(emissiveTex, materialSampler, input.texCoord).rgb;
 
-    // Step 6d: emissive sampling. glTF emissiveTexture is sRGB; the bind
-    // layout uses RGBA8UnormSrgb for the emissive slot so textureSample
-    // already returns linear color. Dummy is black so non-emissive assets
-    // contribute nothing. We pack into gBuffer2's free gba channels (the
-    // deferred lighting reader currently only consumes .r for AO), which
-    // avoids needing a 4th render target. LDR-only because gBuffer2 is
-    // RGBA8Unorm — HDR-bright emissive would need a real RGBA16Float
-    // attachment as a follow-up.
-    let emissive = textureSample(emissiveTex, materialSampler, input.texCoord).rgb;
+    // ---- Select between textured and sentinel-forced (baseline) ---------
+    // Baseline uses the raw ObjectData factors: no texture multiply, vertex
+    // normal, no self-emission. This is exactly what the engine produced
+    // before step 6, so the A/B divider shows the material work directly.
+    let N         = select(Ntextured,          Nvert,          onBaselineSide);
+    let albedo    = select(albedoTextured,     input.albedo,   onBaselineSide);
+    let roughness = select(roughnessTextured,  input.roughness, onBaselineSide);
+    let metallic  = select(metallicTextured,   input.metallic, onBaselineSide);
+    let ao        = select(aoTextured,         input.ao,       onBaselineSide);
+    let emissive  = select(emissiveTextured,   vec3<f32>(0.0), onBaselineSide);
 
     var out: GBufferOutput;
-    out.gBuffer0 = vec4<f32>(N,            roughness);
-    out.gBuffer1 = vec4<f32>(albedoLinear, metallic);
+    out.gBuffer0 = vec4<f32>(N,        roughness);
+    out.gBuffer1 = vec4<f32>(albedo,   metallic);
     out.gBuffer2 = vec4<f32>(ao, emissive);  // .r=ao, .gba=emissive RGB
     return out;
 }

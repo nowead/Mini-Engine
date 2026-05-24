@@ -471,6 +471,14 @@ private:
 
     std::unique_ptr<rhi::RHIBindGroup>       defaultMaterialBindGroup;
 
+    // Step 9: per-frame state read by the G-Buffer fragment shader for the
+    // A/B material toggle. 16 bytes: abSplitX + screen width/height + pad.
+    // Bound at material set 2 binding 6 so gbuffer.wgsl can decide, per
+    // pixel, whether to sample the PBR textures (right of split) or fall
+    // back to the scalar ObjectData factors (left of split = "sentinel
+    // forced"). Updated each frame in drawFrame.
+    std::unique_ptr<rhi::RHIBuffer>          materialFrameUBO;
+
     /// Step 6 helper: create materialBindGroupLayout, the four dummy 1×1
     /// textures, the shared sampler, and defaultMaterialBindGroup. Idempotent.
     void createMaterialBindGroupInfrastructure();

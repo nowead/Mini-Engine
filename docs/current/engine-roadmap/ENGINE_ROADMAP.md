@@ -7,24 +7,26 @@
 
 ---
 
-## 0. 현재 위치 (2026-05-22)
+## 0. 현재 위치 (2026-05-24)
 
 | 영역 | 상태 |
 | --- | --- |
-| §4.4 sub-task 1–7 (cgltf → glTF 풀 PBR sampling) | ✅ WebGPU에서 완료. 마지막 commit `4f809dd` |
+| §4.4 sub-task 1–7 (cgltf → glTF 풀 PBR sampling) | ✅ WebGPU에서 완료. commit `4f809dd` |
+| §4.4 sub-task 9 (A/B 모드 머티리얼 토글) | ✅ WebGPU에서 완료 (2026-05-24) |
 | §4.4 sub-task 8 (SceneNode 최소 구현) | ⬜ |
-| §4.4 sub-task 9 (A/B 모드 머티리얼 토글) | ⬜ |
 | Vulkan parity — material bind group | ⬜ (헬멧 네이티브에선 회색) |
 | §4.5 잔여 한계 | 4개 — Vulkan parity, tangent.w, emissive HDR, ORM-packed MR fallback |
 
-**다음 시퀀스**: 9 (시연 통합) → Vulkan parity → 8 (SceneNode) → C (TAA). 9는
-작업량 작고 AB 영역을 깨끗히 봉인. Vulkan parity는 양 백엔드 동등성 확보. 8은
-다중 메시 자산을 위한 인프라. 그 뒤 큰 단위(C, TAA)로 이동.
+**다음 시퀀스**: ~~9 (시연 통합)~~ ✅ → **Vulkan parity (다음)** → 8 (SceneNode)
+→ C (TAA). Vulkan parity는 양 백엔드 동등성 확보. 8은 다중 메시 자산을 위한
+인프라. 그 뒤 큰 단위(C, TAA)로 이동.
 
 상세 디버깅 여정: [`CHANGELOG_2026-05-21.md`](../../archive/changelogs/CHANGELOG_2026-05-21.md)
 (자산 파이프라인 구축 + 함정 3종) ·
 [`CHANGELOG_2026-05-22.md`](../../archive/changelogs/CHANGELOG_2026-05-22.md)
-(normal/MR/AO/emissive + 진단 도구).
+(normal/MR/AO/emissive + 진단 도구) ·
+[`CHANGELOG_2026-05-24.md`](../../archive/changelogs/CHANGELOG_2026-05-24.md)
+(A/B 머티리얼 토글 — frame-state UBO + WGSL select 분기).
 
 §1 이하 진단은 **작성 시점(2026-05-20) 기준**이며 역사적 컨텍스트로 보존.
 구체 진척은 §4.4 표를 보면 됨.
@@ -372,14 +374,17 @@ Vulkan parity는 별도 항목.
 8. ⬜ **SceneNode 최소 구현 + 노드 트리 ingest** — 단일 메시는 깊이 1.
    Sponza 같은 다중 메시 자산이 들어오면 의미가 나타남. 현재 sub-task 9
    다음에 진행 예정 (§3 시퀀스 참조). 첫 자산은 깊이 1로 충분.
-9. ⬜ **시연 통합** — A/B 분할에 "머티리얼 텍스처 on/off" 모드 추가(좌측
-   sentinel 강제, 우측 정상). P1.1 인프라 재사용. 가이드 투어에 새 스텝 추가
-   도 가능. **이게 다음 작업**. 작업량 작고 AB 영역을 깔끔히 봉인.
+9. ✅ **시연 통합** (commit `<this>`, 2026-05-24) — A/B 분할에 "머티리얼 on/off"
+   추가. gbuffer fragment가 화면 좌측에서 PBR 텍스처를 무시하고 ObjectData
+   스칼라 factor로 fallback(= sentinel 강제), 우측은 풀 PBR. abSplitX를
+   gbuffer에 전달하기 위해 material set 2 binding 6에 frame-state UBO 신설.
+   기존 A/B 인프라(deferred 점광원 skip + postprocess SSAO=0/분할선)와 일관
+   동작. 자세한 내용은 [`CHANGELOG_2026-05-24.md`](../../archive/changelogs/CHANGELOG_2026-05-24.md).
 
 **비번호 항목 (sub-task 9 이후, §3 시퀀스 참조)**:
 
 - ⬜ **Vulkan parity** — 네이티브 빌드도 헬멧을 풀 PBR로 렌더링. set 2 ×
-  bindless 충돌 해소 결정 필요. 양 백엔드 동등성.
+  bindless 충돌 해소 결정 필요. 양 백엔드 동등성. **이게 다음 작업.**
 
 ### 4.5 알려진 위험과 대응
 

@@ -462,6 +462,7 @@ size_t Renderer::uploadShowcaseMaterialTextures(const assets::ImportedAsset& ass
         bgDesc.entries.push_back(rhi::BindGroupEntry::TextureView(3, eV));
         bgDesc.entries.push_back(rhi::BindGroupEntry::TextureView(4, aV));
         bgDesc.entries.push_back(rhi::BindGroupEntry::Sampler    (5, materialSampler.get()));
+        bgDesc.entries.push_back(rhi::BindGroupEntry::Buffer     (6, materialFrameUBO.get()));
         showcaseAsset.materialBindGroup = rhiBridge->getDevice()->createBindGroup(bgDesc);
         if (!showcaseAsset.materialBindGroup) {
             LOG_ERROR("Renderer") << "Failed to create showcase material bind group";
@@ -1560,6 +1561,14 @@ void Renderer::createMaterialBindGroupInfrastructure() {
         samp.type       = rhi::BindingType::Sampler;
         layoutDesc.entries.push_back(samp);
     }
+    {
+        // Step 9: per-frame A/B state (abSplitX + screen size).
+        rhi::BindGroupLayoutEntry frameState;
+        frameState.binding    = 6;
+        frameState.visibility = rhi::ShaderStage::Fragment;
+        frameState.type       = rhi::BindingType::UniformBuffer;
+        layoutDesc.entries.push_back(frameState);
+    }
     materialBindGroupLayout = device->createBindGroupLayout(layoutDesc);
     if (!materialBindGroupLayout) {
         LOG_ERROR("Renderer") << "Failed to create material bind group layout";
@@ -1627,6 +1636,21 @@ void Renderer::createMaterialBindGroupInfrastructure() {
     defaultEmissiveView  = makeView(defaultEmissiveTex.get(),  rhi::TextureFormat::RGBA8UnormSrgb, "Default_EmissiveView");
     defaultAOView        = makeView(defaultAOTex.get(),        rhi::TextureFormat::RGBA8Unorm,     "Default_AOView");
 
+    // Step 9: per-frame A/B state UBO. 16 bytes (abSplitX + screenW + screenH
+    // + pad). Updated each frame in drawFrame; the bind groups below reference
+    // it by handle so they don't need rebuilding when the contents change.
+    {
+        rhi::BufferDesc bd;
+        bd.size  = 16;
+        bd.usage = rhi::BufferUsage::Uniform | rhi::BufferUsage::CopyDst;
+        bd.label = "MaterialFrameUBO";
+        materialFrameUBO = device->createBuffer(bd);
+    }
+    if (!materialFrameUBO) {
+        LOG_ERROR("Renderer") << "Failed to create material frame UBO";
+        return;
+    }
+
     // ----------------------------------------------------------------------
     // Default material bind group (used by buildings and any showcase slot
     // that has no glTF texture supplied).
@@ -1640,6 +1664,7 @@ void Renderer::createMaterialBindGroupInfrastructure() {
     bgDesc.entries.push_back(rhi::BindGroupEntry::TextureView(3, defaultEmissiveView.get()));
     bgDesc.entries.push_back(rhi::BindGroupEntry::TextureView(4, defaultAOView.get()));
     bgDesc.entries.push_back(rhi::BindGroupEntry::Sampler    (5, materialSampler.get()));
+    bgDesc.entries.push_back(rhi::BindGroupEntry::Buffer     (6, materialFrameUBO.get()));
     defaultMaterialBindGroup = device->createBindGroup(bgDesc);
 
     if (!defaultMaterialBindGroup) {
@@ -3586,6 +3611,15 @@ void Renderer::drawFrame() {
 #ifdef __EMSCRIPTEN__
             matDefaultBG  = defaultMaterialBindGroup.get();
             matShowcaseBG = showcaseAsset.materialBindGroup.get();
+
+            // Step 9: refresh the per-frame A/B state the G-Buffer fragment
+            // reads from material set 2 binding 6. Layout matches the WGSL
+            // FrameState struct: abSplitX, screenW, screenH, pad.
+            if (materialFrameUBO) {
+                struct FrameState { float abSplitX; float screenW; float screenH; float _pad; };
+                FrameState fs{ abSplitX, static_cast<float>(W), static_cast<float>(H), 0.0f };
+                materialFrameUBO->write(&fs, sizeof(fs));
+            }
 #endif
 
             gBufferPass->execute(encoder.get(),
