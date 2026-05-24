@@ -24,7 +24,13 @@ layout(location = 3) in float fragMetallic;
 layout(location = 4) in float fragRoughness;
 layout(location = 5) in float fragAO;
 layout(location = 6) in vec3 fragAlbedo;
-layout(location = 7) in flat uint fragAlbedoIndex;   // texture slot (0xFFFFFFFF = no texture)
+layout(location = 7) in flat uint fragAlbedoIndex;     // baseColor slot (0xFFFFFFFF = none)
+// Showcase PBR (glTF) bindless slots. 0xFFFFFFFF = slot absent → use scalar.
+layout(location = 8)  in vec3      fragTangent;        // world-space, unnormalized
+layout(location = 9)  in flat uint fragNormalIndex;
+layout(location = 10) in flat uint fragMRIndex;        // G=roughness, B=metallic
+layout(location = 11) in flat uint fragEmissiveIndex;
+layout(location = 12) in flat uint fragAOIndex;
 
 // Phase 4: bindless texture array at set 2
 // When the device doesn't support descriptor indexing, this set is not created,
@@ -37,27 +43,63 @@ layout(set = 2, binding = 0) uniform sampler2D allTextures[];
 
 layout(location = 0) out vec4 gBuffer0;  // normal.xyz + roughness
 layout(location = 1) out vec4 gBuffer1;  // albedo.rgb (linear) + metallic
-layout(location = 2) out vec4 gBuffer2;  // ao + padding
+layout(location = 2) out vec4 gBuffer2;  // ao (r) + emissive (gba)
 
 // ---------------------------------------------------------------------------
 
 const uint BINDLESS_INVALID = 0xFFFFFFFFu;
 
 void main() {
+    // ---- Albedo --------------------------------------------------------
+    // baseColor textures are sRGB-format views, so the sample is already
+    // linearized by the hardware. Buildings supply a 1×1 linear solid colour;
+    // the procedural fallback decodes the SSBO sRGB factor to linear.
+    // The glTF baseColorFactor (white for the helmet) is folded into the
+    // factor-only path only, matching the existing building behaviour.
     vec3 albedoLinear;
-
     if (fragAlbedoIndex != BINDLESS_INVALID) {
-        // Sample from the registered material texture.
-        // nonuniformEXT tells the driver that the index may differ across invocations
-        // within a wave — required for correct execution on DX12 / Vulkan bindless.
-        vec4 texSample = texture(allTextures[nonuniformEXT(fragAlbedoIndex)], fragTexCoord);
-        albedoLinear = texSample.rgb;  // assume textures are stored in linear space
+        // nonuniformEXT: the index may differ across invocations within a wave.
+        albedoLinear = texture(allTextures[nonuniformEXT(fragAlbedoIndex)], fragTexCoord).rgb;
     } else {
-        // Fallback: procedural sRGB color from SSBO → linear
         albedoLinear = pow(fragAlbedo, vec3(2.2));
     }
 
-    gBuffer0 = vec4(normalize(fragNormal), fragRoughness);
-    gBuffer1 = vec4(albedoLinear, fragMetallic);
-    gBuffer2 = vec4(fragAO, 0.0, 0.0, 1.0);
+    // ---- Normal (tangent-space normal mapping) -------------------------
+    // Path A — normal map + per-vertex tangent present: Gram-Schmidt TBN.
+    // Path B — no normal map or no tangent: interpolated vertex normal.
+    vec3 N = normalize(fragNormal);
+    if (fragNormalIndex != BINDLESS_INVALID && length(fragTangent) > 0.01) {
+        vec3 nTan = texture(allTextures[nonuniformEXT(fragNormalIndex)], fragTexCoord).rgb
+                    * 2.0 - 1.0;
+        vec3 T      = normalize(fragTangent);
+        vec3 Tortho = normalize(T - N * dot(N, T));
+        vec3 B      = cross(N, Tortho);
+        mat3 TBN    = mat3(Tortho, B, N);
+        N = normalize(TBN * nTan);
+    }
+
+    // ---- Metallic-roughness (G=roughness, B=metallic) ------------------
+    float roughness = fragRoughness;
+    float metallic  = fragMetallic;
+    if (fragMRIndex != BINDLESS_INVALID) {
+        vec4 mr   = texture(allTextures[nonuniformEXT(fragMRIndex)], fragTexCoord);
+        roughness = fragRoughness * mr.g;
+        metallic  = fragMetallic  * mr.b;
+    }
+
+    // ---- Occlusion -----------------------------------------------------
+    float ao = fragAO;
+    if (fragAOIndex != BINDLESS_INVALID) {
+        ao = fragAO * texture(allTextures[nonuniformEXT(fragAOIndex)], fragTexCoord).r;
+    }
+
+    // ---- Emissive (sRGB view → linear sample) --------------------------
+    vec3 emissive = vec3(0.0);
+    if (fragEmissiveIndex != BINDLESS_INVALID) {
+        emissive = texture(allTextures[nonuniformEXT(fragEmissiveIndex)], fragTexCoord).rgb;
+    }
+
+    gBuffer0 = vec4(N,            roughness);
+    gBuffer1 = vec4(albedoLinear, metallic);
+    gBuffer2 = vec4(ao, emissive);  // .r = ao, .gba = emissive RGB (clamped to [0,1])
 }

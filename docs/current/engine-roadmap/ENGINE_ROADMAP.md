@@ -13,12 +13,12 @@
 | --- | --- |
 | §4.4 sub-task 1–7 (cgltf → glTF 풀 PBR sampling) | ✅ WebGPU에서 완료. commit `4f809dd` |
 | §4.4 sub-task 9 (A/B 모드 머티리얼 토글) | ✅ WebGPU에서 완료 (2026-05-24) |
-| §4.4 sub-task 8 (SceneNode 최소 구현) | ⬜ |
-| Vulkan parity — material bind group | ⬜ (헬멧 네이티브에선 회색) |
-| §4.5 잔여 한계 | 4개 — Vulkan parity, tangent.w, emissive HDR, ORM-packed MR fallback |
+| Vulkan parity — 헬멧 네이티브 풀 PBR | ✅ bindless 경로로 완료 (2026-05-24). 초기화 순서 버그 + 네이티브 resize 크래시 동시 수정 |
+| §4.4 sub-task 8 (SceneNode 최소 구현) | ⬜ **다음** |
+| §4.5 잔여 한계 | 3개 — tangent.w, emissive HDR, ORM-packed MR fallback |
 
-**다음 시퀀스**: ~~9 (시연 통합)~~ ✅ → **Vulkan parity (다음)** → 8 (SceneNode)
-→ C (TAA). Vulkan parity는 양 백엔드 동등성 확보. 8은 다중 메시 자산을 위한
+**다음 시퀀스**: ~~9 (시연 통합)~~ ✅ → ~~Vulkan parity~~ ✅ → **8 (SceneNode, 다음)**
+→ C (TAA). Vulkan parity로 양 백엔드 동등성 확보. 8은 다중 메시 자산을 위한
 인프라. 그 뒤 큰 단위(C, TAA)로 이동.
 
 상세 디버깅 여정: [`CHANGELOG_2026-05-21.md`](../../archive/changelogs/CHANGELOG_2026-05-21.md)
@@ -383,8 +383,11 @@ Vulkan parity는 별도 항목.
 
 **비번호 항목 (sub-task 9 이후, §3 시퀀스 참조)**:
 
-- ⬜ **Vulkan parity** — 네이티브 빌드도 헬멧을 풀 PBR로 렌더링. set 2 ×
-  bindless 충돌 해소 결정 필요. 양 백엔드 동등성. **이게 다음 작업.**
+- ✅ **Vulkan parity** — 네이티브 빌드도 헬멧을 풀 PBR로 렌더링 (2026-05-24).
+  set 2 충돌은 "bindless 재사용"으로 해소 — 헬멧 5개 텍스처를 bindless 배열에
+  등록하고 인덱스를 ObjectData에 실음. baseColor는 `roughnessAOPad.b`(빌딩과
+  공유), 나머지는 `textureIndices`. 자세한 내용 + 디버깅 여정(초기화 순서 버그,
+  resize 크래시): [`CHANGELOG_2026-05-24.md`](../../archive/changelogs/CHANGELOG_2026-05-24.md) 2부.
 
 ### 4.5 알려진 위험과 대응
 
@@ -408,10 +411,10 @@ Vulkan parity는 별도 항목.
 
 자세한 후속 행동: [`CHANGELOG_2026-05-22.md`](../../archive/changelogs/CHANGELOG_2026-05-22.md) §7.
 
-- **Vulkan parity 부재** — 네이티브 빌드는 헬멧이 회색. set 2 점유 중인
-  bindless texture array와 material bind group의 충돌 해소가 필요.
-  결정 옵션: bindless를 set 3으로 이동 / bindless 안에 material 통합 /
-  별도 파이프라인 가지. **§3 시퀀스에서 sub-task 9 이후 즉시 처리 예정.**
+- ✅ **Vulkan parity** (2026-05-24 해소) — 충돌 옵션 중 "bindless 안에 material
+  통합"을 채택: 헬멧 텍스처를 기존 bindless 배열에 등록하고 인덱스를
+  ObjectData로 전달, set 2는 그대로 bindless가 점유. 부수적으로 bindless가
+  애초에 꺼져 있던 초기화 순서 버그와 네이티브 resize 크래시도 수정.
 - **Tangent.w (bitangent handedness) 미저장** — `Vertex.tangent`를 vec4로
   승격하면 해소. 거울 대칭 UV 자산이 등장할 때까지 미루기.
 - **Emissive HDR 미지원** — `gBuffer2.gba`가 RGBA8Unorm이라 emissive 값이

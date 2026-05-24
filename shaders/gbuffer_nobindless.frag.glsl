@@ -23,5 +23,8 @@ void main() {
 
     gBuffer0 = vec4(normalize(fragNormal), fragRoughness);
     gBuffer1 = vec4(albedoLinear, fragMetallic);
-    gBuffer2 = vec4(fragAO, 0.0, 0.0, 1.0);
+    // .gba carries emissive (deferred lighting adds gb2.gba to the final color);
+    // this fallback path has no emissive, so keep it zero — a non-zero alpha
+    // here would tint the whole scene.
+    gBuffer2 = vec4(fragAO, 0.0, 0.0, 0.0);
 }

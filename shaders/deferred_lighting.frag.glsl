@@ -164,6 +164,7 @@ void main() {
     vec3  albedo    = gb1.rgb;
     float metallic  = gb1.a;
     float ao        = gb2.r;
+    vec3  emissive  = gb2.gba;  // self-emission packed by the G-Buffer pass
 
     // G-Buffer debug views: bypass PBR and output raw channel data
     if (ubo.debugView != 0) {
@@ -261,6 +262,11 @@ void main() {
         vec3 radianceP = ubo.pointLights[i].color * ubo.pointLights[i].intensity * atten;
         color += (kDp * albedo / PI + specP) * radianceP * NdotLp;
     }
+
+    // Self-emission (glTF emissive). Added after all lighting so emissive
+    // surfaces glow regardless of incident light. LDR-clamped: gBuffer2 is
+    // RGBA8Unorm so values arrive in [0,1] (HDR emissive is a known limit).
+    color += emissive;
 
     // CSM cascade debug visualization
     if (ubo.debugCascades > 0.5) {

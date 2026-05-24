@@ -113,14 +113,18 @@ Renderer::Renderer(GLFWwindow* window,
     // Step 6: WebGPU material bind-group infrastructure must exist BEFORE the
     // G-Buffer pipeline layout is built (it consumes the layout at set 2).
     createMaterialBindGroupInfrastructure();
+#else
+    // Phase 4: the bindless texture manager MUST be created before the G-Buffer
+    // pass. GBufferPass selects the bindless vs. nobindless fragment shader from
+    // whether the bindless descriptor-set layout exists at init time. This call
+    // used to run *after* createGBufferPass(), so native always fell back to the
+    // nobindless shader (no material textures) even on bindless-capable GPUs.
+    createBindlessResources();
 #endif
     createGBufferPass();
     createDeferredLightingPass();
 
 #ifndef __EMSCRIPTEN__
-    // Phase 4: Bindless texture manager (Vulkan bindless — not available on WebGPU)
-    createBindlessResources();
-
     // Phase 4.1: GPU Profiler (Vulkan-only)
     {
         auto* vulkanDevice = dynamic_cast<RHI::Vulkan::VulkanRHIDevice*>(rhiBridge->getDevice());
@@ -310,6 +314,11 @@ bool Renderer::setShowcaseMesh(const std::vector<Vertex>&         vertices,
         clearShowcaseMesh();
         return false;
     }
+    // Keep a CPU copy: the Vulkan bindless path patches the texture indices
+    // into it after the textures are registered (uploadShowcaseMaterialTextures)
+    // and re-uploads. At this point all texture slots are still the 0xFFFFFFFF
+    // sentinel, so the first upload renders with scalar factors only.
+    showcaseAsset.objectData = od;
     showcaseAsset.objectBuffer->write(&od, sizeof(od));
 
     // visibleIndices buffer — set 1 binding 1 in the building shader. The
@@ -441,6 +450,58 @@ size_t Renderer::uploadShowcaseMaterialTextures(const assets::ImportedAsset& ass
     showcaseAsset.emissiveView  = resolveView(mat.emissiveTextureIndex);
     showcaseAsset.aoView        = resolveView(mat.occlusionTextureIndex);
 
+#ifndef __EMSCRIPTEN__
+    // ----------------------------------------------------------------------
+    // Vulkan: register the resolved views in the bindless texture array and
+    // patch their slot indices into the showcase ObjectData. The G-Buffer
+    // shader samples allTextures[index] for any slot whose index != INVALID,
+    // and falls back to the scalar ObjectData factors otherwise — exactly the
+    // way buildings already work for their albedo slot. Slot mapping:
+    //   roughnessAOPad.b = baseColor   (legacy slot, shared with buildings)
+    //   textureIndices.x = normal
+    //   textureIndices.y = metallicRoughness
+    //   textureIndices.z = emissive
+    //   textureIndices.w = occlusion (AO)
+    if (bindlessTextureManager && bindlessTextureManager->isAvailable()
+        && showcaseAsset.objectBuffer) {
+        // Linear sampler for the helmet's high-res maps (created once).
+        if (!showcaseMaterialSampler) {
+            rhi::SamplerDesc sd{};
+            sd.magFilter     = rhi::FilterMode::Linear;
+            sd.minFilter     = rhi::FilterMode::Linear;
+            sd.mipmapFilter  = rhi::MipmapMode::Linear;
+            sd.addressModeU  = rhi::AddressMode::Repeat;
+            sd.addressModeV  = rhi::AddressMode::Repeat;
+            sd.addressModeW  = rhi::AddressMode::Repeat;
+            sd.maxAnisotropy = 1;
+            sd.label         = "ShowcaseMaterialSampler";
+            showcaseMaterialSampler = rhiBridge->getDevice()->createSampler(sd);
+        }
+
+        const uint32_t kInvalid = rendering::BindlessTextureManager::INVALID_INDEX;
+        auto reg = [&](rhi::RHITextureView* view) -> uint32_t {
+            if (!view || !showcaseMaterialSampler) return kInvalid;
+            return bindlessTextureManager->registerTexture(view, showcaseMaterialSampler.get());
+        };
+
+        const uint32_t baseColorIdx = reg(showcaseAsset.baseColorView);
+        const uint32_t normalIdx    = reg(showcaseAsset.normalView);
+        const uint32_t mrIdx        = reg(showcaseAsset.mrView);
+        const uint32_t emissiveIdx  = reg(showcaseAsset.emissiveView);
+        const uint32_t aoIdx        = reg(showcaseAsset.aoView);
+
+        showcaseAsset.objectData.roughnessAOPad.b = glm::uintBitsToFloat(baseColorIdx);
+        showcaseAsset.objectData.textureIndices    = glm::uvec4(normalIdx, mrIdx, emissiveIdx, aoIdx);
+        showcaseAsset.objectBuffer->write(&showcaseAsset.objectData,
+                                          sizeof(showcaseAsset.objectData));
+
+        LOG_INFO("Renderer") << "Showcase bindless slots: baseColor=" << baseColorIdx
+                             << " normal=" << normalIdx << " mr=" << mrIdx
+                             << " emissive=" << emissiveIdx << " ao=" << aoIdx
+                             << " (0xFFFFFFFF = none)";
+    }
+#endif
+
 #ifdef __EMSCRIPTEN__
     // Build the WebGPU set 2 bind group: each slot picks the helmet's own
     // view if available, otherwise the Renderer's default dummy view. This
@@ -530,6 +591,17 @@ void Renderer::handleFramebufferResize(int width, int height) {
         wgslPostprocessBG = rhiBridge->getDevice()->createBindGroup(bd);
     }
 #else
+    // Native deferred path: the G-Buffer color targets are resolution-dependent
+    // and the G-Buffer pass holds a pointer to the depth view that
+    // createRHIDepthResources() just reallocated. Resize the G-Buffer (this also
+    // updates its depth-view pointer) and rebuild the deferred lighting pass so
+    // its bind group references the new G-Buffer + depth views. Without this the
+    // pass keeps a dangling old depth view and crashes on the next frame.
+    if (gBufferPass && gBufferPass->isInitialized() && rhiDepthImageView) {
+        gBufferPass->resize(static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+                            rhiDepthImageView.get());
+        createDeferredLightingPass();
+    }
     recreatePostProcessResources();
 #endif
 }
@@ -610,6 +682,15 @@ void Renderer::recreateSwapchain() {
         wgslPostprocessBG = rhiBridge->getDevice()->createBindGroup(bd);
     }
 #else
+    // Native deferred path: resize the G-Buffer (updates its depth-view pointer)
+    // and rebuild the deferred lighting pass against the new G-Buffer + depth
+    // views, mirroring the WebGPU branch above. Otherwise the pass keeps a
+    // dangling old depth view after createRHIDepthResources() and crashes.
+    if (gBufferPass && gBufferPass->isInitialized() && rhiDepthImageView) {
+        gBufferPass->resize(static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+                            rhiDepthImageView.get());
+        createDeferredLightingPass();
+    }
     recreatePostProcessResources();
 #endif
 

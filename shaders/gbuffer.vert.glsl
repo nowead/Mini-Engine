@@ -52,7 +52,14 @@ layout(location = 3) out float fragMetallic;
 layout(location = 4) out float fragRoughness;
 layout(location = 5) out float fragAO;
 layout(location = 6) out vec3 fragAlbedo;
-layout(location = 7) out flat uint fragAlbedoIndex;  // Phase 4: bindless texture slot
+layout(location = 7) out flat uint fragAlbedoIndex;     // baseColor bindless slot (roughnessAOPad.b)
+// Showcase PBR (glTF) bindless slots. Buildings leave these at 0xFFFFFFFF so
+// the fragment skips the extra samples and behaves exactly as before.
+layout(location = 8)  out vec3      fragTangent;        // world-space, unnormalized (0 = no tangent)
+layout(location = 9)  out flat uint fragNormalIndex;    // textureIndices.x
+layout(location = 10) out flat uint fragMRIndex;        // textureIndices.y (G=roughness, B=metallic)
+layout(location = 11) out flat uint fragEmissiveIndex;  // textureIndices.z
+layout(location = 12) out flat uint fragAOIndex;        // textureIndices.w
 
 void main() {
     uint actualIndex = visibleIndices.indices[gl_InstanceIndex];
@@ -71,9 +78,18 @@ void main() {
     fragRoughness = obj.roughnessAOPad.r;
     fragAO        = obj.roughnessAOPad.g;
 
-    // Phase 4: roughnessAOPad.b holds the bindless texture index as a float-encoded uint.
-    // 0xFFFFFFFF (cast as float: ~3.4e38) indicates "no texture → use procedural albedo".
-    fragAlbedoIndex = floatBitsToUint(obj.roughnessAOPad.b);
+    // Phase 4: roughnessAOPad.b holds the baseColor bindless index as a
+    // float-encoded uint. 0xFFFFFFFF indicates "no texture → procedural albedo".
+    fragAlbedoIndex   = floatBitsToUint(obj.roughnessAOPad.b);
+
+    // Showcase PBR bindless slots (glTF). Pass the tangent unnormalized so the
+    // zero-vector sentinel (asset supplied no tangent, e.g. the procedural
+    // cube) survives interpolation; the fragment checks length() before TBN.
+    fragTangent       = mat3(obj.worldMatrix) * inTangent;
+    fragNormalIndex   = obj.textureIndices.x;
+    fragMRIndex       = obj.textureIndices.y;
+    fragEmissiveIndex = obj.textureIndices.z;
+    fragAOIndex       = obj.textureIndices.w;
 
     gl_Position = ubo.proj * ubo.view * ubo.model * worldPos4;
 }

@@ -27,19 +27,22 @@ namespace rendering {
  *   boundingBoxMin   16 bytes  (w unused -- AABB pad)
  *   boundingBoxMax   16 bytes  (w unused -- AABB pad)
  *   colorAndMetallic 16 bytes  (rgb = albedo scalar, a = metallic scalar)
- *   roughnessAOPad   16 bytes  (r = roughness, g = ao, b = legacy bindless
- *                               albedo idx as float, a = unused pad). The .b
- *                               slot is being deprecated in favor of
- *                               textureIndices.x; both are written for now
- *                               so existing shader paths keep working.
- *   textureIndices   16 bytes  uvec4 of bindless texture indices, glTF-aligned:
- *                                 x = baseColor (albedo)
- *                                 y = normal
- *                                 z = metallicRoughness (R may also carry AO
- *                                     per the ORM packing convention)
- *                                 w = emissive
- *                              Sentinel 0xFFFFFFFF in any slot means "no
- *                              texture; use the scalar inputs above".
+ *   roughnessAOPad   16 bytes  (r = roughness, g = ao, b = baseColor bindless
+ *                               idx as float, a = unused pad). The .b slot is
+ *                               the legacy albedo index used by both buildings
+ *                               and the glTF showcase (Vulkan bindless path).
+ *   textureIndices   16 bytes  uvec4 of bindless texture indices for the
+ *                              additional glTF PBR maps (Vulkan only; the
+ *                              WebGPU path binds these via a set-2 bind group
+ *                              instead and ignores this field):
+ *                                 x = normal
+ *                                 y = metallicRoughness (G=roughness, B=metallic)
+ *                                 z = emissive
+ *                                 w = occlusion (AO)
+ *                              baseColor lives in roughnessAOPad.b above, not
+ *                              here, so buildings (which only set .b) keep
+ *                              working unchanged. Sentinel 0xFFFFFFFF in any
+ *                              slot means "no texture; use the scalar inputs".
  */
 struct alignas(16) ObjectData {
     glm::mat4  worldMatrix;

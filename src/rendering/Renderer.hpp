@@ -494,6 +494,13 @@ private:
         std::unique_ptr<rhi::RHIBindGroup>  ssboBindGroup;   // set 1
         uint32_t                            indexCount = 0;
 
+        // CPU-side copy of the single ObjectData entry. setShowcaseMesh writes
+        // it with the scalar material factors; uploadShowcaseMaterialTextures
+        // patches in the bindless texture indices (Vulkan) once the textures
+        // are registered, then re-uploads objectBuffer. Keeping the CPU copy
+        // avoids re-deriving the AABB / factors at patch time.
+        rendering::ObjectData               objectData{};
+
         // PBR material textures from the source glTF, indexed in parallel to
         // ImportedAsset::textures. Slots with no texture stay null. The
         // showcase's per-material bind group below references the four
@@ -624,6 +631,12 @@ private:
     std::array<std::unique_ptr<rhi::RHITexture>,     3> bindlessMaterialTextures;
     std::array<std::unique_ptr<rhi::RHITextureView>, 3> bindlessMaterialViews;
     std::unique_ptr<rhi::RHISampler>                    bindlessSampler;
+    // Trilinear sampler used when registering glTF showcase material textures
+    // in the bindless array. bindlessSampler is Nearest (fine for the 1×1
+    // solid building textures) but produces aliasing on the helmet's 2K maps,
+    // so the showcase textures get their own Linear sampler. Created lazily in
+    // uploadShowcaseMaterialTextures.
+    std::unique_ptr<rhi::RHISampler>                    showcaseMaterialSampler;
 #endif
 
     // RHI initialization methods (Phase 4)

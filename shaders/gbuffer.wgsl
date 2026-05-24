@@ -31,8 +31,8 @@ struct ObjectData {
     boundingBoxMin:   vec4<f32>,
     boundingBoxMax:   vec4<f32>,
     colorAndMetallic: vec4<f32>,   // rgb = albedo, a = metallic
-    roughnessAOPad:   vec4<f32>,   // r = roughness, g = ao, b = legacy bindless albedo idx, a = pad
-    textureIndices:   vec4<u32>,   // x = baseColor, y = normal, z = MR, w = emissive (0xFFFFFFFF = none)
+    roughnessAOPad:   vec4<f32>,   // r = roughness, g = ao, b = baseColor bindless idx (Vulkan), a = pad
+    textureIndices:   vec4<u32>,   // Vulkan bindless only: x=normal y=MR z=emissive w=AO (WebGPU ignores; uses set-2 bind group)
 }
 
 struct ObjectBuffer {
