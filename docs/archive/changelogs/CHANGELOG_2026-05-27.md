@@ -1,0 +1,150 @@
+# 변경 이력 — 2026-05-27
+
+> 작업 범위: ENGINE_ROADMAP §D — **멀티스레드 커맨드 레코딩**(Vulkan 전용)의
+> **D2 — 워커 스레드 풀**. D1(per-thread `VkCommandPool`, 커밋 `a4b933f`)에
+> 이어, 의존성 없는 패스를 병렬 기록(D3)하기 위한 스레드 풀 인프라를 얹는다.
+> 이 문서는 풀 자체의 설계 + 검증 중 잡은 동시성 버그 2종의 디버깅 여정을 다룬다.
+
+---
+
+## 1. 구성 — 독립 인프라
+
+| 단계 | 내용 | 상태 |
+| --- | --- | --- |
+| D2-a | `utils::ThreadPool` (`std::jthread` 워커 + 작업 제출/대기) | ✅ 이 커밋 |
+| D2-b | `threadpool_test` 독립 검증 (정확성·병렬성) | ✅ 이 커밋 |
+
+D2 시점에는 **렌더 루프가 풀을 호출하지 않는다** — 순수 인프라이므로 단일 스레드
+경로는 불변. 배선(RenderGraph 레벨 dispatch)은 D3. Vulkan 전용 작업이라 네이티브
+`MiniEngine` 타깃에만 등록(WebGPU/WASM은 멀티스레드 명령 기록 미지원).
+
+---
+
+## 2. 설계 — 풀
+
+- **워커**: `std::jthread` 벡터. 기본 개수 `max(1, hardware_concurrency() - 1)`
+  (제출하는 메인 스레드에 1코어 양보).
+- **작업 큐**: mutex로 보호되는 `std::queue<std::function<void()>>` + **순수
+  `std::condition_variable` + 명시적 `m_stopping` 플래그**. (`condition_variable_any`
+  + `stop_token` 대기는 의도적으로 회피 — §3.1 참조. `jthread`는 auto-join
+  용도로만 사용.)
+- **제출**: `submit(F, Args...) → std::future<R>`. `std::packaged_task`로 감싸
+  예외가 호출자의 `future.get()`으로 전파됨(렌더 핫루프 밖 인프라라 예외 허용).
+- **일괄 대기**: `waitForAll()` — 진행 중 + 대기 중 작업이 모두 끝날 때까지 블록
+  (atomic 대신 mutex 하 `m_outstanding` 카운터 + cv). D3의 **의존성 레벨 배리어**가
+  될 인터페이스.
+- **종료 시 drain**: `m_stopping`이 큐를 버리지 않음. 워커는 큐가 빌 때까지 남은
+  작업을 모두 처리한 뒤 종료 — 프레임 스코프 dispatch에 안전.
+
+---
+
+## 3. 디버깅 여정 — 통과한 줄 알았던 풀
+
+D2-b 테스트(future 결과 / 동시 실행 / 예외 전파 / `waitForAll` / 종료 drain)를
+작성해 돌리자 두 개의 동시성 버그가 순서대로 드러났다. 둘 다 단일 스레드에선
+절대 안 보이는 종류다.
+
+### 3.1 종료 데드락 — `condition_variable_any` + `stop_token`
+
+첫 구현은 워커 대기에 C++20의 `std::condition_variable_any::wait(lock, stop_token,
+pred)` (stop-aware 오버로드)를 썼다. 깔끔해 보였지만 — **첫 테스트(`testFutureResults`)
+가 끝나고 풀 소멸자에서 멈췄다.** 출력은 `[ok] sum of squares matches`까지만
+찍히고 프로세스가 영구 대기(kill 필요).
+
+- 증상 진단이 까다로웠던 이유: 출력이 파일로 리다이렉트되면 stdout이 **full-buffered**
+  라, 데드락 시점까지의 출력이 flush되지 않아 화면이 비어 보였다. `setvbuf(stdout,
+  nullptr, _IONBF, 0)`로 무버퍼링하고서야 "어디까지 갔는지"가 보였다.
+- 원인: MSVC STL에서 `condition_variable_any` + `stop_token` 대기는 종료 경로에서
+  데드락한 전례가 있다. stop_callback이 내부 CV를 깨우는 메커니즘과 소멸 타이밍이
+  얽힌다.
+- 수정: 고전 패턴으로 교체 — 순수 `std::condition_variable` + mutex 하 `bool
+  m_stopping`. 워커는 `wait(lock, []{ return m_stopping || !m_tasks.empty(); })`.
+  소멸자가 `m_stopping=true` + `notify_all()`. `stop_token`을 대기에서 완전히
+  제거(`jthread`는 join 편의 때문에 유지). 데드락 소멸.
+
+### 3.2 멤버 소멸 순서 레이스 — drain이 큐를 버린다
+
+데드락이 풀린 뒤 4/5 통과, 마지막 `testShutdownDrains`만 실패했다. 200개를
+제출하고 `waitForAll` 없이 풀을 파괴하면 소멸자가 큐를 drain해야 하는데 —
+**매번 정확히 "200개 중 2개"만 처리됐다.** 2 = 워커 수. 이 "워커 수만큼만"이라는
+숫자가 결정적 단서였다.
+
+소멸자에 진단을 넣자 소멸 시점에 **큐에 199개가 분명히 남아 있었다**(`queue size
+= 199, outstanding = 200`). 큐는 비어 있지 않은데 워커는 1개씩만 처리하고 조기
+종료한 것.
+
+원인은 **멤버 소멸 순서**였다. 헤더 선언 순서가:
+
+```
+std::vector<std::jthread> m_workers;   // 가장 먼저 선언
+std::queue<...>           m_tasks;
+std::mutex                m_mutex;
+std::condition_variable   m_taskAvailable;
+...
+```
+
+C++ 멤버는 **선언 역순으로 소멸**한다. `m_workers`가 맨 먼저 선언됐으니 **가장
+나중에 소멸**(= jthread join이 가장 늦게 일어남). 그래서 소멸 순서가:
+
+1. `~ThreadPool` 본문 (`m_stopping=true`, `notify_all`)
+2. ... `m_mutex` 소멸 ← **mutex 파괴**
+3. `m_tasks` 소멸 ← **큐 파괴**
+4. `m_workers` 소멸 ← jthread join (워커가 **아직 돌면서** 죽은 mutex/큐를 사용!)
+
+즉 워커가 큐를 drain하는 도중에 큐와 뮤텍스가 발밑에서 파괴됐다. 워커는 파괴된
+(빈) 큐를 보고 `if (m_tasks.empty()) return;`으로 조기 종료 → 197개 유실. UB.
+
+- 수정: **소멸자 본문에서 멤버 파괴 전에 워커를 명시적 join**.
+
+  ```cpp
+  ThreadPool::~ThreadPool() {
+      { std::lock_guard lock(m_mutex); m_stopping = true; }
+      m_taskAvailable.notify_all();
+      for (std::jthread& w : m_workers)
+          if (w.joinable()) w.join();   // mutex/큐가 살아 있는 동안 join
+  }
+  ```
+
+  이러면 워커가 큐를 끝까지 drain하고 종료한 **뒤**에 멤버가 파괴된다.
+
+> **D3로의 함의**: 3.2는 정확히 §D의 D3 장애물 중 하나(패스별 CB 수명 — 프레임
+> 풀 reset)와 같은 부류의 "**동시 실행 중인 자원의 수명**" 문제다. D3에서 워커가
+> primary CB에 기록하는 동안 메인이 풀을 reset/제출하는 순서를 동일하게 조심해야
+> 한다.
+
+---
+
+## 4. 검증
+
+`threadpool_test` — 순수 std 라이브러리 테스트(Vulkan/GLFW 의존 없음):
+
+1. `submit` 결과가 `std::future`로 회수됨 (제곱합 100개).
+2. 작업이 실제 병렬 실행(워커 수만큼의 블로킹 작업이 모두 배리어 도달 + 별개
+   스레드 id).
+3. 작업 내 예외가 `future.get()`으로 전파.
+4. `waitForAll`이 배리어로 동작(모든 작업 완료 관측) + 배리어 후 풀 재사용 가능.
+5. 종료 시 큐 drain(명시적 `waitForAll` 없이도 소멸자가 전부 처리).
+
+5회 연속 실행 모두 5/5 결정적 통과(24코어 → 워커 23). `MiniEngine` 네이티브
+빌드도 통과(풀은 아직 미호출이라 렌더 무회귀).
+
+---
+
+## 5. 수정 파일 요약
+
+| 파일 | 변경 |
+| --- | --- |
+| `src/utils/ThreadPool.hpp` | **신규** — 풀 인터페이스 + `submit` 템플릿(packaged_task) |
+| `src/utils/ThreadPool.cpp` | **신규** — 워커 루프(plain CV + `m_stopping`), drain, `waitForAll`, 소멸자 명시적 join |
+| `tests/threadpool_test.cpp` | **신규** — 5종 정확성·병렬성 테스트 |
+| `CMakeLists.txt` | 네이티브 `MiniEngine`에 ThreadPool 소스 + `threadpool_test` 실행 타깃(native-only) |
+
+---
+
+## 6. 다음 — D3
+
+D3: RenderGraph 병렬 스케줄러. 정렬된 패스를 의존성 레벨로 그룹화 → 같은 레벨
+독립 패스를 워커가 각자 primary CB에 기록 → 메인이 레벨 순서대로 제출. 착수 전
+§D에 적힌 장애물 둘을 먼저 해소: (1) 전역 `s_imageLayouts` 레이스, (2)
+`~VulkanRHICommandBuffer`의 `waitIdle()`(패스별 CB 수명 모델 재설계). 3.2에서
+본 "동시 실행 중 자원 수명" 주의가 (2)에 그대로 적용된다.

@@ -230,6 +230,9 @@ if(NOT EMSCRIPTEN)
         # Phase 4.1: GPU Profiling
         src/utils/GpuProfiler.cpp
         src/utils/GpuProfiler.hpp
+        # Roadmap D2: worker thread pool (multithreaded command recording)
+        src/utils/ThreadPool.cpp
+        src/utils/ThreadPool.hpp
         # Phase 2: Render Graph
         src/rendering/graph/RenderGraph.cpp
         src/rendering/graph/RenderGraph.hpp
@@ -794,6 +797,18 @@ if(BUILD_TESTS)
             )
         endif()
     endfunction()
+
+    # Roadmap D2: ThreadPool correctness test (pure std, native-only, no Vulkan/GLFW)
+    if(NOT EMSCRIPTEN)
+        add_executable(threadpool_test
+            tests/threadpool_test.cpp
+            src/utils/ThreadPool.cpp
+            src/utils/ThreadPool.hpp
+        )
+        target_include_directories(threadpool_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+        find_package(Threads REQUIRED)
+        target_link_libraries(threadpool_test PRIVATE Threads::Threads)
+    endif()
 
     # RHI Smoke Test (interactive, run manually with: make demo-smoke)
     add_executable(rhi_smoke_test

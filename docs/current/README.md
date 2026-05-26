@@ -15,8 +15,8 @@
 
 **현재 진입 작업**: 로드맵 **D — 멀티스레드 커맨드 레코딩** (Vulkan 전용, 2026-05-26 착수).
 패스 단위 병렬 기록(워커 스레드가 각자 primary CB에 기록 → 메인이 순서대로 제출).
-단계: D1 RHI 스레드 안전 커맨드 풀 → D2 스레드 풀 → D3 RenderGraph 병렬 스케줄러
-→ D4 검증·측정. 상세: [ENGINE_ROADMAP §D](engine-roadmap/ENGINE_ROADMAP.md).
+단계: ~~D1 RHI 스레드 안전 커맨드 풀~~ ✅ → ~~D2 스레드 풀~~ ✅ → **D3 RenderGraph
+병렬 스케줄러** → D4 검증·측정. 상세: [ENGINE_ROADMAP §D](engine-roadmap/ENGINE_ROADMAP.md).
 
 **완료된 시퀀스**: AB(glTF + PBR) → Vulkan parity → sub-task 8(다중 메시) →
 C(TAA, Vulkan + WebGPU) → 그림자 품질(하드웨어 PCF). 상세는 archive changelog 참조.
@@ -30,6 +30,7 @@ C(TAA, Vulkan + WebGPU) → 그림자 품질(하드웨어 PCF). 상세는 archiv
 | [archive/refactoring/webgpu-showcase/](../archive/refactoring/webgpu-showcase/WEBGPU_SHOWCASE_PLAN.md) | WebGPU Showcase 격상 (2026-05-14 ~ 2026-05-20) |
 | [archive/refactoring/webgpu-deferred/](../archive/refactoring/webgpu-deferred/) | WebGPU Deferred Rendering 포팅 |
 
-최근 변경 이력: [CHANGELOG_2026-05-26](../archive/changelogs/CHANGELOG_2026-05-26.md)
+최근 변경 이력: [CHANGELOG_2026-05-27](../archive/changelogs/CHANGELOG_2026-05-27.md)
+(D2 스레드 풀 · 동시성 버그 2종) · [05-26](../archive/changelogs/CHANGELOG_2026-05-26.md)
 (TAA Vulkan+WebGPU · 그림자 하드웨어 PCF) · [05-25](../archive/changelogs/CHANGELOG_2026-05-25.md)
 (그림자/컬 깜빡임 수정) · [05-24](../archive/changelogs/CHANGELOG_2026-05-24.md) (A/B · Vulkan parity · 다중 메시)

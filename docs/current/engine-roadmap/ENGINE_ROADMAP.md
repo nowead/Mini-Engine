@@ -202,7 +202,11 @@ per-thread 풀 필요.
 - **D1** — ✅ RHI 스레드 안전 커맨드 인코더. `VulkanRHIDevice::getThreadLocalCommandPool()`
   (thread_id별 `VkCommandPool`, 생성만 mutex 가드 후 소유 스레드가 lock-free
   사용). 기본 인코더가 호출 스레드 풀에서 CB 할당. 단일 스레드 무회귀 검증 완료.
-- **D2** — 스레드 풀(`std::jthread`) + 작업 제출/대기.
+- **D2** — ✅ 스레드 풀(`utils::ThreadPool`, `std::jthread`) + 작업 제출/대기.
+  `submit→std::future` + `waitForAll()`(D3 레벨 배리어). 독립 `threadpool_test`로
+  검증. 동시성 버그 2종 수정(종료 데드락: `condition_variable_any`+`stop_token`
+  회피 / 멤버 소멸 순서 레이스: 소멸자 명시적 join). 자세한 내용:
+  [`CHANGELOG_2026-05-27.md`](../../archive/changelogs/CHANGELOG_2026-05-27.md).
 - **D3** — RenderGraph 병렬 스케줄러: 정렬 패스를 의존성 레벨로 그룹화 → 같은
   레벨 독립 패스를 워커가 각자 primary CB에 기록 → 메인이 레벨 순서대로 제출.
 - **D4** — 검증(경쟁/깜빡임 없음) + 4코어 CPU 프레임 시간 측정.
