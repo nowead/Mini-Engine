@@ -2,6 +2,9 @@
 
 #include "VulkanCommon.hpp"
 #include <GLFW/glfw3.h>
+#include <mutex>          // D1: per-thread command pool map guard
+#include <thread>
+#include <unordered_map>
 
 namespace RHI {
 namespace Vulkan {
@@ -99,6 +102,13 @@ public:
     vk::DescriptorPool getDescriptorPool() { return *m_descriptorPool; }
     vk::CommandPool getCommandPool() { return *m_commandPool; }
     vk::CommandPool getComputeCommandPool() { return m_hasDedicatedComputeQueue ? *m_computeCommandPool : *m_commandPool; }
+    // Sub-task D1: per-thread graphics command pool. Vulkan command pools are
+    // not thread-safe, so worker threads recording in parallel each need their
+    // own. Returns the calling thread's pool, creating it on first use (the
+    // creation map is mutex-guarded; the returned pool is then used lock-free by
+    // that one thread). Pools live as long as the device, so command buffers
+    // allocated from them have the same lifetime guarantees as before.
+    vk::CommandPool getThreadLocalCommandPool();
     bool hasDedicatedComputeQueue() const { return m_hasDedicatedComputeQueue; }
     bool hasTimelineSemaphoreSupport() const { return m_hasTimelineSemaphores; }
 
@@ -163,6 +173,11 @@ private:
     // Command pools
     vk::raii::CommandPool m_commandPool = nullptr;
     vk::raii::CommandPool m_computeCommandPool = nullptr;
+    // Sub-task D1: per-thread graphics command pools (see getThreadLocalCommandPool).
+    // Keyed by thread id; created on first use under m_threadPoolMutex, then read
+    // lock-free by the owning thread. RAII pools destroyed with the device.
+    std::mutex                                                  m_threadPoolMutex;
+    std::unordered_map<std::thread::id, vk::raii::CommandPool>  m_threadCommandPools;
 
     // Descriptor pool for bind groups (persistent, long-lived sets)
     vk::raii::DescriptorPool m_descriptorPool = nullptr;

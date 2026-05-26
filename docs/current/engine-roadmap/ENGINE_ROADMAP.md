@@ -181,23 +181,46 @@ Render Graph 의존성 변경 자동 처리되지만 셰이더 다수 수정.
 **리스크**: 중. 모션 벡터 정확도가 잘못되면 고스팅이 심각. 비교 토글 UI 같이
 가야 디버깅 가능.
 
-### D. 멀티스레드 커맨드 레코딩
+### D. 멀티스레드 커맨드 레코딩 — 🚧 진행 중 (2026-05-26 착수, Vulkan 전용)
 
-**작업 내용**: 스레드 풀(C++20 `std::jthread`) + 스레드별 `VkCommandPool` +
-RHI에 Secondary CB 타입 추가. Render Graph 스케줄러가 의존성 없는 패스를
-워커 스레드에 배정. WebGPU는 멀티스레드 명령 기록을 지원하지 않으므로
-이 작업은 Vulkan 전용.
+**작업 내용**: 스레드 풀(C++20 `std::jthread`) + 스레드별 `VkCommandPool`로
+의존성 없는 패스를 워커 스레드에서 병렬 기록. WebGPU는 멀티스레드 명령 기록을
+지원하지 않으므로 Vulkan 전용(WebGPU는 단일 스레드 유지).
 
-**작업량**: 3~4주.
+**아키텍처 결정 (착수 시점 분석)**:
+현재 RenderGraph는 단일 인코더에 패스를 순차 실행하고, **각 패스가 자체 render
+pass를 begin**한다. Vulkan secondary CB는 render pass를 열 수 없으므로(상속만),
+"draw를 secondary로 분산" 모델은 패스들이 서로 다른 렌더 타깃을 쓰는 이 엔진엔
+안 맞는다. 따라서 **패스 단위 병렬 기록**을 택한다: 각 패스를 워커가 **자체
+primary 커맨드버퍼**에 기록(진입 배리어 포함)하고, 메인 스레드가 의존성
+순서대로 제출. RenderGraph의 배리어 추론을 per-CB로 재배치한다.
+전제: RHI 커맨드 풀이 현재 **단일 공유 `m_commandPool`**(스레드 안전 X) →
+per-thread 풀 필요.
 
-**얻는 것**: Vulkan 면접 단골 주제 정복. 4코어에서 CPU 프레임 시간 30%대 감소
-가능. 진짜 "엔진의 코어 활용" 시연.
+**단계**:
 
-**의존성**: Render Graph 위에서 작업 — 이미 깔끔히 깔린 기반. 단 RHI 인터페이스
-확장 필요.
+- **D1** — ✅ RHI 스레드 안전 커맨드 인코더. `VulkanRHIDevice::getThreadLocalCommandPool()`
+  (thread_id별 `VkCommandPool`, 생성만 mutex 가드 후 소유 스레드가 lock-free
+  사용). 기본 인코더가 호출 스레드 풀에서 CB 할당. 단일 스레드 무회귀 검증 완료.
+- **D2** — 스레드 풀(`std::jthread`) + 작업 제출/대기.
+- **D3** — RenderGraph 병렬 스케줄러: 정렬 패스를 의존성 레벨로 그룹화 → 같은
+  레벨 독립 패스를 워커가 각자 primary CB에 기록 → 메인이 레벨 순서대로 제출.
+- **D4** — 검증(경쟁/깜빡임 없음) + 4코어 CPU 프레임 시간 측정.
 
-**리스크**: 중-상. Secondary CB의 `VkCommandBufferInheritanceInfo` 핸들링, 멀티
-스레드 디버깅, 두 백엔드 격차 처리.
+**D3 착수 전 해소할 장애물 (D1 착수 시 발견)**:
+
+- **전역 `s_imageLayouts` 맵** (`VulkanRHICommandEncoder.cpp`): 동적 렌더링
+  배리어용 이미지 레이아웃 추적기가 모든 인코더 공유 정적 가변 상태. 워커가
+  동시에 `beginRenderPass`하면 레이스. 대응: RenderGraph 패스는 이미 명시적
+  배리어를 emit하므로 그래프 경로에서 자동 배리어를 우회하거나 추적기를
+  thread-safe화.
+- **`~VulkanRHICommandBuffer`의 `waitIdle()`**: CB 소멸마다 디바이스 전체 대기
+  → 병렬화 무력화. 패스별 CB 수명 모델 재설계(프레임 풀 reset 기반) 필요.
+
+**작업량**: 3~4주(여러 세션). **얻는 것**: Vulkan 면접 단골 주제, 4코어에서 CPU
+프레임 시간 감소, "엔진 코어 활용" 시연. **의존성**: Render Graph 기반 + RHI
+확장. **리스크**: 중-상. 멀티스레드 커맨드 풀 수명, 배리어 per-CB 재배치, 제출
+순서 동기화.
 
 ### E. 메시 셰이더 + GPU-driven 클러스터 컬링
 

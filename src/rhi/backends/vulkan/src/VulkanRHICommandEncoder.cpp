@@ -445,8 +445,11 @@ VulkanRHICommandEncoder::VulkanRHICommandEncoder(VulkanRHIDevice* device)
     , m_commandBuffer(nullptr)
     , m_finished(false)
 {
+    // Sub-task D1: allocate from the calling thread's command pool so encoders
+    // can be recorded on worker threads in parallel (Vulkan pools are not
+    // thread-safe). On the main thread this is just that thread's own pool.
     vk::CommandBufferAllocateInfo allocInfo;
-    allocInfo.commandPool = m_device->getCommandPool();
+    allocInfo.commandPool = m_device->getThreadLocalCommandPool();
     allocInfo.level = vk::CommandBufferLevel::ePrimary;
     allocInfo.commandBufferCount = 1;
 

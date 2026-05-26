@@ -353,6 +353,24 @@ void VulkanRHIDevice::createCommandPool() {
     m_commandPool = vk::raii::CommandPool(m_device, poolInfo);
 }
 
+vk::CommandPool VulkanRHIDevice::getThreadLocalCommandPool() {
+    // Sub-task D1: one graphics command pool per recording thread. The map is
+    // mutex-guarded only for the (rare) creation path; the returned pool is then
+    // used exclusively by the calling thread, so command-buffer allocation is
+    // lock-free. Pools persist for the device's lifetime.
+    const std::thread::id tid = std::this_thread::get_id();
+    std::lock_guard<std::mutex> lock(m_threadPoolMutex);
+    auto it = m_threadCommandPools.find(tid);
+    if (it != m_threadCommandPools.end()) {
+        return *it->second;
+    }
+    vk::CommandPoolCreateInfo poolInfo;
+    poolInfo.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
+    poolInfo.queueFamilyIndex = m_graphicsQueueFamily;
+    auto res = m_threadCommandPools.emplace(tid, vk::raii::CommandPool(m_device, poolInfo));
+    return *res.first->second;
+}
+
 void VulkanRHIDevice::createComputeCommandPool() {
     if (m_hasDedicatedComputeQueue) {
         vk::CommandPoolCreateInfo poolInfo;
