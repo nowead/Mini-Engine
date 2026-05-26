@@ -13,10 +13,14 @@ layout(location = 4) in float fragRoughness;
 layout(location = 5) in float fragAO;
 layout(location = 6) in vec3 fragAlbedo;
 layout(location = 7) in flat uint fragAlbedoIndex;  // ignored in this variant
+// Locations 8-12 (showcase bindless slots) are unused by this fallback variant.
+layout(location = 13) in vec4 fragCurrClip;   // TAA: current clip pos (pre-divide)
+layout(location = 14) in vec4 fragPrevClip;   // TAA: previous clip pos (pre-divide)
 
 layout(location = 0) out vec4 gBuffer0;
 layout(location = 1) out vec4 gBuffer1;
 layout(location = 2) out vec4 gBuffer2;
+layout(location = 3) out vec2 gBuffer3;  // TAA screen-space velocity
 
 void main() {
     vec3 albedoLinear = pow(fragAlbedo, vec3(2.2));
@@ -27,4 +31,9 @@ void main() {
     // this fallback path has no emissive, so keep it zero — a non-zero alpha
     // here would tint the whole scene.
     gBuffer2 = vec4(fragAO, 0.0, 0.0, 0.0);
+
+    // TAA motion vector (same as the bindless variant).
+    vec2 currUV = (fragCurrClip.xy / fragCurrClip.w) * 0.5 + 0.5;
+    vec2 prevUV = (fragPrevClip.xy / fragPrevClip.w) * 0.5 + 0.5;
+    gBuffer3 = currUV - prevUV;
 }

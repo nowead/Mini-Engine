@@ -8,6 +8,19 @@ layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec2 inTexCoord;
 layout(location = 3) in vec3 inTangent;  // consumed by normal-map fragment path in a later sub-task
 
+// Full UniformBufferObject declaration. The G-Buffer vertex shader only needs
+// model/view/proj + prevViewProj, but prevViewProj lives at the END of the C++
+// struct, so every preceding field must be declared for its std140 offset to
+// resolve correctly. The trailing-field placement keeps all other shaders
+// (deferred/building/WGSL) unchanged. Must match C++ UniformBufferObject
+// (src/utils/Vertex.hpp).
+struct PointLight {
+    vec3  position;
+    float radius;
+    vec3  color;
+    float intensity;
+};
+
 layout(set = 0, binding = 0) uniform UniformBufferObject {
     mat4 model;
     mat4 view;
@@ -25,6 +38,12 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
     vec2 shadowMapSize;
     float shadowBias;
     float shadowStrength;
+    PointLight pointLights[128];
+    uint  numPointLights;
+    float debugCascades;
+    int   debugView;
+    float abSplitX;
+    mat4  prevViewProj;   // TAA: previous frame's proj*view*model
 } ubo;
 
 // MUST match C++ ObjectData (InstancedRenderData.hpp) — 144 bytes.
@@ -60,6 +79,10 @@ layout(location = 9)  out flat uint fragNormalIndex;    // textureIndices.x
 layout(location = 10) out flat uint fragMRIndex;        // textureIndices.y (G=roughness, B=metallic)
 layout(location = 11) out flat uint fragEmissiveIndex;  // textureIndices.z
 layout(location = 12) out flat uint fragAOIndex;        // textureIndices.w
+// TAA motion vectors: current + previous clip-space position (pre-divide, so
+// the perspective divide happens per-fragment for a correct screen-space delta).
+layout(location = 13) out vec4 fragCurrClip;
+layout(location = 14) out vec4 fragPrevClip;
 
 void main() {
     uint actualIndex = visibleIndices.indices[gl_InstanceIndex];
@@ -91,5 +114,13 @@ void main() {
     fragEmissiveIndex = obj.textureIndices.z;
     fragAOIndex       = obj.textureIndices.w;
 
-    gl_Position = ubo.proj * ubo.view * ubo.model * worldPos4;
+    // TAA: current and previous clip positions of the SAME world point. Static
+    // geometry only moves on screen because the camera moved, so the difference
+    // is the camera motion vector. (Per-object animation would need a per-object
+    // previous world matrix; deferred to a later step.)
+    vec4 currClip = ubo.proj * ubo.view * ubo.model * worldPos4;
+    fragCurrClip  = currClip;
+    fragPrevClip  = ubo.prevViewProj * worldPos4;
+
+    gl_Position = currClip;
 }

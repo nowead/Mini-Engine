@@ -3217,6 +3217,13 @@ void Renderer::performFrustumCullingAsync(uint32_t frameIndex, uint32_t objectCo
 // Phase 8: RHI Uniform Buffer Update
 // ============================================================================
 
+// Van der Corput / Halton low-discrepancy sample in base b (TAA jitter).
+static float haltonSample(uint32_t i, uint32_t b) {
+    float f = 1.0f, r = 0.0f;
+    while (i > 0) { f /= static_cast<float>(b); r += f * static_cast<float>(i % b); i /= b; }
+    return r;
+}
+
 void Renderer::updateRHIUniformBuffer(uint32_t currentImage) {
     if (currentImage >= rhiUniformBuffers.size() || !rhiUniformBuffers[currentImage]) {
         return;
@@ -3225,9 +3232,32 @@ void Renderer::updateRHIUniformBuffer(uint32_t currentImage) {
     UniformBufferObject ubo{};
     ubo.model   = glm::mat4(1.0f);
     ubo.view    = viewMatrix;
-    ubo.proj    = projectionMatrix;
+
+    // TAA sub-pixel jitter: nudge the projection by a fraction of a pixel each
+    // frame (Halton(2,3), 8-sample loop) so accumulated frames super-sample the
+    // pixel. Depth-independent NDC offset via proj[2][0]/[2][1]. invProj +
+    // prevViewProj below use the SAME jittered proj so depth reconstruction and
+    // motion vectors stay consistent with what was rasterized. When TAA is off
+    // the jitter is zero, so this is identical to the unjittered projection.
+    glm::mat4 proj = projectionMatrix;
+    if (m_taaEnabled) {
+        const uint32_t w = rhiBridge->getSwapchain()->getWidth();
+        const uint32_t h = rhiBridge->getSwapchain()->getHeight();
+        const uint32_t s = (m_taaFrameIndex % 8u) + 1u;   // skip i=0 (always 0,0)
+        const float jpx = haltonSample(s, 2u) - 0.5f;     // pixel-space [-0.5,0.5]
+        const float jpy = haltonSample(s, 3u) - 0.5f;
+        m_prevJitter = m_currJitter;
+        m_currJitter = glm::vec2(jpx / static_cast<float>(w), jpy / static_cast<float>(h));
+        proj[2][0] += 2.0f * m_currJitter.x;   // NDC spans 2 over the screen
+        proj[2][1] += 2.0f * m_currJitter.y;
+        ++m_taaFrameIndex;
+    } else {
+        m_currJitter = glm::vec2(0.0f);
+        m_prevJitter = glm::vec2(0.0f);
+    }
+    ubo.proj    = proj;
     ubo.invView = glm::inverse(viewMatrix);
-    ubo.invProj = glm::inverse(projectionMatrix);
+    ubo.invProj = glm::inverse(proj);
 
     ubo.sunDirection     = sunDirection;
     ubo.sunIntensity     = sunIntensity;
@@ -3257,6 +3287,16 @@ void Renderer::updateRHIUniformBuffer(uint32_t currentImage) {
     ubo.debugCascades = debugCascades ? 1.0f : 0.0f;
     ubo.debugView     = debugView;
     ubo.abSplitX      = abSplitX;
+
+    // TAA (sub-task C): previous frame's proj*view*model for screen-space
+    // motion vectors. Uses the JITTERED proj so curr/prev are consistent and
+    // the velocity self-corrects the jitter delta when history is sampled at
+    // (uv - velocity). On the first frame prev == curr so velocity is 0 (no
+    // ghosting on startup). Updated after the write for the next frame.
+    const glm::mat4 currViewProjModel = proj * viewMatrix * ubo.model;
+    ubo.prevViewProj    = m_prevViewProjValid ? m_prevViewProjModel : currViewProjModel;
+    m_prevViewProjModel = currViewProjModel;
+    m_prevViewProjValid = true;
 
     // Copy to RHI uniform buffer - always use write() to ensure proper flush to GPU
     auto* buffer = rhiUniformBuffers[currentImage].get();

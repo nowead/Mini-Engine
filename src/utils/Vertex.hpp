@@ -66,6 +66,12 @@ struct UniformBufferObject {
 	alignas(16) PointLight pointLights[MAX_POINT_LIGHTS];
 	alignas(4)  uint32_t numPointLights = 0;
 	float debugCascades = 0.0f;  // 1.0 = visualize CSM cascade regions with debug colors
-	int   debugView     = 0;     // 0=normal, 1=normals, 2=albedo, 3=metallic, 4=roughness, 5=ao, 6=depth
+	int   debugView     = 0;     // 0=normal, 1=normals, 2=albedo, 3=metallic, 4=roughness, 5=ao, 6=depth, 7=velocity
 	float abSplitX      = 0.0f;  // A/B compare split: 0 = off, (0,1) = uv.x at which left=baseline, right=full
+	// TAA (sub-task C): previous frame's proj*view*model, for screen-space
+	// motion vectors. Appended at the END so existing field offsets are
+	// unchanged -- shaders that don't need it (deferred/building/all WGSL)
+	// keep their current declarations and bind the same (now-larger) buffer
+	// untouched. Only gbuffer.vert.glsl declares the full struct to read it.
+	alignas(16) glm::mat4 prevViewProj = glm::mat4(1.0f);
 };

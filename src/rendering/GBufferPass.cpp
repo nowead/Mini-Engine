@@ -66,6 +66,7 @@ void GBufferPass::resize(uint32_t width, uint32_t height,
     m_gBuffer0.reset(); m_gBuffer0View.reset();
     m_gBuffer1.reset(); m_gBuffer1View.reset();
     m_gBuffer2.reset(); m_gBuffer2View.reset();
+    m_gBuffer3.reset(); m_gBuffer3View.reset();
 
     if (!createTextures(width, height)) {
         std::cerr << "[GBufferPass] resize: createTextures failed\n";
@@ -104,9 +105,15 @@ bool GBufferPass::createTextures(uint32_t width, uint32_t height) {
         return view != nullptr;
     };
 
-    return makeTexture(rhi::TextureFormat::RGBA16Float, "GBuffer0", m_gBuffer0, m_gBuffer0View)
-        && makeTexture(rhi::TextureFormat::RGBA8Unorm,  "GBuffer1", m_gBuffer1, m_gBuffer1View)
-        && makeTexture(rhi::TextureFormat::RGBA8Unorm,  "GBuffer2", m_gBuffer2, m_gBuffer2View);
+    bool ok = makeTexture(rhi::TextureFormat::RGBA16Float, "GBuffer0", m_gBuffer0, m_gBuffer0View)
+           && makeTexture(rhi::TextureFormat::RGBA8Unorm,  "GBuffer1", m_gBuffer1, m_gBuffer1View)
+           && makeTexture(rhi::TextureFormat::RGBA8Unorm,  "GBuffer2", m_gBuffer2, m_gBuffer2View);
+#ifndef __EMSCRIPTEN__
+    // Target 3 = screen-space velocity for TAA (Vulkan-first; the WGSL G-Buffer
+    // still writes 3 targets, so the WebGPU pipeline stays 3-target for now).
+    ok = ok && makeTexture(rhi::TextureFormat::RG16Float, "GBuffer3", m_gBuffer3, m_gBuffer3View);
+#endif
+    return ok;
 }
 
 bool GBufferPass::createSampler() {
@@ -203,11 +210,16 @@ bool GBufferPass::createPipeline(rhi::RHIBindGroupLayout* buildingBGLayout,
     pipelineDesc.primitive.cullMode  = rhi::CullMode::Back;
     pipelineDesc.primitive.frontFace = rhi::FrontFace::Clockwise;
 
-    // 3 MRT color targets
+    // MRT color targets. Native adds target 3 (RG16Float velocity) for TAA;
+    // WebGPU keeps 3 (its WGSL fragment writes 3 outputs).
     rhi::ColorTargetState ct0; ct0.format = rhi::TextureFormat::RGBA16Float;
     rhi::ColorTargetState ct1; ct1.format = rhi::TextureFormat::RGBA8Unorm;
     rhi::ColorTargetState ct2; ct2.format = rhi::TextureFormat::RGBA8Unorm;
     pipelineDesc.colorTargets = { ct0, ct1, ct2 };
+#ifndef __EMSCRIPTEN__
+    rhi::ColorTargetState ct3; ct3.format = rhi::TextureFormat::RG16Float;
+    pipelineDesc.colorTargets.push_back(ct3);
+#endif
 
     // Depth
     rhi::DepthStencilState depthState;
@@ -259,6 +271,12 @@ void GBufferPass::execute(rhi::RHICommandEncoder* encoder,
     ca2.clearValue = rhi::ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f);
 
     passDesc.colorAttachments = { ca0, ca1, ca2 };
+#ifndef __EMSCRIPTEN__
+    rhi::RenderPassColorAttachment ca3;  // velocity; clear to 0 (no motion)
+    ca3.view = m_gBuffer3View.get(); ca3.loadOp = rhi::LoadOp::Clear; ca3.storeOp = rhi::StoreOp::Store;
+    ca3.clearValue = rhi::ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f);
+    passDesc.colorAttachments.push_back(ca3);
+#endif
 
     rhi::RenderPassDepthStencilAttachment depthAtt;
     if (m_depthView) {
@@ -338,7 +356,7 @@ bool GBufferPass::createLinuxRenderPass() {
     if (!vd) return false;
     VkDevice vkDev = static_cast<VkDevice>(*vd->getVkDevice());
 
-    VkAttachmentDescription atts[4]{};
+    VkAttachmentDescription atts[5]{};
 
     atts[0].format = VK_FORMAT_R16G16B16A16_SFLOAT; atts[0].samples = VK_SAMPLE_COUNT_1_BIT;
     atts[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR; atts[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -347,22 +365,24 @@ bool GBufferPass::createLinuxRenderPass() {
 
     atts[1] = atts[0]; atts[1].format = VK_FORMAT_R8G8B8A8_UNORM;
     atts[2] = atts[1];
+    atts[3] = atts[0]; atts[3].format = VK_FORMAT_R16G16_SFLOAT;  // velocity (TAA)
 
-    atts[3].format = VK_FORMAT_D32_SFLOAT; atts[3].samples = VK_SAMPLE_COUNT_1_BIT;
-    atts[3].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR; atts[3].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    atts[3].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE; atts[3].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    atts[3].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED; atts[3].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    atts[4].format = VK_FORMAT_D32_SFLOAT; atts[4].samples = VK_SAMPLE_COUNT_1_BIT;
+    atts[4].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR; atts[4].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    atts[4].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE; atts[4].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    atts[4].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED; atts[4].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
-    VkAttachmentReference colorRefs[3] = {
+    VkAttachmentReference colorRefs[4] = {
         {0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
         {1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
-        {2, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}
+        {2, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
+        {3, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}
     };
-    VkAttachmentReference depthRef = {3, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+    VkAttachmentReference depthRef = {4, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
 
     VkSubpassDescription subpass{};
     subpass.pipelineBindPoint    = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 3;
+    subpass.colorAttachmentCount = 4;
     subpass.pColorAttachments    = colorRefs;
     subpass.pDepthStencilAttachment = &depthRef;
 
@@ -375,7 +395,7 @@ bool GBufferPass::createLinuxRenderPass() {
 
     VkRenderPassCreateInfo rpInfo{};
     rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    rpInfo.attachmentCount = 4; rpInfo.pAttachments = atts;
+    rpInfo.attachmentCount = 5; rpInfo.pAttachments = atts;
     rpInfo.subpassCount    = 1; rpInfo.pSubpasses   = &subpass;
     rpInfo.dependencyCount = 1; rpInfo.pDependencies = &dep;
 
@@ -393,9 +413,10 @@ bool GBufferPass::createLinuxFramebuffer() {
         auto* vv = dynamic_cast<RHI::Vulkan::VulkanRHITextureView*>(v);
         return vv ? static_cast<VkImageView>(vv->getVkImageView()) : VK_NULL_HANDLE;
     };
-    VkImageView views[4] = {
+    VkImageView views[5] = {
         getView(m_gBuffer0View.get()), getView(m_gBuffer1View.get()),
-        getView(m_gBuffer2View.get()), getView(m_depthView)
+        getView(m_gBuffer2View.get()), getView(m_gBuffer3View.get()),
+        getView(m_depthView)
     };
     uint32_t W = 0, H = 0;
     if (m_gBuffer0) { auto sz = m_gBuffer0->getSize(); W = sz.width; H = sz.height; }
@@ -403,7 +424,7 @@ bool GBufferPass::createLinuxFramebuffer() {
     VkFramebufferCreateInfo fbInfo{};
     fbInfo.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
     fbInfo.renderPass      = m_nativeRenderPass;
-    fbInfo.attachmentCount = 4; fbInfo.pAttachments = views;
+    fbInfo.attachmentCount = 5; fbInfo.pAttachments = views;
     fbInfo.width = W; fbInfo.height = H; fbInfo.layers = 1;
 
     VkResult res = vkCreateFramebuffer(vkDev, &fbInfo, nullptr, &m_nativeFramebuffer);

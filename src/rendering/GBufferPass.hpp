@@ -81,9 +81,11 @@ public:
     rhi::RHITextureView* getGBuffer0View() const { return m_gBuffer0View.get(); }
     rhi::RHITextureView* getGBuffer1View() const { return m_gBuffer1View.get(); }
     rhi::RHITextureView* getGBuffer2View() const { return m_gBuffer2View.get(); }
+    rhi::RHITextureView* getGBuffer3View() const { return m_gBuffer3View.get(); }  // velocity (RG16Float)
     rhi::RHITexture*     getGBuffer0()     const { return m_gBuffer0.get(); }
     rhi::RHITexture*     getGBuffer1()     const { return m_gBuffer1.get(); }
     rhi::RHITexture*     getGBuffer2()     const { return m_gBuffer2.get(); }
+    rhi::RHITexture*     getGBuffer3()     const { return m_gBuffer3.get(); }
     rhi::RHISampler*     getSampler()      const { return m_sampler.get(); }
     rhi::RHIRenderPipeline* getPipeline()  const { return m_pipeline.get(); }
 
@@ -145,6 +147,8 @@ private:
     std::unique_ptr<rhi::RHITextureView> m_gBuffer1View;
     std::unique_ptr<rhi::RHITexture>     m_gBuffer2;       // RGBA8Unorm
     std::unique_ptr<rhi::RHITextureView> m_gBuffer2View;
+    std::unique_ptr<rhi::RHITexture>     m_gBuffer3;       // RG16Float (screen-space velocity)
+    std::unique_ptr<rhi::RHITextureView> m_gBuffer3View;
     std::unique_ptr<rhi::RHISampler>     m_sampler;
 
     // Pipeline

@@ -31,6 +31,8 @@ layout(location = 9)  in flat uint fragNormalIndex;
 layout(location = 10) in flat uint fragMRIndex;        // G=roughness, B=metallic
 layout(location = 11) in flat uint fragEmissiveIndex;
 layout(location = 12) in flat uint fragAOIndex;
+layout(location = 13) in vec4 fragCurrClip;   // TAA: current clip pos (pre-divide)
+layout(location = 14) in vec4 fragPrevClip;   // TAA: previous clip pos (pre-divide)
 
 // Phase 4: bindless texture array at set 2
 // When the device doesn't support descriptor indexing, this set is not created,
@@ -44,6 +46,7 @@ layout(set = 2, binding = 0) uniform sampler2D allTextures[];
 layout(location = 0) out vec4 gBuffer0;  // normal.xyz + roughness
 layout(location = 1) out vec4 gBuffer1;  // albedo.rgb (linear) + metallic
 layout(location = 2) out vec4 gBuffer2;  // ao (r) + emissive (gba)
+layout(location = 3) out vec2 gBuffer3;  // TAA screen-space velocity (curr - prev UV)
 
 // ---------------------------------------------------------------------------
 
@@ -102,4 +105,11 @@ void main() {
     gBuffer0 = vec4(N,            roughness);
     gBuffer1 = vec4(albedoLinear, metallic);
     gBuffer2 = vec4(ao, emissive);  // .r = ao, .gba = emissive RGB (clamped to [0,1])
+
+    // TAA motion vector: per-fragment perspective divide of curr/prev clip pos
+    // -> NDC -> [0,1] UV, store the delta. History is sampled at (uv - velocity)
+    // = previous-frame UV. Y matches the Vulkan-flipped projection in both terms.
+    vec2 currUV = (fragCurrClip.xy / fragCurrClip.w) * 0.5 + 0.5;
+    vec2 prevUV = (fragPrevClip.xy / fragPrevClip.w) * 0.5 + 0.5;
+    gBuffer3 = currUV - prevUV;
 }

@@ -207,6 +207,13 @@ public:
     void setShadowStrength(float strength) { shadowStrength = strength; }
     float getShadowStrength() const { return shadowStrength; }
 
+    // TAA (sub-task C). Enabling applies a per-frame Halton sub-pixel jitter to
+    // the projection; the TAA resolve pass (C2) accumulates it into history.
+    // Off by default and on WebGPU (Vulkan-first; the G-Buffer velocity target
+    // is Vulkan-only for now).
+    void setTAAEnabled(bool e) { m_taaEnabled = e; }
+    bool isTAAEnabled() const { return m_taaEnabled; }
+
     // PBR tone mapping
     void setExposure(float exp) { exposure = exp; }
     float getExposure() const { return exposure; }
@@ -563,6 +570,16 @@ private:
     glm::mat4 viewMatrix;
     glm::mat4 projectionMatrix;
     glm::vec3 cameraPosition = glm::vec3(0.0f);
+    // TAA: previous frame's proj*view*model, for G-Buffer motion vectors.
+    glm::mat4 m_prevViewProjModel = glm::mat4(1.0f);
+    bool      m_prevViewProjValid = false;
+    // TAA jitter state. m_currJitter/m_prevJitter are NDC sub-pixel offsets
+    // (kept for the C2 resolve to un-jitter / sharpen); m_taaFrameIndex drives
+    // the Halton(2,3) sequence.
+    bool      m_taaEnabled    = false;
+    uint32_t  m_taaFrameIndex = 0;
+    glm::vec2 m_currJitter    = glm::vec2(0.0f);
+    glm::vec2 m_prevJitter    = glm::vec2(0.0f);
 
     // Phase 3.3: Lighting parameters (daytime defaults for better visibility)
     // Sun direction: pointing from corner, medium-high angle for visible shadows
