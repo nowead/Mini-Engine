@@ -140,6 +140,10 @@ Renderer::Renderer(GLFWwindow* window,
         }
     }
 #else
+    // Sub-task C (WebGPU port): TAA resolve pipeline (needs G-Buffer velocity
+    // view + HDR/history textures created above).
+    createTAAPipelineWGSL();
+
     // P0.3: WebGPU GPU profiler via timestamp-query (per-pass real GPU ms).
     // No-op if adapter does not advertise the feature; CPU fallback still works.
     {
@@ -542,6 +546,7 @@ void Renderer::handleFramebufferResize(int width, int height) {
     }
     createBloomPipelineWGSL();
     createSSAOPipelineWGSL();
+    createTAAPipelineWGSL();   // rebuild TAA resolve (HDR/history/velocity views changed)
 
     if (wgslPostprocessLayout && hdrColorView && hdrSampler) {
         rhi::RHITextureView* bv   = bloomTextureView ? bloomTextureView.get() : hdrColorView.get();
@@ -634,6 +639,7 @@ void Renderer::recreateSwapchain() {
     // Bloom + SSAO textures are resolution-dependent — recreate at new half-res size
     createBloomPipelineWGSL();
     createSSAOPipelineWGSL();
+    createTAAPipelineWGSL();   // rebuild TAA resolve (HDR/history/velocity views changed)
 
     if (wgslPostprocessLayout && hdrColorView && hdrSampler) {
         rhi::RHITextureView* bv   = bloomTextureView ? bloomTextureView.get() : hdrColorView.get();
@@ -1679,10 +1685,10 @@ void Renderer::createMaterialBindGroupInfrastructure() {
         layoutDesc.entries.push_back(samp);
     }
     {
-        // Step 9: per-frame A/B state (abSplitX + screen size).
+        // Step 9 A/B state (fragment) + TAA motion-vector matrices (vertex).
         rhi::BindGroupLayoutEntry frameState;
         frameState.binding    = 6;
-        frameState.visibility = rhi::ShaderStage::Fragment;
+        frameState.visibility = rhi::ShaderStage::Vertex | rhi::ShaderStage::Fragment;
         frameState.type       = rhi::BindingType::UniformBuffer;
         layoutDesc.entries.push_back(frameState);
     }
@@ -1758,7 +1764,8 @@ void Renderer::createMaterialBindGroupInfrastructure() {
     // it by handle so they don't need rebuilding when the contents change.
     {
         rhi::BufferDesc bd;
-        bd.size  = 16;
+        // 16 B A/B state + two mat4 (TAA motion-vector matrices) = 144 B.
+        bd.size  = 144;
         bd.usage = rhi::BufferUsage::Uniform | rhi::BufferUsage::CopyDst;
         bd.label = "MaterialFrameUBO";
         materialFrameUBO = device->createBuffer(bd);
@@ -2069,12 +2076,10 @@ void Renderer::createHDRRenderTarget() {
     rhi::TextureDesc colorDesc;
     colorDesc.size = rhi::Extent3D(width, height, 1);
     colorDesc.format = rhi::TextureFormat::RGBA16Float;
-    colorDesc.usage = rhi::TextureUsage::RenderTarget | rhi::TextureUsage::Sampled;
-#ifndef __EMSCRIPTEN__
-    // TAA (sub-task C2) copies the resolved history back into the HDR target so
-    // bloom/postprocess read it unchanged.
-    colorDesc.usage = colorDesc.usage | rhi::TextureUsage::CopyDst;
-#endif
+    // TAA (sub-task C) copies the resolved frame back into the HDR target so
+    // bloom/postprocess read it unchanged — needs CopyDst on both backends.
+    colorDesc.usage = rhi::TextureUsage::RenderTarget | rhi::TextureUsage::Sampled
+                    | rhi::TextureUsage::CopyDst;
     colorDesc.label = "HDR Color Target";
     hdrColorTexture = rhiDevice->createTexture(colorDesc);
 
@@ -2111,6 +2116,34 @@ void Renderer::createHDRRenderTarget() {
     }
     m_taaHistoryValid = false;
     m_taaHistoryRead  = 0;
+#else
+    // WebGPU TAA: history (prev resolved) + taaOut (this frame's resolve target),
+    // both RGBA16Float at HDR size. The fullscreen resolve writes taaOut (render
+    // target), then taaOut is copied into hdrColor (downstream) and history (next
+    // frame). No Storage usage (render + sampled + copy only). Recreated here so
+    // they track the swapchain; invalidate history since views changed.
+    {
+        rhi::TextureDesc hd;
+        hd.size   = rhi::Extent3D(width, height, 1);
+        hd.format = rhi::TextureFormat::RGBA16Float;
+        hd.usage  = rhi::TextureUsage::Sampled | rhi::TextureUsage::CopyDst;
+        hd.label  = "TAA History";
+        m_taaHistoryTex = rhiDevice->createTexture(hd);
+
+        rhi::TextureDesc od;
+        od.size   = rhi::Extent3D(width, height, 1);
+        od.format = rhi::TextureFormat::RGBA16Float;
+        od.usage  = rhi::TextureUsage::RenderTarget | rhi::TextureUsage::Sampled | rhi::TextureUsage::CopySrc;
+        od.label  = "TAA Out";
+        m_taaOutTex = rhiDevice->createTexture(od);
+
+        rhi::TextureViewDesc vd;
+        vd.format    = rhi::TextureFormat::RGBA16Float;
+        vd.dimension = rhi::TextureViewDimension::View2D;
+        if (m_taaHistoryTex) m_taaHistoryTexView = m_taaHistoryTex->createView(vd);
+        if (m_taaOutTex)     m_taaOutTexView     = m_taaOutTex->createView(vd);
+    }
+    m_wgslTaaHistoryValid = false;
 #endif
 
     // Create sampler shared by tonemap and FXAA passes
@@ -2455,6 +2488,100 @@ void Renderer::createSSAOPipelineWGSL() {
     if (!wgslSSAOBlurPipeline) { LOG_ERROR("Renderer") << "[WebGPU SSAO] Blur pipeline creation failed"; return; }
 
     LOG_INFO("Renderer") << "[WebGPU SSAO] Initialized " << ssaoW << "x" << ssaoH;
+}
+
+// ============================================================================
+// TAA Resolve Pipeline (WebGPU). Fullscreen pass: hdrColor + history + velocity
+// → taaOut. Rebuilt on resize since it references resized views (HDR / history /
+// G-Buffer velocity). Requires gBufferPass (velocity view) + HDR/history textures.
+// ============================================================================
+void Renderer::createTAAPipelineWGSL() {
+    if (!rhiBridge || !rhiBridge->isReady()) return;
+    auto* device = rhiBridge->getDevice();
+    if (!device || !hdrColorView || !m_taaHistoryTexView || !m_taaOutTexView
+        || !gBufferPass || !gBufferPass->getGBuffer3View()) {
+        return;
+    }
+
+    if (!wgslTaaParamsUBO) {
+        rhi::BufferDesc bd;
+        bd.size  = 16;  // invW, invH, blend, historyValid
+        bd.usage = rhi::BufferUsage::Uniform | rhi::BufferUsage::MapWrite;
+        bd.label = "TAAParamsUBO";
+        wgslTaaParamsUBO = device->createBuffer(bd);
+    }
+    if (!wgslTaaSampler) {
+        rhi::SamplerDesc sd;
+        sd.magFilter = sd.minFilter = rhi::FilterMode::Linear;
+        sd.mipmapFilter = rhi::MipmapMode::Nearest;
+        sd.addressModeU = sd.addressModeV = rhi::AddressMode::ClampToEdge;
+        sd.label = "TAASampler";
+        wgslTaaSampler = device->createSampler(sd);
+    }
+
+    using S = rhi::ShaderStage;
+    using T = rhi::BindingType;
+    if (!wgslTaaLayout) {
+        rhi::BindGroupLayoutDesc ld;
+        ld.label = "WGSLTAALayout";
+        ld.entries = {
+            rhi::BindGroupLayoutEntry(0, S::Fragment, T::SampledTexture),  // current HDR
+            rhi::BindGroupLayoutEntry(1, S::Fragment, T::SampledTexture),  // history
+            rhi::BindGroupLayoutEntry(2, S::Fragment, T::SampledTexture),  // velocity
+            rhi::BindGroupLayoutEntry(3, S::Fragment, T::Sampler),         // linear
+            rhi::BindGroupLayoutEntry(4, S::Fragment, T::UniformBuffer),
+        };
+        wgslTaaLayout = device->createBindGroupLayout(ld);
+    }
+    if (!wgslTaaLayout) { LOG_ERROR("Renderer") << "[WebGPU TAA] Layout failed"; return; }
+    if (!wgslTaaPipelineLayout) {
+        rhi::PipelineLayoutDesc pld;
+        pld.bindGroupLayouts = { wgslTaaLayout.get() };
+        pld.label = "WGSLTAAPipelineLayout";
+        wgslTaaPipelineLayout = device->createPipelineLayout(pld);
+    }
+
+    // Bind group references views that change on resize → always rebuild.
+    {
+        rhi::BindGroupDesc bd;
+        bd.layout = wgslTaaLayout.get();
+        bd.label  = "WGSLTAABindGroup";
+        bd.entries = {
+            rhi::BindGroupEntry::TextureView(0, hdrColorView.get()),
+            rhi::BindGroupEntry::TextureView(1, m_taaHistoryTexView.get()),
+            rhi::BindGroupEntry::TextureView(2, gBufferPass->getGBuffer3View()),
+            rhi::BindGroupEntry::Sampler    (3, wgslTaaSampler.get()),
+            rhi::BindGroupEntry::Buffer     (4, wgslTaaParamsUBO.get(), 0, 16),
+        };
+        wgslTaaBindGroup = device->createBindGroup(bd);
+    }
+    if (!wgslTaaBindGroup) { LOG_ERROR("Renderer") << "[WebGPU TAA] Bind group failed"; return; }
+
+    if (!wgslTaaPipeline) {
+        auto raw = FileUtils::readFile("shaders/taa_resolve.wgsl");
+        if (raw.empty()) { LOG_ERROR("Renderer") << "[WebGPU TAA] Failed to load taa_resolve.wgsl"; return; }
+        std::vector<uint8_t> code(raw.begin(), raw.end());
+        wgslTaaVertexShader = device->createShader(rhi::ShaderDesc(
+            rhi::ShaderSource(rhi::ShaderLanguage::WGSL, code, rhi::ShaderStage::Vertex, "vs_main"), "TAA_VS"));
+        wgslTaaFragmentShader = device->createShader(rhi::ShaderDesc(
+            rhi::ShaderSource(rhi::ShaderLanguage::WGSL, code, rhi::ShaderStage::Fragment, "fs_main"), "TAA_FS"));
+        if (!wgslTaaVertexShader || !wgslTaaFragmentShader) { LOG_ERROR("Renderer") << "[WebGPU TAA] Shader failed"; return; }
+        rhi::RenderPipelineDesc pd;
+        pd.label          = "TAAResolvePipeline";
+        pd.layout         = wgslTaaPipelineLayout.get();
+        pd.vertexShader   = wgslTaaVertexShader.get();
+        pd.fragmentShader = wgslTaaFragmentShader.get();
+        pd.primitive.topology  = rhi::PrimitiveTopology::TriangleList;
+        pd.primitive.cullMode  = rhi::CullMode::None;
+        pd.primitive.frontFace = rhi::FrontFace::CounterClockwise;
+        rhi::ColorTargetState ct; ct.format = rhi::TextureFormat::RGBA16Float; ct.blend.blendEnabled = false;
+        pd.colorTargets   = { ct };
+        pd.depthStencil   = nullptr;
+        wgslTaaPipeline   = device->createRenderPipeline(pd);
+    }
+    if (!wgslTaaPipeline) { LOG_ERROR("Renderer") << "[WebGPU TAA] Pipeline failed"; return; }
+
+    LOG_INFO("Renderer") << "[WebGPU TAA] Resolve pipeline ready";
 }
 
 // ============================================================================
@@ -3397,6 +3524,8 @@ void Renderer::updateRHIUniformBuffer(uint32_t currentImage) {
     const glm::mat4 currVPnoJitter = projectionMatrix * viewMatrix * ubo.model;
     ubo.currViewProjNoJitter = currVPnoJitter;
     ubo.prevViewProj         = m_prevViewProjValid ? m_prevViewProjModel : currVPnoJitter;
+    m_taaCurrViewProj        = ubo.currViewProjNoJitter;  // for the WebGPU set-2 FrameState UBO
+    m_taaPrevViewProj        = ubo.prevViewProj;
     m_prevViewProjModel      = currVPnoJitter;
     m_prevViewProjValid      = true;
 
@@ -3808,12 +3937,19 @@ void Renderer::drawFrame() {
 #ifdef __EMSCRIPTEN__
             matDefaultBG = defaultMaterialBindGroup.get();
 
-            // Step 9: refresh the per-frame A/B state the G-Buffer fragment
-            // reads from material set 2 binding 6. Layout matches the WGSL
-            // FrameState struct: abSplitX, screenW, screenH, pad.
+            // Step 9 + TAA: refresh the per-frame state the G-Buffer reads from
+            // material set 2 binding 6. Layout matches the WGSL FrameState:
+            // {abSplitX, screenW, screenH, pad} then two un-jittered mat4 (TAA
+            // motion-vector matrices). mat4 is 16-aligned, so they sit at offset
+            // 16 / 80 — std140-compatible with the 144 B buffer.
             if (materialFrameUBO) {
-                struct FrameState { float abSplitX; float screenW; float screenH; float _pad; };
-                FrameState fs{ abSplitX, static_cast<float>(W), static_cast<float>(H), 0.0f };
+                struct FrameState {
+                    float     abSplitX; float screenW; float screenH; float _pad;
+                    glm::mat4 currViewProjNoJitter;
+                    glm::mat4 prevViewProj;
+                };
+                FrameState fs{ abSplitX, static_cast<float>(W), static_cast<float>(H), 0.0f,
+                               m_taaCurrViewProj, m_taaPrevViewProj };
                 materialFrameUBO->write(&fs, sizeof(fs));
             }
 #endif
@@ -3864,6 +4000,45 @@ void Renderer::drawFrame() {
             dlPass->end();
         }
     }
+
+    // TAA resolve (sub-task C, WebGPU): after deferred writes hdrColor, reproject
+    // history by velocity + variance-clip + blend → taaOut, then copy taaOut into
+    // hdrColor (bloom/postprocess read it unchanged) and into history (next frame).
+    // Gated by the UI toggle.
+    if (m_taaEnabled && wgslTaaPipeline && wgslTaaBindGroup
+        && m_taaOutTex && m_taaOutTexView && m_taaHistoryTex && hdrColorTexture) {
+        uint32_t tW = rhiBridge->getSwapchain()->getWidth();
+        uint32_t tH = rhiBridge->getSwapchain()->getHeight();
+        if (wgslTaaParamsUBO) {
+            struct TaaParams { float invW; float invH; float blend; float historyValid; };
+            TaaParams tp{ 1.0f / float(tW), 1.0f / float(tH), 0.9f,
+                          m_wgslTaaHistoryValid ? 1.0f : 0.0f };
+            wgslTaaParamsUBO->write(&tp, sizeof(tp));
+        }
+        rhi::RenderPassDesc pd;
+        pd.width = tW; pd.height = tH; pd.label = "TAAResolve";
+        rhi::RenderPassColorAttachment ca;
+        ca.view = m_taaOutTexView.get();
+        ca.loadOp = rhi::LoadOp::Clear; ca.storeOp = rhi::StoreOp::Store;
+        ca.clearValue = rhi::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
+        pd.colorAttachments.push_back(ca);
+        auto pass = encoder->beginRenderPass(pd);
+        if (pass) {
+            pass->setViewport(0, 0, float(tW), float(tH), 0.0f, 1.0f);
+            pass->setScissorRect(0, 0, tW, tH);
+            pass->setPipeline(wgslTaaPipeline.get());
+            pass->setBindGroup(0, wgslTaaBindGroup.get());
+            pass->draw(3);
+            pass->end();
+        }
+        rhi::TextureCopyInfo src{};     src.texture     = m_taaOutTex.get();
+        rhi::TextureCopyInfo dstHDR{};  dstHDR.texture  = hdrColorTexture.get();
+        rhi::TextureCopyInfo dstHist{}; dstHist.texture = m_taaHistoryTex.get();
+        encoder->copyTextureToTexture(src, dstHDR,  rhi::Extent3D(tW, tH, 1));
+        encoder->copyTextureToTexture(src, dstHist, rhi::Extent3D(tW, tH, 1));
+        m_wgslTaaHistoryValid = true;
+    }
+
     if (m_webgpuTimer) {
         m_webgpuTimer->beginPhase(_wgpuEnc, WebGPUTimer::TimerId::SSAO);
     }

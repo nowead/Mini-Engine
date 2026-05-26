@@ -185,3 +185,63 @@ ortho 축소 + 하드웨어 PCF 두 가지로 그리드/계단이 거의 사라�
 
 남은 그림자 후속: 더 넓은 커널/Poisson, 그림자 맵 4096, 4개 동일 cascade
 중복 제거(현재 단일 scene-fit 행렬을 4 레이어에 복제 → 3 레이어 낭비).
+
+---
+
+## 변경 이력 (3부) — TAA WebGPU 포팅 (듀얼 백엔드 파리티)
+
+> 1부에서 Vulkan 네이티브 TAA를 완성했다. 이 부분은 같은 TAA를 **WebGPU
+> (브라우저 라이브 데모)**로 포팅해 양 백엔드 동등성을 회복한다. 엔진의 핵심
+> 셀링포인트가 "한 코드베이스, Vulkan + WebGPU"라 데모에서 실제로 보이는
+> WebGPU가 최신 기능에 뒤처지면 명제가 약해진다.
+
+### 11. 범위 — 그림자는 이미 OK, 실질은 TAA
+
+조사 결과 WebGPU 그림자는 이미 16-tap Poisson PCSS(소프트)였고 §9의 ortho
+축소(공유 C++)도 자동 적용돼 별도 작업 불필요. WebGPU 파리티의 실질 작업은
+**TAA 포팅 하나**였다.
+
+WebGPU는 RenderGraph를 안 쓰고 순차 렌더 패스 방식이라, Vulkan의 컴퓨트
+리졸브 대신 **풀스크린 렌더 패스**로 포팅했다.
+
+### 12. 구현
+
+- **4th velocity 타깃**: GBufferPass의 `#ifndef __EMSCRIPTEN__` 가드를 풀어
+  양 백엔드가 RG16Float velocity 타깃을 생성. `gbuffer.wgsl`이 4번째 출력
+  (velocity)을 쓰도록 확장.
+- **velocity 행렬 전달**: WGSL에 128-PointLight UBO를 통째로 선언하는 위험을
+  피해, 기존 set-2 per-frame UBO(A/B FrameState, materialFrameUBO)를 16→144B로
+  확장해 `currViewProjNoJitter`/`prevViewProj`를 실어 전달. binding 6 visibility
+  에 Vertex 추가(버텍스가 읽음).
+- **리졸브**: `taa_resolve.wgsl`(풀스크린 vert+frag) 신설. 히스토리(prev) +
+  `taaOut`(리졸브 결과) 2텍스처 + copy 2회(taaOut→hdrColor, taaOut→history)
+  방식 — ping-pong 인덱스 버그를 피하는 단순 구조(브라우저 디버깅이 느리므로
+  단순함 우선). deferred 직후에 삽입, bloom/postprocess는 hdrColor 그대로 읽음.
+- 지터(Halton)는 `updateRHIUniformBuffer`가 공유라 WebGPU에도 자동 적용.
+
+### 13. 함정 둘 (브라우저에서 잡음)
+
+1. **RG16Float + StorageBinding 비호환**: 공유 `makeTexture` 헬퍼가 모든
+   G-Buffer에 Storage 사용을 붙였는데, Dawn에서 **RG16Float는 StorageBinding을
+   지원 안 해** → GBuffer3 생성 실패 → 연쇄 validation 에러. velocity 타깃은
+   Storage가 불필요(render-target write + sampled read)하므로 헬퍼에 `storage`
+   플래그를 추가해 GBuffer3만 Storage 제외. (Vulkan에도 동일 적용 — 거기서도
+   불필요했음.)
+2. **UV 컨벤션 (y-up vs y-down)**: WebGPU는 projection y-flip이 없어(네이티브만
+   flip) `gbuffer.wgsl`의 velocity가 y-up UV로 계산됐는데, 텍스처 샘플링은
+   y-down(top-left). 리졸브의 `uv - velocity`에서 Y가 어긋나 역방향 잔상이
+   생긴다. `gbuffer.wgsl`에서 velocity를 `uv.y = 0.5 - ndc.y*0.5`(y-down)로
+   계산해 해결. (Vulkan은 y-flip된 proj라 이미 일관 — 그 셰이더는 불변.)
+
+### 14. 수정 파일 요약 (3부)
+
+| 파일 | 변경 |
+| --- | --- |
+| `shaders/taa_resolve.wgsl` | **신규** — WebGPU 풀스크린 리졸브 (리프로젝션 + variance clip + 블렌드) |
+| `shaders/gbuffer.wgsl` | velocity 출력(4th target), FrameState UBO에 velocity 행렬 2개, y-down UV |
+| `src/rendering/GBufferPass.cpp` | 4th 타깃 가드 해제(양 백엔드), `makeTexture` storage 플래그(RG16Float Storage 제외) |
+| `src/rendering/Renderer.{hpp,cpp}` | WebGPU history/taaOut 텍스처 + hdrColor CopyDst(양 백엔드), `createTAAPipelineWGSL`, drawFrame WebGPU 리졸브+copy 통합, materialFrameUBO 144B + velocity 행렬 write + binding 6 Vertex 가시성, velocity 행렬 캡처 멤버 |
+| `CMakeLists.txt` | taa_resolve.wgsl WGSL preload 리스트 |
+
+C(TAA)가 이제 Vulkan + WebGPU 양 백엔드에서 동작. 다음 후보: 로드맵 D
+(멀티스레드 커맨드 레코딩) 또는 그림자 추가 개선.

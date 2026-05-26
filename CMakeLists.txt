@@ -670,6 +670,7 @@ else()
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/bloom_blur.wgsl
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/ssao.wgsl
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/ssao_blur.wgsl
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/taa_resolve.wgsl
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess.wgsl
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shadow.wgsl
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/skybox.wgsl

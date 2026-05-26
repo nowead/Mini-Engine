@@ -384,6 +384,23 @@ private:
     std::unique_ptr<rhi::RHIBindGroup>       wgslSSAOBlurBG;
     std::unique_ptr<rhi::RHIPipelineLayout>  wgslSSAOBlurPipelineLayout;
     std::unique_ptr<rhi::RHIRenderPipeline>  wgslSSAOBlurPipeline;
+
+    // TAA resolve — WebGPU path (sub-task C2 port). Fullscreen render pass:
+    // reads hdrColor + history + velocity, writes taaOut; then taaOut is copied
+    // back into hdrColor (downstream unchanged) and into history (next frame).
+    std::unique_ptr<rhi::RHITexture>         m_taaHistoryTex;   // previous resolved frame
+    std::unique_ptr<rhi::RHITextureView>     m_taaHistoryTexView;
+    std::unique_ptr<rhi::RHITexture>         m_taaOutTex;       // this frame's resolve target
+    std::unique_ptr<rhi::RHITextureView>     m_taaOutTexView;
+    std::unique_ptr<rhi::RHIShader>          wgslTaaVertexShader;
+    std::unique_ptr<rhi::RHIShader>          wgslTaaFragmentShader;
+    std::unique_ptr<rhi::RHIBuffer>          wgslTaaParamsUBO;  // {invW, invH, blend, historyValid} (16 B)
+    std::unique_ptr<rhi::RHISampler>         wgslTaaSampler;
+    std::unique_ptr<rhi::RHIBindGroupLayout> wgslTaaLayout;
+    std::unique_ptr<rhi::RHIBindGroup>       wgslTaaBindGroup;
+    std::unique_ptr<rhi::RHIPipelineLayout>  wgslTaaPipelineLayout;
+    std::unique_ptr<rhi::RHIRenderPipeline>  wgslTaaPipeline;
+    bool                                     m_wgslTaaHistoryValid = false;
 #else
     // Combined Tonemap+FXAA Post-Process Pipeline — Vulkan path (SPIR-V)
     std::unique_ptr<rhi::RHIShader> postprocessVertexShader;
@@ -580,6 +597,12 @@ private:
     uint32_t  m_taaFrameIndex = 0;
     glm::vec2 m_currJitter    = glm::vec2(0.0f);
     glm::vec2 m_prevJitter    = glm::vec2(0.0f);
+    // Un-jittered curr/prev proj*view*model captured each frame, for the WebGPU
+    // motion-vector path (fed to the set-2 FrameState UBO). On Vulkan the same
+    // values go straight into the UBO; this just keeps them accessible later
+    // in drawFrame after updateRHIUniformBuffer has advanced the prev tracker.
+    glm::mat4 m_taaCurrViewProj = glm::mat4(1.0f);
+    glm::mat4 m_taaPrevViewProj = glm::mat4(1.0f);
 
     // Phase 3.3: Lighting parameters (daytime defaults for better visibility)
     // Sun direction: pointing from corner, medium-high angle for visible shadows
@@ -710,6 +733,7 @@ private:
 #ifdef __EMSCRIPTEN__
     void createBloomPipelineWGSL(); // Bloom render pipelines (WebGPU)
     void createSSAOPipelineWGSL();  // SSAO render pipelines (WebGPU)
+    void createTAAPipelineWGSL();   // TAA resolve render pipeline + bind group (WebGPU)
     void createPostProcessPipelineWGSL(); // Unified postprocess pass (WebGPU)
 #else
     void createPostProcessPipeline();       // Combined tonemap+FXAA (Vulkan)

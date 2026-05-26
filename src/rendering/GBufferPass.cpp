@@ -87,12 +87,13 @@ void GBufferPass::resize(uint32_t width, uint32_t height,
 bool GBufferPass::createTextures(uint32_t width, uint32_t height) {
     auto makeTexture = [&](rhi::TextureFormat fmt, const char* label,
                            std::unique_ptr<rhi::RHITexture>& tex,
-                           std::unique_ptr<rhi::RHITextureView>& view) -> bool {
+                           std::unique_ptr<rhi::RHITextureView>& view,
+                           bool storage) -> bool {
         rhi::TextureDesc desc;
         desc.size   = rhi::Extent3D(width, height, 1);
         desc.format = fmt;
-        desc.usage  = rhi::TextureUsage::RenderTarget | rhi::TextureUsage::Sampled
-                    | rhi::TextureUsage::Storage;
+        desc.usage  = rhi::TextureUsage::RenderTarget | rhi::TextureUsage::Sampled;
+        if (storage) desc.usage = desc.usage | rhi::TextureUsage::Storage;
         desc.label  = label;
         tex = m_device->createTexture(desc);
         if (!tex) return false;
@@ -105,14 +106,13 @@ bool GBufferPass::createTextures(uint32_t width, uint32_t height) {
         return view != nullptr;
     };
 
-    bool ok = makeTexture(rhi::TextureFormat::RGBA16Float, "GBuffer0", m_gBuffer0, m_gBuffer0View)
-           && makeTexture(rhi::TextureFormat::RGBA8Unorm,  "GBuffer1", m_gBuffer1, m_gBuffer1View)
-           && makeTexture(rhi::TextureFormat::RGBA8Unorm,  "GBuffer2", m_gBuffer2, m_gBuffer2View);
-#ifndef __EMSCRIPTEN__
-    // Target 3 = screen-space velocity for TAA (Vulkan-first; the WGSL G-Buffer
-    // still writes 3 targets, so the WebGPU pipeline stays 3-target for now).
-    ok = ok && makeTexture(rhi::TextureFormat::RG16Float, "GBuffer3", m_gBuffer3, m_gBuffer3View);
-#endif
+    // Target 3 = screen-space velocity for TAA (both backends). RG16Float does
+    // NOT support StorageBinding on WebGPU/Dawn, and the velocity target is only
+    // ever a render-target write + sampled read (resolve), so it omits Storage.
+    bool ok = makeTexture(rhi::TextureFormat::RGBA16Float, "GBuffer0", m_gBuffer0, m_gBuffer0View, true)
+           && makeTexture(rhi::TextureFormat::RGBA8Unorm,  "GBuffer1", m_gBuffer1, m_gBuffer1View, true)
+           && makeTexture(rhi::TextureFormat::RGBA8Unorm,  "GBuffer2", m_gBuffer2, m_gBuffer2View, true)
+           && makeTexture(rhi::TextureFormat::RG16Float,   "GBuffer3", m_gBuffer3, m_gBuffer3View, false);
     return ok;
 }
 
@@ -210,16 +210,12 @@ bool GBufferPass::createPipeline(rhi::RHIBindGroupLayout* buildingBGLayout,
     pipelineDesc.primitive.cullMode  = rhi::CullMode::Back;
     pipelineDesc.primitive.frontFace = rhi::FrontFace::Clockwise;
 
-    // MRT color targets. Native adds target 3 (RG16Float velocity) for TAA;
-    // WebGPU keeps 3 (its WGSL fragment writes 3 outputs).
+    // 4 MRT color targets (target 3 = RG16Float velocity for TAA, both backends).
     rhi::ColorTargetState ct0; ct0.format = rhi::TextureFormat::RGBA16Float;
     rhi::ColorTargetState ct1; ct1.format = rhi::TextureFormat::RGBA8Unorm;
     rhi::ColorTargetState ct2; ct2.format = rhi::TextureFormat::RGBA8Unorm;
-    pipelineDesc.colorTargets = { ct0, ct1, ct2 };
-#ifndef __EMSCRIPTEN__
     rhi::ColorTargetState ct3; ct3.format = rhi::TextureFormat::RG16Float;
-    pipelineDesc.colorTargets.push_back(ct3);
-#endif
+    pipelineDesc.colorTargets = { ct0, ct1, ct2, ct3 };
 
     // Depth
     rhi::DepthStencilState depthState;
@@ -270,13 +266,10 @@ void GBufferPass::execute(rhi::RHICommandEncoder* encoder,
     ca2.view = m_gBuffer2View.get(); ca2.loadOp = rhi::LoadOp::Clear; ca2.storeOp = rhi::StoreOp::Store;
     ca2.clearValue = rhi::ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f);
 
-    passDesc.colorAttachments = { ca0, ca1, ca2 };
-#ifndef __EMSCRIPTEN__
     rhi::RenderPassColorAttachment ca3;  // velocity; clear to 0 (no motion)
     ca3.view = m_gBuffer3View.get(); ca3.loadOp = rhi::LoadOp::Clear; ca3.storeOp = rhi::StoreOp::Store;
     ca3.clearValue = rhi::ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f);
-    passDesc.colorAttachments.push_back(ca3);
-#endif
+    passDesc.colorAttachments = { ca0, ca1, ca2, ca3 };
 
     rhi::RenderPassDepthStencilAttachment depthAtt;
     if (m_depthView) {

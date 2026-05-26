@@ -71,11 +71,20 @@ struct VisibleIndicesBuffer {
 // All-scalar layout to match the C++ write byte-for-byte. A vec2 here would
 // force 8-byte alignment on screenSize and desync from the tightly-packed
 // C++ struct (abSplitX@0, screenW@4, screenH@8, pad@12).
+// Also carries the TAA motion-vector matrices (sub-task C, WebGPU port). They
+// ride here rather than in the per-frame UBO (set 0) so the G-Buffer shader
+// avoids declaring that struct's 128-PointLight array just to reach trailing
+// fields. mat4 is 16-byte aligned, so after the four leading f32 (16 B) the
+// matrices sit at offset 16 / 80 — matching the C++ write (Renderer FrameState).
+// Both are the UN-jittered proj*view*model (current + previous) so static-camera
+// velocity is zero and history stays sharp; jitter only perturbs ubo.proj.
 struct FrameState {
     abSplitX: f32,
     screenW:  f32,
     screenH:  f32,
     _pad:     f32,
+    currViewProjNoJitter: mat4x4<f32>,
+    prevViewProj:         mat4x4<f32>,
 }
 @group(2) @binding(6) var<uniform> frameState: FrameState;
 
@@ -100,6 +109,8 @@ struct VertexOutput {
     @location(5) ao:        f32,
     @location(6) texCoord:  vec2<f32>,
     @location(7) tangent:   vec3<f32>,  // 0 vector signals "no tangent supplied" → skip TBN
+    @location(8) currClip:  vec4<f32>,  // TAA: un-jittered current clip pos (pre-divide)
+    @location(9) prevClip:  vec4<f32>,  // TAA: un-jittered previous clip pos (pre-divide)
 }
 
 @vertex
@@ -131,6 +142,10 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     // supplied by the source asset, e.g. the procedural cube) survives the
     // rasterizer interpolation. The fragment checks length() before using.
     out.tangent   = normalMat * input.tangent;
+    // TAA motion vectors: same world point's un-jittered current vs previous
+    // clip position (gl_Position above keeps the jittered proj for rasterization).
+    out.currClip  = frameState.currViewProjNoJitter * worldPos4;
+    out.prevClip  = frameState.prevViewProj        * worldPos4;
     return out;
 }
 
@@ -140,7 +155,8 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 struct GBufferOutput {
     @location(0) gBuffer0: vec4<f32>,  // normal.xyz + roughness
     @location(1) gBuffer1: vec4<f32>,  // albedo_linear.rgb + metallic
-    @location(2) gBuffer2: vec4<f32>,  // ao (r)
+    @location(2) gBuffer2: vec4<f32>,  // ao (r) + emissive (gba)
+    @location(3) gBuffer3: vec2<f32>,  // TAA screen-space velocity (curr - prev UV)
 }
 
 @fragment
@@ -202,9 +218,20 @@ fn fs_main(input: VertexOutput) -> GBufferOutput {
     let ao        = select(aoTextured,         input.ao,       onBaselineSide);
     let emissive  = select(emissiveTextured,   vec3<f32>(0.0), onBaselineSide);
 
+    // TAA motion vector: per-fragment perspective divide of the un-jittered
+    // curr/prev clip pos → [0,1] UV, store the delta. The TAA resolve samples
+    // textures in WebGPU's top-left/y-down convention, but WebGPU NDC is y-up
+    // (no projection y-flip, unlike native), so flip Y here: uv.y = 0.5 - ndc.y*0.5.
+    // Then the resolve's (uv - velocity) lands on the correct previous texel.
+    let currNdc = input.currClip.xy / input.currClip.w;
+    let prevNdc = input.prevClip.xy / input.prevClip.w;
+    let currUV  = vec2<f32>(currNdc.x * 0.5 + 0.5, 0.5 - currNdc.y * 0.5);
+    let prevUV  = vec2<f32>(prevNdc.x * 0.5 + 0.5, 0.5 - prevNdc.y * 0.5);
+
     var out: GBufferOutput;
     out.gBuffer0 = vec4<f32>(N,        roughness);
     out.gBuffer1 = vec4<f32>(albedo,   metallic);
     out.gBuffer2 = vec4<f32>(ao, emissive);  // .r=ao, .gba=emissive RGB
+    out.gBuffer3 = currUV - prevUV;
     return out;
 }
