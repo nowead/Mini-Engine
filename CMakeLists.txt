@@ -477,6 +477,16 @@ if(NOT EMSCRIPTEN)
         COMMENT "Compiling ssao_blur.comp.glsl -> SPIR-V"
     )
 
+    # TAA resolve (sub-task C2): temporal reprojection + variance clipping
+    add_custom_command(
+        OUTPUT ${BUILDING_SHADER_DIR}/taa_resolve.comp.spv
+        COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=compute
+                -o ${BUILDING_SHADER_DIR}/taa_resolve.comp.spv
+                ${BUILDING_SHADER_DIR}/taa_resolve.comp.glsl
+        DEPENDS ${BUILDING_SHADER_DIR}/taa_resolve.comp.glsl
+        COMMENT "Compiling taa_resolve.comp.glsl -> SPIR-V"
+    )
+
     # Phase 3: G-Buffer shaders
     add_custom_command(
         OUTPUT ${BUILDING_SHADER_DIR}/gbuffer.vert.spv
@@ -536,6 +546,7 @@ if(NOT EMSCRIPTEN)
         ${BUILDING_SHADER_DIR}/bloom_blur.comp.spv
         ${BUILDING_SHADER_DIR}/ssao.comp.spv
         ${BUILDING_SHADER_DIR}/ssao_blur.comp.spv
+        ${BUILDING_SHADER_DIR}/taa_resolve.comp.spv
         ${BUILDING_SHADER_DIR}/gbuffer.vert.spv
         ${BUILDING_SHADER_DIR}/gbuffer.frag.spv
         ${BUILDING_SHADER_DIR}/gbuffer_nobindless.frag.spv

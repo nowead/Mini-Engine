@@ -142,6 +142,9 @@ void ImGuiManager::renderUI(Camera& camera, uint32_t buildingCount,
     // FXAA
     ImGui::Checkbox("FXAA  (Luminance edge detection)", &m_lightingSettings.enableFXAA);
 
+    // TAA (Vulkan native only — sub-task C)
+    ImGui::Checkbox("TAA  (Temporal: jitter + history reproject)", &m_lightingSettings.enableTAA);
+
     ImGui::Spacing();
 
     // ── Directional Light / Exposure ─────────────────────────────────────────

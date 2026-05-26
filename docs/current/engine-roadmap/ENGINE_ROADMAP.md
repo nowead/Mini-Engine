@@ -7,7 +7,7 @@
 
 ---
 
-## 0. 현재 위치 (2026-05-24)
+## 0. 현재 위치 (2026-05-26)
 
 | 영역 | 상태 |
 | --- | --- |
@@ -15,12 +15,13 @@
 | §4.4 sub-task 9 (A/B 모드 머티리얼 토글) | ✅ WebGPU에서 완료 (2026-05-24) |
 | Vulkan parity — 헬멧 네이티브 풀 PBR | ✅ bindless 경로로 완료 (2026-05-24). 초기화 순서 버그 + 네이티브 resize 크래시 동시 수정 |
 | §4.4 sub-task 8 (SceneNode 최소 구현 / 노드 트리 ingest) | ✅ 노드 트리 평탄화 + showcase 서브메시 리스트로 완료 (2026-05-24). BoxAnimated로 다중 메시/계층 검증 |
+| 네이티브 그림자/컬 깜빡임 3종 | ✅ 지면 그림자 acne·컬 버퍼 오버플로·peter-panning 수정 (2026-05-25) |
+| **C. TAA (Temporal AA)** | ✅ Vulkan 네이티브 완료 (2026-05-26). 모션 벡터 G-Buffer + Halton 지터 + 리졸브(리프로젝션 + variance clipping). 건물/헬멧 계단현상 해소 |
 | §4.5 잔여 한계 | 3개 — tangent.w, emissive HDR, ORM-packed MR fallback |
 
-**다음 시퀀스**: ~~9 (시연 통합)~~ ✅ → ~~Vulkan parity~~ ✅ → ~~8 (SceneNode)~~ ✅
-→ **C (TAA, 다음)**. AB 작업 단위(sub-task 1–9 + Vulkan parity + 8) 종결 —
-양 백엔드 동등성 + 다중 메시 인프라 확보. 이제 풍부한 머티리얼 위에서
-안티앨리어싱(TAA) 가치를 측정할 수 있다.
+**다음 시퀀스**: ~~9~~ ✅ → ~~Vulkan parity~~ ✅ → ~~8~~ ✅ → ~~C (TAA)~~ ✅
+→ **다음 후보**: 그림자 품질(지면 그림자 맵 그리드/PCF 에일리어싱) 또는
+로드맵 D(멀티스레드 커맨드 레코딩). TAA로 AB 위에 시간적 안정성까지 확보.
 
 상세 디버깅 여정: [`CHANGELOG_2026-05-21.md`](../../archive/changelogs/CHANGELOG_2026-05-21.md)
 (자산 파이프라인 구축 + 함정 3종) ·
@@ -154,7 +155,14 @@ attribute, double-sided, alphaMode=MASK/BLEND 등) 전부 처리하면 작업 �
 (Unity는 Newtonsoft.Json, bgfx는 cgltf, Unreal은 자체 utility 위에서 glTF 전용
 해석 레이어만 자체 작성).
 
-### C. TAA (Temporal Anti-Aliasing)
+### C. TAA (Temporal Anti-Aliasing) — ✅ 완료 (2026-05-26, Vulkan)
+
+> 완료: 모션 벡터 G-Buffer(4th RG16Float) + Halton 지터 + 컴퓨트 리졸브
+> (리프로젝션 + 3×3 variance clipping + 0.9 블렌드). 핵심 난제는 persistent
+> 히스토리를 RenderGraph에 넣기(추적 레이아웃 import로 내용 보존) + velocity를
+> 지터-free로 두기(정적 카메라 선명 수렴). 자세한 내용:
+> [`CHANGELOG_2026-05-26.md`](../../archive/changelogs/CHANGELOG_2026-05-26.md).
+> WebGPU 포팅 + per-object 모션 벡터는 후속.
 
 **작업 내용**: G-Buffer에 velocity 채널 추가(전 프레임 vs 현 프레임 클립 공간
 차분). 히스토리 컬러 버퍼 신설. 리프로젝션 + neighborhood clamping + variance

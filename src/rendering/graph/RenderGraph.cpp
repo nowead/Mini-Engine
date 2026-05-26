@@ -27,6 +27,8 @@ bool RenderGraph::isTexAccess(RGAccess a)
         case RGAccess::StorageRead:
         case RGAccess::StorageWrite:
         case RGAccess::StorageRW:
+        case RGAccess::CopySrc:
+        case RGAccess::CopyDst:
         case RGAccess::PresentSrc:
             return true;
         default:
@@ -85,6 +87,12 @@ RGTexState RenderGraph::inferTexState(RGAccess access)
             return { PS::eComputeShader,
                      AC::eShaderStorageRead | AC::eShaderStorageWrite,
                      IL::eGeneral };
+
+        case RGAccess::CopySrc:
+            return { PS::eCopy, AC::eTransferRead, IL::eTransferSrcOptimal };
+
+        case RGAccess::CopyDst:
+            return { PS::eCopy, AC::eTransferWrite, IL::eTransferDstOptimal };
 
         case RGAccess::PresentSrc:
             return { PS::eNone,

@@ -82,6 +82,7 @@ public:
         bool  enableBloom   = true;     // Bloom on/off toggle
         bool  enableSSAO    = true;     // SSAO on/off toggle
         bool  enableFXAA    = true;     // FXAA on/off toggle
+        bool  enableTAA     = true;     // TAA on/off toggle (Vulkan only)
         bool  enableTonemap = true;     // ACES tonemap on/off toggle
         // Debug views: 0=normal, 1=normals, 2=albedo, 3=metallic, 4=roughness, 5=ao, 6=depth, 7=ssao, 8=bloom
         int   debugView = 0;

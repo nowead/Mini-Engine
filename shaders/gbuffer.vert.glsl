@@ -43,7 +43,8 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
     float debugCascades;
     int   debugView;
     float abSplitX;
-    mat4  prevViewProj;   // TAA: previous frame's proj*view*model
+    mat4  prevViewProj;          // TAA: previous frame, no jitter
+    mat4  currViewProjNoJitter;  // TAA: current frame, no jitter
 } ubo;
 
 // MUST match C++ ObjectData (InstancedRenderData.hpp) — 144 bytes.
@@ -114,13 +115,13 @@ void main() {
     fragEmissiveIndex = obj.textureIndices.z;
     fragAOIndex       = obj.textureIndices.w;
 
-    // TAA: current and previous clip positions of the SAME world point. Static
-    // geometry only moves on screen because the camera moved, so the difference
-    // is the camera motion vector. (Per-object animation would need a per-object
-    // previous world matrix; deferred to a later step.)
-    vec4 currClip = ubo.proj * ubo.view * ubo.model * worldPos4;
-    fragCurrClip  = currClip;
-    fragPrevClip  = ubo.prevViewProj * worldPos4;
+    // TAA: motion vector from the SAME world point's current vs previous
+    // UN-jittered clip position (so a static camera gives zero velocity and the
+    // history stays sharp). gl_Position keeps the jittered proj for rasterization
+    // super-sampling. (Per-object animation would need a per-object previous
+    // world matrix; deferred to a later step.)
+    fragCurrClip = ubo.currViewProjNoJitter * worldPos4;
+    fragPrevClip = ubo.prevViewProj        * worldPos4;
 
-    gl_Position = currClip;
+    gl_Position  = ubo.proj * ubo.view * ubo.model * worldPos4;
 }

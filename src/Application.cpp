@@ -395,6 +395,7 @@ void Application::mainLoopFrame() {
             renderer->setAOStrength(   lighting.enableSSAO   ? lighting.aoStrength    : 0.0f);
             renderer->setTonemapEnabled(lighting.enableTonemap);
             renderer->setFXAAEnabled(lighting.enableFXAA);
+            renderer->setTAAEnabled(lighting.enableTAA);
             renderer->setDebugView(lighting.debugView);
 
             // Phase 4.1: Pass GPU timing data to ImGui

@@ -125,6 +125,10 @@ Renderer::Renderer(GLFWwindow* window,
     createDeferredLightingPass();
 
 #ifndef __EMSCRIPTEN__
+    // Sub-task C2: TAA resolve pipeline + history bind groups (needs the
+    // G-Buffer velocity view + HDR/history textures, all created above).
+    createTAAResources();
+
     // Phase 4.1: GPU Profiler (Vulkan-only)
     {
         auto* vulkanDevice = dynamic_cast<RHI::Vulkan::VulkanRHIDevice*>(rhiBridge->getDevice());
@@ -565,6 +569,7 @@ void Renderer::handleFramebufferResize(int width, int height) {
         gBufferPass->resize(static_cast<uint32_t>(width), static_cast<uint32_t>(height),
                             rhiDepthImageView.get());
         createDeferredLightingPass();
+        createTAAResources();   // rebuild TAA bind groups (HDR/history/velocity views changed)
     }
     recreatePostProcessResources();
 #endif
@@ -654,6 +659,7 @@ void Renderer::recreateSwapchain() {
         gBufferPass->resize(static_cast<uint32_t>(width), static_cast<uint32_t>(height),
                             rhiDepthImageView.get());
         createDeferredLightingPass();
+        createTAAResources();   // rebuild TAA bind groups (HDR/history/velocity views changed)
     }
     recreatePostProcessResources();
 #endif
@@ -1572,6 +1578,72 @@ void Renderer::createBindlessResources() {
 
     LOG_INFO("Renderer") << "Bindless resources ready (" << bindlessTextureManager->isAvailable() << ")";
 }
+
+void Renderer::createTAAResources() {
+    // Build the TAA resolve compute pipeline + ping-pong bind groups. Pipeline,
+    // layout, shader and sampler are created once; the bind groups are rebuilt
+    // every call because they reference views (HDR, history, velocity) that are
+    // recreated on resize. Requires the G-Buffer velocity view + history to exist.
+    if (!rhiBridge || !rhiBridge->isReady()) return;
+    auto* device = rhiBridge->getDevice();
+    if (!device || !gBufferPass || !gBufferPass->getGBuffer3View()
+        || !hdrColorView || !m_taaHistoryView[0] || !m_taaHistoryView[1]) {
+        return;
+    }
+
+    if (!m_taaSampler) {
+        rhi::SamplerDesc sd;
+        sd.minFilter = sd.magFilter = rhi::FilterMode::Linear;
+        sd.addressModeU = sd.addressModeV = sd.addressModeW = rhi::AddressMode::ClampToEdge;
+        sd.label = "TAA Sampler";
+        m_taaSampler = device->createSampler(sd);
+    }
+    if (!m_taaShader) {
+        m_taaShader = rhiBridge->createShaderFromFile(
+            "shaders/taa_resolve.comp.spv", rhi::ShaderStage::Compute, "main");
+        if (!m_taaShader) { LOG_ERROR("Renderer") << "Failed to load taa_resolve.comp.spv"; return; }
+    }
+    if (!m_taaLayout) {
+        rhi::BindGroupLayoutDesc ld; ld.label = "TAA Bind Group Layout";
+        auto add = [&](uint32_t b, rhi::BindingType t) {
+            rhi::BindGroupLayoutEntry e; e.binding = b; e.visibility = rhi::ShaderStage::Compute; e.type = t;
+            ld.entries.push_back(e);
+        };
+        add(0, rhi::BindingType::SampledTexture);  // current HDR
+        add(1, rhi::BindingType::SampledTexture);  // history
+        add(2, rhi::BindingType::SampledTexture);  // velocity (G-Buffer 3)
+        add(3, rhi::BindingType::StorageTexture);  // resolve output
+        add(4, rhi::BindingType::Sampler);
+        m_taaLayout = device->createBindGroupLayout(ld);
+    }
+    if (!m_taaPipelineLayout) {
+        rhi::PipelineLayoutDesc pld;
+        pld.bindGroupLayouts.push_back(m_taaLayout.get());
+        rhi::PushConstantRange pc;
+        pc.stageFlags = rhi::ShaderStage::Compute; pc.offset = 0; pc.size = 16;  // invW,invH,blend,historyValid
+        pld.pushConstantRanges.push_back(pc);
+        m_taaPipelineLayout = rhiBridge->createPipelineLayout(pld);
+    }
+    if (!m_taaPipeline) {
+        rhi::ComputePipelineDesc cp;
+        cp.computeShader = m_taaShader.get();
+        cp.layout        = m_taaPipelineLayout.get();
+        m_taaPipeline = device->createComputePipeline(cp);
+    }
+
+    // Ping-pong bind groups: bg[r] reads history[r], writes history[1-r].
+    for (int r = 0; r < 2; ++r) {
+        rhi::BindGroupDesc bd; bd.layout = m_taaLayout.get(); bd.label = "TAA Bind Group";
+        bd.entries.push_back(rhi::BindGroupEntry::TextureView(0, hdrColorView.get()));
+        bd.entries.push_back(rhi::BindGroupEntry::TextureView(1, m_taaHistoryView[r].get()));
+        bd.entries.push_back(rhi::BindGroupEntry::TextureView(2, gBufferPass->getGBuffer3View()));
+        bd.entries.push_back(rhi::BindGroupEntry::TextureView(3, m_taaHistoryView[1 - r].get()));
+        bd.entries.push_back(rhi::BindGroupEntry::Sampler    (4, m_taaSampler.get()));
+        m_taaBindGroup[r] = device->createBindGroup(bd);
+    }
+
+    LOG_INFO("Renderer") << "TAA resolve resources ready";
+}
 #endif  // !__EMSCRIPTEN__
 
 #ifdef __EMSCRIPTEN__
@@ -1998,6 +2070,11 @@ void Renderer::createHDRRenderTarget() {
     colorDesc.size = rhi::Extent3D(width, height, 1);
     colorDesc.format = rhi::TextureFormat::RGBA16Float;
     colorDesc.usage = rhi::TextureUsage::RenderTarget | rhi::TextureUsage::Sampled;
+#ifndef __EMSCRIPTEN__
+    // TAA (sub-task C2) copies the resolved history back into the HDR target so
+    // bloom/postprocess read it unchanged.
+    colorDesc.usage = colorDesc.usage | rhi::TextureUsage::CopyDst;
+#endif
     colorDesc.label = "HDR Color Target";
     hdrColorTexture = rhiDevice->createTexture(colorDesc);
 
@@ -2011,6 +2088,30 @@ void Renderer::createHDRRenderTarget() {
         LOG_ERROR("Renderer") << "Failed to create HDR color texture";
         return;
     }
+
+#ifndef __EMSCRIPTEN__
+    // TAA ping-pong history (RGBA16Float, same size as HDR). Storage = compute
+    // resolve writes; Sampled = resolve reads history/current; CopySrc = copy the
+    // freshly resolved buffer back into the HDR target. Recreated here so they
+    // track the swapchain size; invalidate the resolve state since views change.
+    for (int i = 0; i < 2; ++i) {
+        rhi::TextureDesc hd;
+        hd.size   = rhi::Extent3D(width, height, 1);
+        hd.format = rhi::TextureFormat::RGBA16Float;
+        hd.usage  = rhi::TextureUsage::Storage | rhi::TextureUsage::Sampled | rhi::TextureUsage::CopySrc;
+        hd.label  = (i == 0) ? "TAA History 0" : "TAA History 1";
+        m_taaHistory[i] = rhiDevice->createTexture(hd);
+        if (m_taaHistory[i]) {
+            rhi::TextureViewDesc hv;
+            hv.format    = rhi::TextureFormat::RGBA16Float;
+            hv.dimension = rhi::TextureViewDimension::View2D;
+            m_taaHistoryView[i] = m_taaHistory[i]->createView(hv);
+        }
+        m_taaHistoryState[i] = rendergraph::RGTexState{};  // Undefined: first use discards (content seeded frame 0)
+    }
+    m_taaHistoryValid = false;
+    m_taaHistoryRead  = 0;
+#endif
 
     // Create sampler shared by tonemap and FXAA passes
     rhi::SamplerDesc samplerDesc;
@@ -3288,15 +3389,16 @@ void Renderer::updateRHIUniformBuffer(uint32_t currentImage) {
     ubo.debugView     = debugView;
     ubo.abSplitX      = abSplitX;
 
-    // TAA (sub-task C): previous frame's proj*view*model for screen-space
-    // motion vectors. Uses the JITTERED proj so curr/prev are consistent and
-    // the velocity self-corrects the jitter delta when history is sampled at
-    // (uv - velocity). On the first frame prev == curr so velocity is 0 (no
-    // ghosting on startup). Updated after the write for the next frame.
-    const glm::mat4 currViewProjModel = proj * viewMatrix * ubo.model;
-    ubo.prevViewProj    = m_prevViewProjValid ? m_prevViewProjModel : currViewProjModel;
-    m_prevViewProjModel = currViewProjModel;
-    m_prevViewProjValid = true;
+    // TAA (sub-task C): motion vectors use the UN-jittered proj (projectionMatrix,
+    // not the jittered `proj` that drives gl_Position). A static camera then
+    // yields velocity 0, so history resamples at the same texel and stays sharp;
+    // the jitter only super-samples the current frame. First frame: prev == curr
+    // (velocity 0, no startup ghosting). Updated after the write for next frame.
+    const glm::mat4 currVPnoJitter = projectionMatrix * viewMatrix * ubo.model;
+    ubo.currViewProjNoJitter = currVPnoJitter;
+    ubo.prevViewProj         = m_prevViewProjValid ? m_prevViewProjModel : currVPnoJitter;
+    m_prevViewProjModel      = currVPnoJitter;
+    m_prevViewProjValid      = true;
 
     // Copy to RHI uniform buffer - always use write() to ensure proper flush to GPU
     auto* buffer = rhiUniformBuffers[currentImage].get();
@@ -4135,6 +4237,51 @@ void Renderer::drawFrame() {
             m_renderGraph.addWriteDep(pass, rgHDR, RA::ColorWrite);
         }
 
+        // ---- TAA resolve (sub-task C2): after deferred lighting, before bloom ----
+        // Reprojects history via velocity, variance-clips, blends, writes the
+        // resolved frame into history[w], then copies it back into HDR so the
+        // bloom/postprocess chain reads it unchanged. Gated by the UI toggle.
+        bool taaRanThisFrame = false;
+        if (m_taaEnabled && m_taaPipeline && m_taaBindGroup[0] && m_taaBindGroup[1]
+            && gBufferPass && gBufferPass->getGBuffer3()
+            && m_taaHistory[0] && m_taaHistory[1] && rgHDR != INVALID) {
+            const uint32_t rr = m_taaHistoryRead;
+            const uint32_t ww = 1u - rr;
+
+            auto rgVel   = m_renderGraph.importTexture("GBuffer3", gBufferPass->getGBuffer3(), gbufInitial);
+            auto rgHistR = m_renderGraph.importTexture("TAAHistR", m_taaHistory[rr].get(), m_taaHistoryState[rr]);
+            auto rgHistW = m_renderGraph.importTexture("TAAHistW", m_taaHistory[ww].get(), m_taaHistoryState[ww]);
+
+            const bool histValid = m_taaHistoryValid;
+            auto rp = m_renderGraph.addPass("TAAResolve", PT::Compute,
+                [this, W, H, rr, histValid](rhi::RHICommandEncoder* enc) {
+                    auto ce = enc->beginComputePass("TAA Resolve");
+                    ce->setPipeline(m_taaPipeline.get());
+                    ce->setBindGroup(0, m_taaBindGroup[rr].get());
+                    struct TaaPC { float invW; float invH; float blend; uint32_t historyValid; };
+                    TaaPC pc{ 1.0f / float(W), 1.0f / float(H), 0.9f, histValid ? 1u : 0u };
+                    ce->setPushConstants(m_taaPipelineLayout.get(),
+                        rhi::ShaderStage::Compute, 0, sizeof(pc), &pc);
+                    ce->dispatch((W + 7) / 8, (H + 7) / 8, 1);
+                    ce->end();
+                });
+            m_renderGraph.addReadDep (rp, rgHDR,   RA::SampleCompute);
+            m_renderGraph.addReadDep (rp, rgVel,   RA::SampleCompute);
+            m_renderGraph.addReadDep (rp, rgHistR, RA::SampleCompute);
+            m_renderGraph.addWriteDep(rp, rgHistW, RA::StorageWrite);
+
+            auto cp = m_renderGraph.addPass("TAACopy", PT::Compute,
+                [this, ww, W, H](rhi::RHICommandEncoder* enc) {
+                    rhi::TextureCopyInfo src{}; src.texture = m_taaHistory[ww].get();
+                    rhi::TextureCopyInfo dst{}; dst.texture = hdrColorTexture.get();
+                    enc->copyTextureToTexture(src, dst, rhi::Extent3D(W, H, 1));
+                });
+            m_renderGraph.addReadDep (cp, rgHistW, RA::CopySrc);
+            m_renderGraph.addWriteDep(cp, rgHDR,   RA::CopyDst);
+
+            taaRanThisFrame = true;
+        }
+
         // ---- Bloom passes ----
         if (bloomThresholdPipeline && bloomBlurPipeline && rgBloom != INVALID) {
             {   // Bloom threshold pass (HDR → half-res bright-pass) — begins BloomPass timer
@@ -4268,6 +4415,19 @@ void Renderer::drawFrame() {
 
         m_renderGraph.compile();
         m_renderGraph.execute(encoder.get());
+
+        // TAA: record the layout each history buffer was left in so next frame's
+        // import preserves content (history[read] ended sampled → ShaderReadOnly;
+        // history[write] was stored then copy-read → TransferSrc). Swap the
+        // ping-pong: next frame reads what we just resolved.
+        if (taaRanThisFrame) {
+            const uint32_t rr = m_taaHistoryRead;
+            const uint32_t ww = 1u - rr;
+            m_taaHistoryState[rr] = rendergraph::RenderGraph::inferTexState(rendergraph::RGAccess::SampleCompute);
+            m_taaHistoryState[ww] = rendergraph::RenderGraph::inferTexState(rendergraph::RGAccess::CopySrc);
+            m_taaHistoryRead  = ww;
+            m_taaHistoryValid = true;
+        }
     }
     // =========================================================================
 

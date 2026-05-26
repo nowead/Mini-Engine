@@ -25,6 +25,8 @@ enum class RGAccess {
     StorageRead,      // Compute shader: storage image read  (GENERAL layout)
     StorageWrite,     // Compute shader: storage image write (GENERAL layout)
     StorageRW,        // Compute shader: storage image read+write (GENERAL layout)
+    CopySrc,          // Transfer: copy source      (TRANSFER_SRC_OPTIMAL)
+    CopyDst,          // Transfer: copy destination (TRANSFER_DST_OPTIMAL)
     // ---- Buffer accesses ----
     IndirectRead,          // vkCmdDrawIndirect / vkCmdDispatchIndirect
     UniformRead,           // Uniform buffer (UBO) — vertex+fragment stages

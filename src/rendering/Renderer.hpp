@@ -652,6 +652,25 @@ private:
     // so the showcase textures get their own Linear sampler. Created lazily in
     // uploadShowcaseMaterialTextures.
     std::unique_ptr<rhi::RHISampler>                    showcaseMaterialSampler;
+
+    // TAA resolve (sub-task C2). Ping-pong HDR history + compute resolve pipeline.
+    // History buffers are created with the HDR target (createHDRRenderTarget) so
+    // they resize with it; the pipeline + bind groups are (re)built by
+    // createTAAResources once the G-Buffer (velocity) view exists.
+    std::array<std::unique_ptr<rhi::RHITexture>,     2> m_taaHistory;
+    std::array<std::unique_ptr<rhi::RHITextureView>, 2> m_taaHistoryView;
+    std::unique_ptr<rhi::RHIShader>          m_taaShader;
+    std::unique_ptr<rhi::RHIBindGroupLayout> m_taaLayout;
+    std::unique_ptr<rhi::RHISampler>         m_taaSampler;
+    std::unique_ptr<rhi::RHIPipelineLayout>  m_taaPipelineLayout;
+    std::unique_ptr<rhi::RHIComputePipeline> m_taaPipeline;
+    // bg[r] reads history[r] + writes history[1-r]; selected by m_taaHistoryRead.
+    std::array<std::unique_ptr<rhi::RHIBindGroup>, 2> m_taaBindGroup;
+    uint32_t   m_taaHistoryRead  = 0;      // which history holds last frame's result
+    bool       m_taaHistoryValid = false;  // false until first resolve (or after resize)
+    // Layout each history buffer was left in last frame, so the next import
+    // preserves content instead of discarding from UNDEFINED.
+    std::array<rendergraph::RGTexState, 2> m_taaHistoryState;
 #endif
 
     // RHI initialization methods (Phase 4)
@@ -678,6 +697,7 @@ private:
                               ShowcaseSubMesh&             out);
 #ifndef __EMSCRIPTEN__
     void createBindlessResources();     // Phase 4: Bindless texture manager + material textures
+    void createTAAResources();          // Sub-task C2: TAA resolve pipeline + ping-pong history bind groups
 #endif
     void createCullingPipeline();   // Phase 2.2: GPU frustum culling
     void createHDRRenderTarget();   // HDR offscreen texture (all platforms)

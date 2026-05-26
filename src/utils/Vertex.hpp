@@ -68,10 +68,14 @@ struct UniformBufferObject {
 	float debugCascades = 0.0f;  // 1.0 = visualize CSM cascade regions with debug colors
 	int   debugView     = 0;     // 0=normal, 1=normals, 2=albedo, 3=metallic, 4=roughness, 5=ao, 6=depth, 7=velocity
 	float abSplitX      = 0.0f;  // A/B compare split: 0 = off, (0,1) = uv.x at which left=baseline, right=full
-	// TAA (sub-task C): previous frame's proj*view*model, for screen-space
-	// motion vectors. Appended at the END so existing field offsets are
-	// unchanged -- shaders that don't need it (deferred/building/all WGSL)
-	// keep their current declarations and bind the same (now-larger) buffer
-	// untouched. Only gbuffer.vert.glsl declares the full struct to read it.
-	alignas(16) glm::mat4 prevViewProj = glm::mat4(1.0f);
+	// TAA (sub-task C): motion vectors. Both are the UN-jittered proj*view*model
+	// (current + previous frame) so that on a static camera the velocity is
+	// exactly zero -- history is then resampled at the same texel and converges
+	// sharply; the jitter only perturbs `proj` (gl_Position) for super-sampling.
+	// Appended at the END so existing field offsets are unchanged -- shaders that
+	// don't need them (deferred/building/all WGSL) keep their declarations and
+	// bind the same (now-larger) buffer untouched. Only gbuffer.vert.glsl
+	// declares the full struct to read them.
+	alignas(16) glm::mat4 prevViewProj        = glm::mat4(1.0f);  // previous frame, no jitter
+	alignas(16) glm::mat4 currViewProjNoJitter = glm::mat4(1.0f); // current frame, no jitter
 };
