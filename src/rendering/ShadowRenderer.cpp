@@ -113,14 +113,29 @@ bool ShadowRenderer::createShadowMap() {
 
 bool ShadowRenderer::createShadowSampler() {
     rhi::SamplerDesc desc;
-    desc.magFilter      = rhi::FilterMode::Nearest;
-    desc.minFilter      = rhi::FilterMode::Nearest;
-    desc.mipmapFilter   = rhi::MipmapMode::Nearest;
     desc.addressModeU   = rhi::AddressMode::ClampToEdge;
     desc.addressModeV   = rhi::AddressMode::ClampToEdge;
     desc.addressModeW   = rhi::AddressMode::ClampToEdge;
-    desc.compareEnable  = false;
     desc.label          = "ShadowSampler";
+#ifndef __EMSCRIPTEN__
+    // Vulkan: hardware PCF comparison sampler. Linear filtering makes each
+    // sample2DArrayShadow tap a bilinear 2x2 depth comparison, so the 3x3 PCF
+    // loop in deferred_lighting.frag.glsl effectively filters a 6x6 area —
+    // smoothing the shadow-map grid/stair-stepping. compareOp LessOrEqual:
+    // returns the lit fraction (fragment depth <= stored occluder depth).
+    desc.magFilter     = rhi::FilterMode::Linear;
+    desc.minFilter     = rhi::FilterMode::Linear;
+    desc.mipmapFilter  = rhi::MipmapMode::Nearest;
+    desc.compareEnable = true;
+    desc.compareOp     = rhi::CompareOp::LessOrEqual;
+#else
+    // WebGPU path keeps a plain Nearest sampler; deferred_lighting.wgsl does its
+    // own manual comparison (no sampler_comparison wiring here yet).
+    desc.magFilter     = rhi::FilterMode::Nearest;
+    desc.minFilter     = rhi::FilterMode::Nearest;
+    desc.mipmapFilter  = rhi::MipmapMode::Nearest;
+    desc.compareEnable = false;
+#endif
 
     m_shadowSampler = m_device->createSampler(desc);
     return m_shadowSampler != nullptr;

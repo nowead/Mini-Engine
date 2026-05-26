@@ -17,11 +17,12 @@
 | §4.4 sub-task 8 (SceneNode 최소 구현 / 노드 트리 ingest) | ✅ 노드 트리 평탄화 + showcase 서브메시 리스트로 완료 (2026-05-24). BoxAnimated로 다중 메시/계층 검증 |
 | 네이티브 그림자/컬 깜빡임 3종 | ✅ 지면 그림자 acne·컬 버퍼 오버플로·peter-panning 수정 (2026-05-25) |
 | **C. TAA (Temporal AA)** | ✅ Vulkan 네이티브 완료 (2026-05-26). 모션 벡터 G-Buffer + Halton 지터 + 리졸브(리프로젝션 + variance clipping). 건물/헬멧 계단현상 해소 |
+| 그림자 품질 (그리드/계단) | ✅ ortho 축소(낭비 해소) + 하드웨어 PCF 비교 샘플러 (2026-05-26) |
 | §4.5 잔여 한계 | 3개 — tangent.w, emissive HDR, ORM-packed MR fallback |
 
-**다음 시퀀스**: ~~9~~ ✅ → ~~Vulkan parity~~ ✅ → ~~8~~ ✅ → ~~C (TAA)~~ ✅
-→ **다음 후보**: 그림자 품질(지면 그림자 맵 그리드/PCF 에일리어싱) 또는
-로드맵 D(멀티스레드 커맨드 레코딩). TAA로 AB 위에 시간적 안정성까지 확보.
+**다음 시퀀스**: ~~9~~ ✅ → ~~Vulkan parity~~ ✅ → ~~8~~ ✅ → ~~C (TAA)~~ ✅ →
+~~그림자 품질~~ ✅ → **다음 후보**: 로드맵 D(멀티스레드 커맨드 레코딩) 또는
+WebGPU TAA 포팅. TAA로 AB 위에 시간적 안정성, 하드웨어 PCF로 그림자 품질 확보.
 
 상세 디버깅 여정: [`CHANGELOG_2026-05-21.md`](../../archive/changelogs/CHANGELOG_2026-05-21.md)
 (자산 파이프라인 구축 + 함정 3종) ·

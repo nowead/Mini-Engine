@@ -117,21 +117,24 @@ float calculateCSMShadow(vec3 worldPos, vec3 normal, vec3 lightDir) {
         projCoords.y < 0.0 || projCoords.y > 1.0)
         return 0.0;
 
-    float bias        = ubo.shadowBias * 0.01;
-    float currentDepth = projCoords.z;
-    float shadow      = 0.0;
-    vec2  texelSize   = 1.0 / ubo.shadowMapSize;
+    // Hardware PCF: the shadow sampler is a comparison sampler with linear
+    // filtering, so each tap is a bilinear 2x2 depth comparison returning the
+    // lit fraction. A 3x3 loop of these filters ~6x6 texels and smooths the
+    // shadow-map grid that nearest-PCF produced on the large flat ground.
+    float bias       = ubo.shadowBias * 0.01;
+    float ref        = projCoords.z - bias;   // biased fragment depth
+    float lit        = 0.0;
+    vec2  texelSize  = 1.0 / ubo.shadowMapSize;
 
     for (int x = -1; x <= 1; ++x) {
         for (int y = -1; y <= 1; ++y) {
-            vec3 sampleUV = vec3(projCoords.xy + vec2(x, y) * texelSize,
-                                 float(cascadeIdx));
-            float pcfDepth = texture(sampler2DArray(shadowCsmArray, shadowSampler), sampleUV).r;
-            shadow += (currentDepth - bias > pcfDepth) ? 1.0 : 0.0;
+            vec2 uv = projCoords.xy + vec2(x, y) * texelSize;
+            lit += texture(sampler2DArrayShadow(shadowCsmArray, shadowSampler),
+                           vec4(uv, float(cascadeIdx), ref));
         }
     }
-    shadow /= 9.0;
-    return shadow * ubo.shadowStrength;
+    lit /= 9.0;
+    return (1.0 - lit) * ubo.shadowStrength;
 }
 
 // ---------------------------------------------------------------------------

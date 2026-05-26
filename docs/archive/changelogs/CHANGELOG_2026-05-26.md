@@ -132,3 +132,56 @@ C2 구현 후 첫 실행: 렌더링 결함(고스팅/크래시/검증 에러)은
 
 AB 작업 단위(sub-task 1–9 + Vulkan parity + 8)에 이어 C(TAA)까지 종결. 다음은
 로드맵 D(멀티스레드 커맨드 레코딩) 또는 그림자 품질 개선.
+
+---
+
+## 변경 이력 (2부) — 그림자 품질 (그리드/계단 제거)
+
+> §6에서 "후속"으로 미뤘던 지면 그림자의 그리드/계단 패턴을 바로 이어서
+> 해결. 두 개의 독립적 원인이 겹쳐 있었다.
+
+### 7. 증상
+
+TAA로 건물/헬멧 계단현상은 사라졌으나, 지면에 드리운 그림자가 굵은 그리드/
+계단 패턴으로 보였다(품질 저하).
+
+### 8. 원인 둘
+
+1. **과도한 ortho — 해상도 90%+ 낭비**: `shadowSceneRadius` 기본값이 200인데
+   기본 씬(4×4 그리드)의 실제 클러스터 반경은 ~64다. 게다가
+   `computeCascadeMatrix`가 저각도 태양의 그림자 투사를 담으려 ortho를
+   `R = Rc + Rc·clamp(stretch≈3.4, 0, 6)` ≈ **880**까지 팽창시킨다. 2048² 맵이
+   1760×1760 영역을 덮어 텍셀당 ~0.86유닛 → 클러스터(~100유닛)에 텍셀 ~100개뿐.
+   그림자 맵 해상도의 대부분이 빈 공간에 낭비됐다.
+2. **Nearest PCF**: 그림자 샘플러가 Nearest라, 3×3 PCF 각 탭이 텍셀 중심에
+   스냅 → 큰 텍셀 위에서 거친 계단.
+
+### 9. 수정 둘
+
+1. **ortho 축소**: `shadowSceneRadius` 기본값 200 → **80**(기본 클러스터 ~64에
+   헤드룸). `Application::regenerateBuildings`의 floor도 200 → 80(작은 스트레스
+   그리드도 타이트하게; 큰 그리드는 `gridExtent·0.6`으로 스케일). R ≈ 880 → 352,
+   텍셀 ~2.5× 조밀.
+2. **하드웨어 PCF 비교 샘플러** (Vulkan): 그림자 샘플러를 `compareEnable=true`,
+   `compareOp=LessOrEqual`, Linear 필터로 변경. `deferred_lighting.frag.glsl`의
+   PCF 루프를 `sampler2DArrayShadow` + `texture(..., vec4(uv, layer, ref))`로
+   바꿔 각 탭이 하드웨어 2×2 bilinear 깊이 비교 → 3×3 루프와 합쳐 ~6×6 필터링.
+   `lit` 비율을 누적해 `shadow = (1 − lit)·shadowStrength`.
+
+   WebGPU는 그대로 — 샘플러 생성을 `#ifndef __EMSCRIPTEN__`로 가드(Vulkan만
+   비교 샘플러), WGSL deferred는 수동 비교 유지(`sampler_comparison` 미배선).
+   RHI는 이미 `SamplerDesc.compareEnable/compareOp`를 VkSampler에 반영함.
+
+ortho 축소 + 하드웨어 PCF 두 가지로 그리드/계단이 거의 사라짐. 사용자 확인 완료.
+
+### 10. 수정 파일 요약 (2부)
+
+| 파일 | 변경 |
+| --- | --- |
+| `src/rendering/Renderer.hpp` | `shadowSceneRadius` 기본 200 → 80 + 사유 주석 |
+| `src/Application.cpp` | `regenerateBuildings` 그림자 반경 floor 200 → 80 |
+| `src/rendering/ShadowRenderer.cpp` | 그림자 샘플러 Vulkan 비교 샘플러(Linear, LessOrEqual), WebGPU는 Nearest 유지 |
+| `shaders/deferred_lighting.frag.glsl` | `sampler2DArrayShadow` 하드웨어 PCF (lit 비율 누적) |
+
+남은 그림자 후속: 더 넓은 커널/Poisson, 그림자 맵 4096, 4개 동일 cascade
+중복 제거(현재 단일 scene-fit 행렬을 4 레이어에 복제 → 3 레이어 낭비).

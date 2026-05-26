@@ -618,7 +618,13 @@ private:
     bool  debugCascades  = false;// CSM cascade color debug
     int   debugView      = 0;    // 0=normal, 1-6=GBuffer channels, 7=SSAO, 8=bloom
     float abSplitX       = 0.0f; // A/B compare split position (0 = off, (0,1) = uv.x split)
-    float shadowSceneRadius = 200.0f;  // Orthographic projection half-extent for shadows
+    // Shadow ortho half-extent (cluster radius proxy). The default 4x4 grid
+    // spans ~±45 in X/Z (corner ~64 from origin); 80 fits it with headroom.
+    // computeCascadeMatrix expands this further to contain the low-sun shadow
+    // throw, so an oversized value here wastes shadow-map resolution on empty
+    // space and produces the coarse "grid" on the ground. Stress scenes raise
+    // it from the actual grid extent (Application::regenerateBuildings).
+    float shadowSceneRadius = 80.0f;
 #ifdef __EMSCRIPTEN__
     // CPU-recorded times (fallback when timestamp-query is unavailable).
     float m_passTimeGBuffer     = 0.0f;

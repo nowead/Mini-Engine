@@ -553,8 +553,10 @@ void Application::regenerateBuildings(int targetCount) {
     float cameraDistance = std::max(150.0f, gridExtent * 0.8f);
     camera->setDistance(cameraDistance);
 
-    // Also adjust shadow scene radius for large scenes
-    float sceneRadius = std::max(200.0f, gridExtent * 0.6f);
+    // Also adjust shadow scene radius for large scenes. Floor matches the
+    // default-scene radius (80) so small stress grids get tight, high-resolution
+    // shadows instead of a fixed oversized ortho; large grids scale up.
+    float sceneRadius = std::max(80.0f, gridExtent * 0.6f);
     renderer->setShadowSceneRadius(sceneRadius);
 
     LOG_INFO("StressTest") << "Regenerated " << created << " buildings (grid " << gridSize << "x" << gridSize
