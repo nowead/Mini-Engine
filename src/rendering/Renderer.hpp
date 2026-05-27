@@ -213,8 +213,9 @@ public:
 
     // TAA (sub-task C). Enabling applies a per-frame Halton sub-pixel jitter to
     // the projection; the TAA resolve pass (C2) accumulates it into history.
-    // Off by default and on WebGPU (Vulkan-first; the G-Buffer velocity target
-    // is Vulkan-only for now).
+    // Works on BOTH backends (the WebGPU velocity target + resolve were ported
+    // 2026-05-26); default on. Native is also driven by the ImGui toggle; WebGPU
+    // by the wasm_shell TAA toggle (setTAAEnabled binding).
     void setTAAEnabled(bool e) { m_taaEnabled = e; }
     bool isTAAEnabled() const { return m_taaEnabled; }
 
@@ -619,7 +620,7 @@ private:
     // TAA jitter state. m_currJitter/m_prevJitter are NDC sub-pixel offsets
     // (kept for the C2 resolve to un-jitter / sharpen); m_taaFrameIndex drives
     // the Halton(2,3) sequence.
-    bool      m_taaEnabled    = false;
+    bool      m_taaEnabled    = true;   // default on (both backends); see setTAAEnabled
     uint32_t  m_taaFrameIndex = 0;
     glm::vec2 m_currJitter    = glm::vec2(0.0f);
     glm::vec2 m_prevJitter    = glm::vec2(0.0f);

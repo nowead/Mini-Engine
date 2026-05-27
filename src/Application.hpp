@@ -51,6 +51,7 @@ public:
     void wasm_setAOStrength(float s)      { if (renderer) renderer->setAOStrength(s); }
     void wasm_setTonemapEnabled(bool on)  { if (renderer) renderer->setTonemapEnabled(on); }
     void wasm_setFXAAEnabled(bool on)     { if (renderer) renderer->setFXAAEnabled(on); }
+    void wasm_setTAAEnabled(bool on)      { if (renderer) renderer->setTAAEnabled(on); }
     void wasm_setDebugCascades(bool on)   { if (renderer) renderer->setDebugCascades(on); }
     void wasm_setSunIntensity(float i)    { if (renderer) renderer->setSunIntensity(i); }
     void wasm_setExposure(float e)        { if (renderer) renderer->setExposure(e); }

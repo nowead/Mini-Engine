@@ -446,6 +446,7 @@
 
             <div class="section-label">Post-Process</div>
             <label class="toggle"><input type="checkbox" id="tonemapEnabled" checked> Tonemap (ACES)</label>
+            <label class="toggle"><input type="checkbox" id="taaEnabled" checked> TAA (temporal AA)</label>
             <label class="toggle"><input type="checkbox" id="fxaaEnabled" checked> FXAA</label>
             <div class="slider-row">
                 <span>Exposure</span>
@@ -585,6 +586,9 @@
 
             document.getElementById('tonemapEnabled').addEventListener('change', function() {
                 _queue('setTonemapEnabled', this.checked);
+            });
+            document.getElementById('taaEnabled').addEventListener('change', function() {
+                _queue('setTAAEnabled', this.checked);
             });
             document.getElementById('fxaaEnabled').addEventListener('change', function() {
                 _queue('setFXAAEnabled', this.checked);

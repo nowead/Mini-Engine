@@ -471,7 +471,38 @@ CAREER_ROADMAP Task 7.1은 "RHI 3D 텍스처 미구현, 추가 필요"라 했으
 ### 26. 후속
 
 - **WASM 볼륨 포팅** (WebGPU/WGSL 레이마칭 + 3D 텍스처) — 듀얼 백엔드 데모 복원.
-- **WASM TAA 미연결 수정** (별도 커밋) — TAA가 WebGPU 포팅됐으나 브라우저 UI/바인딩에
-  연결 안 돼 기본 off였음(톱니 원인). 기본 on + `setTAAEnabled` 바인딩 + HTML 토글
-  추가는 다음 커밋으로 분리.
+- ✅ **WASM TAA 미연결 수정** — 27부에서 처리(별도 커밋).
 - Transfer Function을 1D LUT 텍스처로 확장(의료 CT Hounsfield 프리셋 등).
+
+---
+
+## 변경 이력 (6부) — WASM에서 TAA가 켜지지 않던 버그
+
+> 브라우저(WebGPU) 데모에서 건물/헬멧 외곽선이 톱니처럼 거칠다는 보고. TAA는
+> 2026-05-26에 WebGPU로 포팅됐는데 왜 안 듣나 조사.
+
+### 27. 진단 — 포팅은 됐지만 한 번도 켜진 적이 없음
+
+TAA 리졸브·velocity 타깃은 WebGPU에 구현돼 있었으나, **활성화 배선이 빠져** 있었다:
+
+- `m_taaEnabled` 기본값이 `false`.
+- 네이티브는 ImGui `LightingSettings.enableTAA=true`가 매 프레임 `setTAAEnabled(true)`
+  를 호출해 켜짐 → 매끄러움.
+- **WASM은 ImGui가 없고**(브라우저는 HTML 패널), `wasm_shell.html`엔 FXAA 토글만
+  있고 TAA 토글이 없으며 `setTAAEnabled` 바인딩도 없었음 → TAA가 영영 off →
+  **FXAA만 적용돼 톱니**. (TAA WebGPU 포팅 때 남은 미연결부. 네이티브만 봐서 놓침.)
+
+### 28. 수정
+
+- `m_taaEnabled` 기본값 `true`(양 백엔드 — 네이티브는 ImGui가 어차피 구동).
+- `setTAAEnabled`를 WASM에 노출: `WASMBindings.cpp` 바인딩 +
+  `Application::wasm_setTAAEnabled`(FXAA 패턴 그대로).
+- `wasm_shell.html` Post-Process 섹션에 **"TAA (temporal AA)" 토글**(기본 체크)
+  추가 — FXAA와 동일하게 onchange로 `setTAAEnabled` 큐잉.
+
+검증: WASM 빌드 통과(`MiniEngine.wasm` 재생성), 네이티브 무회귀. 브라우저에서
+기본 매끄러움 + 토글로 A/B 비교 가능.
+
+> 교훈: **Vulkan 전용 멤버를 가드 없는 공개 메서드가 참조하면 안 된다.** 또한
+> 기능을 "포팅 완료"로 간주하기 전에 **양 백엔드에서 실제로 켜져 동작하는지** 확인할
+> 것 — 구현과 배선(기본값·UI·바인딩)은 별개다.

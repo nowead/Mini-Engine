@@ -14,6 +14,7 @@ static void js_setBloomStrength(float s)  { if (g_app) g_app->wasm_setBloomStren
 static void js_setAOStrength(float s)     { if (g_app) g_app->wasm_setAOStrength(s); }
 static void js_setTonemapEnabled(bool on) { if (g_app) g_app->wasm_setTonemapEnabled(on); }
 static void js_setFXAAEnabled(bool on)    { if (g_app) g_app->wasm_setFXAAEnabled(on); }
+static void js_setTAAEnabled(bool on)     { if (g_app) g_app->wasm_setTAAEnabled(on); }
 static void js_setDebugCascades(bool on)  { if (g_app) g_app->wasm_setDebugCascades(on); }
 static void js_setSunIntensity(float i)   { if (g_app) g_app->wasm_setSunIntensity(i); }
 static void js_setExposure(float e)       { if (g_app) g_app->wasm_setExposure(e); }
@@ -36,6 +37,7 @@ EMSCRIPTEN_BINDINGS(mini_engine) {
     emscripten::function("setAOStrength",      &wasm::js_setAOStrength);
     emscripten::function("setTonemapEnabled",  &wasm::js_setTonemapEnabled);
     emscripten::function("setFXAAEnabled",     &wasm::js_setFXAAEnabled);
+    emscripten::function("setTAAEnabled",      &wasm::js_setTAAEnabled);
     emscripten::function("setDebugCascades",   &wasm::js_setDebugCascades);
     emscripten::function("setSunIntensity",    &wasm::js_setSunIntensity);
     emscripten::function("setExposure",        &wasm::js_setExposure);
