@@ -3438,6 +3438,11 @@ void Renderer::performFrustumCullingAsync(uint32_t frameIndex, uint32_t objectCo
 
         auto* computeQueue = device->getQueue(rhi::QueueType::Compute);
         computeQueue->submit(computeSubmit);
+
+        // D3-0b: retire into the current frame slot rather than waitIdle on destroy.
+        // The graphics submit waits this timeline value and signals the slot fence,
+        // so the slot's next fence wait covers this compute work too.
+        rhiBridge->retireCommandBuffer(std::move(computeCmdBuffer));
     }
 }
 
@@ -4644,6 +4649,13 @@ void Renderer::drawFrame() {
                 rhiBridge->getInFlightFence()
             );
         }
+
+#ifndef __EMSCRIPTEN__
+        // D3-0b: hand the submitted buffer to the frame-fence retirement ring
+        // instead of destroying it here (which would device-waitIdle every frame
+        // and serialize the GPU). It is freed when this slot's fence next signals.
+        rhiBridge->retireCommandBuffer(std::move(commandBuffer));
+#endif
     }
 
     // Step 5: Present frame

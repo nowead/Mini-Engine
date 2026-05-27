@@ -37,9 +37,15 @@ public:
     // Vulkan-specific accessors
     vk::CommandBuffer getVkCommandBuffer() const { return *m_commandBuffer; }
 
+    // D3-0b: when true, ~VulkanRHICommandBuffer skips the device waitIdle (the
+    // owner guarantees the buffer outlives its in-flight GPU work via a frame
+    // fence). Default false keeps the waitIdle safety net for one-shot paths.
+    void setExternallyManaged(bool managed) override { m_externallyManaged = managed; }
+
 private:
     VulkanRHIDevice* m_device;
     vk::raii::CommandBuffer m_commandBuffer;
+    bool m_externallyManaged = false;
 };
 
 /**
@@ -49,7 +55,8 @@ private:
  */
 class VulkanRHIRenderPassEncoder : public RHIRenderPassEncoder {
 public:
-    VulkanRHIRenderPassEncoder(VulkanRHIDevice* device, vk::raii::CommandBuffer& cmdBuffer, const RenderPassDesc& desc);
+    VulkanRHIRenderPassEncoder(VulkanRHIDevice* device, vk::raii::CommandBuffer& cmdBuffer,
+                               const RenderPassDesc& desc, bool graphManagedLayouts = false);
     ~VulkanRHIRenderPassEncoder() override;
 
     void setPipeline(rhi::RHIRenderPipeline* pipeline) override;
@@ -135,10 +142,20 @@ public:
     // own transitionTextureLayout / beginRenderPass helpers (e.g., the render graph).
     static void notifyImageLayoutChange(VkImage image, vk::ImageLayout newLayout);
 
+    // Sub-task D3-0a: when enabled, render passes opened on this encoder skip the
+    // beginRenderPass dynamic-rendering auto-barrier (and the global s_imageLayouts
+    // read/write it implies). The RenderGraph already emits explicit layout
+    // barriers for every pass, so the auto-barrier is redundant on the graph path;
+    // skipping it removes the shared-state dependency that would race once passes
+    // record on worker threads (D3-2). Set by RenderGraph::execute.
+    void setGraphManagedLayouts(bool enabled) { m_graphManagedLayouts = enabled; }
+    bool graphManagedLayouts() const { return m_graphManagedLayouts; }
+
 private:
     VulkanRHIDevice* m_device;
     vk::raii::CommandBuffer m_commandBuffer;
     bool m_finished;
+    bool m_graphManagedLayouts = false;
 };
 
 } // namespace Vulkan

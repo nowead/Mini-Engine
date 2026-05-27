@@ -183,6 +183,16 @@ public:
         rhi::RHIFence* signalFence = nullptr);
 
     /**
+     * @brief Hand a submitted command buffer to the current frame's retirement
+     *        ring (D3-0b). The buffer is kept alive until the frame that reuses
+     *        this in-flight slot waits its fence, then freed without a device
+     *        stall. Call after submit and before endFrame (so it lands in the
+     *        slot whose fence the submit signals). Marks the buffer externally
+     *        managed so its destructor skips waitIdle.
+     */
+    void retireCommandBuffer(std::unique_ptr<rhi::RHICommandBuffer> commandBuffer);
+
+    /**
      * @brief Get image available semaphore for current frame
      */
     rhi::RHISemaphore* getImageAvailableSemaphore() const {
@@ -190,10 +200,12 @@ public:
     }
 
     /**
-     * @brief Get render finished semaphore for current frame
+     * @brief Get the render-finished (present) semaphore for the CURRENT
+     *        swapchain image. D3-0b: indexed by acquired image, not frame, so the
+     *        present-signal semaphore is never reused while still in use.
      */
     rhi::RHISemaphore* getRenderFinishedSemaphore() const {
-        return m_renderFinishedSemaphores[m_currentFrame].get();
+        return m_renderFinishedSemaphores[m_currentImageIndex].get();
     }
 
     /**
@@ -258,6 +270,15 @@ private:
 
     // Per-frame command buffers (Phase 4.2)
     std::vector<std::unique_ptr<rhi::RHICommandBuffer>> m_commandBuffers;
+
+    // D3-0b: frame-fenced command-buffer retirement ring. Submitted frame/per-pass
+    // command buffers are handed here (retireCommandBuffer) instead of being
+    // destroyed inline. Each slot is cleared at the start of the frame that reuses
+    // it -- after beginFrame has waited that slot's in-flight fence -- so the GPU
+    // is guaranteed done with them. Removes the per-CB device waitIdle stall and
+    // lets MAX_FRAMES_IN_FLIGHT frames actually overlap. A slot holds many buffers
+    // (graphics + async compute today; one per pass once D3 records in parallel).
+    std::vector<std::vector<std::unique_ptr<rhi::RHICommandBuffer>>> m_retiredCommandBuffers;
 
     // Window reference for resize handling
     GLFWwindow* m_window = nullptr;

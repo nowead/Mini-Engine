@@ -314,6 +314,12 @@ void RenderGraph::execute(rhi::RHICommandEncoder* encoder)
 
     auto& cmd = vkEnc->getCommandBuffer();
 
+    // D3-0a: the graph emits explicit layout barriers for every pass below, so
+    // tell the encoder to skip the redundant beginRenderPass auto-barrier (and the
+    // global s_imageLayouts read/write it implies). This removes the shared-state
+    // dependency on the graph path ahead of per-pass parallel recording (D3-2).
+    vkEnc->setGraphManagedLayouts(true);
+
     BarrierBatch batch;
 
     // Helper: get VkImage for a texture handle

@@ -148,3 +148,93 @@ D3: RenderGraph 병렬 스케줄러. 정렬된 패스를 의존성 레벨로 그
 §D에 적힌 장애물 둘을 먼저 해소: (1) 전역 `s_imageLayouts` 레이스, (2)
 `~VulkanRHICommandBuffer`의 `waitIdle()`(패스별 CB 수명 모델 재설계). 3.2에서
 본 "동시 실행 중 자원 수명" 주의가 (2)에 그대로 적용된다.
+
+---
+
+## 변경 이력 (2부) — D3 장애물 해소 (D3-0a/0b)
+
+> 승인받은 D3 시퀀스: "멀티-CB를 먼저 단일 스레드로 정확히 동작시킨 뒤 병렬을
+> 켠다." 그 첫 단계로 §D가 명시한 D3 착수 전 장애물 둘을 해소했다. 둘 다
+> **렌더링 동작은 불변**이지만, 병렬 패스 기록(D3-2)이 가능하도록 RHI의 공유
+> 상태/스톨 의존성을 걷어낸다.
+
+### 7. D3-0a — 전역 `s_imageLayouts` 우회
+
+`beginRenderPass`(동적 렌더링 경로)는 정적 맵 `s_imageLayouts`를 읽어 진입
+레이아웃 배리어를 emit한다. 워커가 동시에 `beginRenderPass`하면 이 맵이 레이스.
+하지만 **그래프 경로에선 이미 redundant**다: `RenderGraph::execute`의
+`transitionTex`가 `BarrierBatch`로 이미지를 `ColorAttachmentOptimal`로 명시
+전이하고 `notifyImageLayoutChange`로 맵을 동기화 → `beginRenderPass`는
+`tracker == target`이라 조기 반환(아무 배리어도 안 emit).
+
+- 인코더에 `setGraphManagedLayouts(bool)` + `m_graphManagedLayouts` 추가.
+- render pass 인코더 ctor에 `graphManagedLayouts` 파라미터 — 켜지면
+  `emitBarrierToColor/Depth`가 조기 반환(맵 read/write·배리어 emit 전부 생략).
+- `RenderGraph::execute`가 패스 루프 전 `setGraphManagedLayouts(true)`.
+- **패스 함수(GBufferPass 등) 무변경** — 인코더 단위 플래그라 워커마다 독립.
+  비-그래프 경로(데모/RendererBridge)는 그대로 맵 사용.
+
+자동 배리어가 원래 no-op이었으므로 동작 동일. 검증: 검증 레이어 켠 채 7초 실행,
+VUID 0. 이로써 **그래프의 명시적 배리어만으로 레이아웃 전이가 완결**됨이 확인 —
+패스별 독립 CB 기록의 전제.
+
+### 8. D3-0b — per-CB `waitIdle` 제거 + 프레임-펜스 CB 수명
+
+`~VulkanRHICommandBuffer`가 CB 소멸마다 `device->waitIdle()`. drawFrame의 로컬
+CB가 매 프레임 소멸 → **매 프레임 전체 GPU 스톨**(프레임을 사실상 단일 버퍼링).
+패스당 CB를 만들면 프레임당 N회 스톨로 병렬화 무력화.
+
+설계 — 전역 제거 대신 **opt-out**(소비자 ~13곳의 blast radius 회피):
+
+- 기반 `RHICommandBuffer`에 `setExternallyManaged(bool)` 훅(기본 no-op). Vulkan
+  CB는 켜지면 소멸자 `waitIdle` 생략. **one-shot 셋업 경로(텍스처 업로드·IBL
+  bake·Mesh·ImGui·swapchain)는 기본값 유지 → 무변경·무위험** (그들은 이미
+  `fence->wait`/`queue->waitIdle`로 명시 동기화).
+- `RendererBridge`에 **프레임-펜스 retirement ring**
+  (`m_retiredCommandBuffers`, 슬롯당 버킷). 제출된 프레임/컴퓨트 CB를
+  `retireCommandBuffer`로 ring에 넘기고, `beginFrame`이 그 슬롯의 in-flight
+  펜스를 대기한 직후 비움 → GPU 완료 보장 하에서만 해제. 슬롯이 다중 CB를
+  보유(graphics + async compute; D3에서 패스별 CB도 같은 ring이 흡수).
+- drawFrame 메인 CB + 비동기 컬링 컴퓨트 CB가 ring 경유로 전환.
+
+검증 결과 per-frame 리소스(`rhiUniformBuffers[i]`, cull/indirect/visible[i],
+per-frame 디스크립터 풀)가 **이미 frameIndex로 분리**돼 있어, 스톨 제거로
+2프레임이 실제 오버랩해도 sync 해저드 없음 — 엔진이 애초에 2-in-flight로
+설계됐고 스톨만 직렬화하고 있었음.
+
+### 9. 스톨이 가리고 있던 latent 버그 — present 세마포어 재사용
+
+스톨을 걷어내자 프레임이 실제로 겹치면서 검증 에러가 떴다
+(VUID-vkQueueSubmit-pSignalSemaphores-00067): `renderFinished` 세마포어가
+**frame-in-flight 단위**(`m_currentFrame`)라, presentation 엔진이 아직 그
+세마포어를 쓰는 중에 다음 프레임이 재사용. 매 프레임 `waitIdle`이 GPU를 완전히
+비워 가려주던 버그.
+
+- 수정: 검증 레이어 권고대로 **renderFinished를 스왑체인 이미지 수만큼**
+  (`getBufferCount()`) 만들어 **acquired image index로 인덱싱**. `createSwapchain`
+  에서 생성(리사이즈 시 재생성, 선행 `waitIdle`이 안전 보장). fence·imageAvailable은
+  frame-in-flight 단위 유지.
+- 제출 signal(`getRenderFinishedSemaphore`)과 present wait가 모두
+  `m_currentImageIndex`를 사용 — 일치.
+
+검증: 검증 레이어 켠 채 10초 실행, VUID/sync 해저드/"command buffer in use"
+**0건**.
+
+### 10. 수정 파일 요약 (2부)
+
+| 파일 | 변경 |
+| --- | --- |
+| `src/rhi/include/rhi/RHICommandBuffer.hpp` | `setExternallyManaged()` 가상 훅(기본 no-op) |
+| `src/rhi/backends/vulkan/.../VulkanRHICommandEncoder.hpp` | CB `m_externallyManaged` + override; render pass 인코더 `graphManagedLayouts` 파라미터; 인코더 `setGraphManagedLayouts` |
+| `src/rhi/backends/vulkan/src/VulkanRHICommandEncoder.cpp` | 소멸자 waitIdle을 `!m_externallyManaged`로 가드 + move 시 플래그 이전; `emitBarrierToColor/Depth` graph-managed 조기 반환; `beginRenderPass` 플래그 전달 |
+| `src/rendering/graph/RenderGraph.cpp` | `execute()`가 패스 루프 전 `setGraphManagedLayouts(true)` |
+| `src/rendering/RendererBridge.{hpp,cpp}` | 프레임-펜스 retirement ring(`m_retiredCommandBuffers`, `retireCommandBuffer`, beginFrame clear); renderFinished 세마포어를 이미지별로(createSwapchain 생성, image-index 인덱싱) |
+| `src/rendering/Renderer.cpp` | drawFrame 메인 CB + 비동기 컴퓨트 CB를 `retireCommandBuffer` 경유 |
+
+### 11. 다음 — D3-1
+
+장애물 2개 해소 완료. D3-1: `compile()`이 의존성 레벨 산출 → `execute()`가
+패스마다 자체 primary CB에 진입 배리어 + 드로우 기록 → 메인이 레벨/순서대로
+제출(**아직 단일 스레드**). 배리어 상태는 레벨 진입 전 스냅샷에서 계산. 검증은
+단일-CB 때와 픽셀 동일. notifyImageLayoutChange의 전역 write도 배리어가 per-pass
+CB로 이동하는 이 시점에 정리한다.

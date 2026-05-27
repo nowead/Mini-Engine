@@ -27,24 +27,32 @@ VulkanRHICommandBuffer::VulkanRHICommandBuffer(VulkanRHIDevice* device, vk::raii
 }
 
 VulkanRHICommandBuffer::~VulkanRHICommandBuffer() {
-    // Phase 7.5: Wait for device to be idle before freeing command buffer
-    // This prevents "command buffer in use" validation errors
-    if (m_device) {
+    // Phase 7.5 / D3-0b: one-shot setup buffers (texture upload, IBL bake, etc.)
+    // are destroyed right after submission, so a device waitIdle here prevents
+    // "command buffer in use" errors for them. Frame/per-pass buffers instead
+    // opt out (setExternallyManaged) and are kept alive by the RendererBridge
+    // frame-fence retirement ring -- destroying them must NOT stall the GPU, or
+    // multithreaded recording (D3) would be serialized frame-by-frame.
+    if (m_device && !m_externallyManaged) {
         m_device->waitIdle();
     }
-    // RAII handles cleanup automatically after waitIdle
+    // RAII handles cleanup automatically.
 }
 
 VulkanRHICommandBuffer::VulkanRHICommandBuffer(VulkanRHICommandBuffer&& other) noexcept
     : m_device(other.m_device)
     , m_commandBuffer(std::move(other.m_commandBuffer))
+    , m_externallyManaged(other.m_externallyManaged)
 {
+    other.m_device = nullptr;  // moved-from must not waitIdle on a null buffer
 }
 
 VulkanRHICommandBuffer& VulkanRHICommandBuffer::operator=(VulkanRHICommandBuffer&& other) noexcept {
     if (this != &other) {
         m_device = other.m_device;
         m_commandBuffer = std::move(other.m_commandBuffer);
+        m_externallyManaged = other.m_externallyManaged;
+        other.m_device = nullptr;
     }
     return *this;
 }
@@ -53,7 +61,7 @@ VulkanRHICommandBuffer& VulkanRHICommandBuffer::operator=(VulkanRHICommandBuffer
 // VulkanRHIRenderPassEncoder Implementation
 // ============================================================================
 
-VulkanRHIRenderPassEncoder::VulkanRHIRenderPassEncoder(VulkanRHIDevice* device, vk::raii::CommandBuffer& cmdBuffer, const RenderPassDesc& desc)
+VulkanRHIRenderPassEncoder::VulkanRHIRenderPassEncoder(VulkanRHIDevice* device, vk::raii::CommandBuffer& cmdBuffer, const RenderPassDesc& desc, bool graphManagedLayouts)
     : m_device(device)
     , m_commandBuffer(cmdBuffer)
     , m_ended(false)
@@ -113,6 +121,10 @@ VulkanRHIRenderPassEncoder::VulkanRHIRenderPassEncoder(VulkanRHIDevice* device, 
     std::vector<vk::ImageMemoryBarrier> fromColorAttachBarriers;
 
     auto emitBarrierToColor = [&](VkImage img) {
+        // D3-0a: under graph-managed layouts the RenderGraph already emitted the
+        // explicit transition to ColorAttachmentOptimal for this image, so skip
+        // the auto-barrier and the s_imageLayouts read/write entirely.
+        if (graphManagedLayouts) return;
         if (!img) return;
         auto target = vk::ImageLayout::eColorAttachmentOptimal;
         auto it = s_imageLayouts.find(img);
@@ -143,6 +155,8 @@ VulkanRHIRenderPassEncoder::VulkanRHIRenderPassEncoder(VulkanRHIDevice* device, 
     };
 
     auto emitBarrierToDepth = [&](VkImage img) {
+        // D3-0a: see emitBarrierToColor -- graph already transitioned the image.
+        if (graphManagedLayouts) return;
         if (!img) return;
         auto target = vk::ImageLayout::eDepthStencilAttachmentOptimal;
         auto it = s_imageLayouts.find(img);
@@ -483,7 +497,7 @@ VulkanRHICommandEncoder::~VulkanRHICommandEncoder() {
 }
 
 std::unique_ptr<RHIRenderPassEncoder> VulkanRHICommandEncoder::beginRenderPass(const RenderPassDesc& desc) {
-    return std::make_unique<VulkanRHIRenderPassEncoder>(m_device, m_commandBuffer, desc);
+    return std::make_unique<VulkanRHIRenderPassEncoder>(m_device, m_commandBuffer, desc, m_graphManagedLayouts);
 }
 
 std::unique_ptr<RHIComputePassEncoder> VulkanRHICommandEncoder::beginComputePass(const char* label) {

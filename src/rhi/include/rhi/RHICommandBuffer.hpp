@@ -308,8 +308,21 @@ class RHICommandBuffer {
 public:
     virtual ~RHICommandBuffer() = default;
 
-    // Command buffers are opaque submission objects with no methods
-    // They are submitted to queues for execution
+    // Command buffers are opaque submission objects with no methods.
+    // They are submitted to queues for execution.
+
+    /**
+     * @brief Opt the command buffer's lifetime out of any backend-internal stall.
+     *
+     * D3-0b: by default the Vulkan backend waits for device idle when a command
+     * buffer is destroyed (a per-CB safety net for one-shot setup paths). For the
+     * hot per-frame / per-pass path that stall serializes the GPU. Callers that
+     * keep the command buffer alive until its frame fence has signalled (e.g. the
+     * RendererBridge frame-fenced retirement ring) mark it externally managed, so
+     * destruction is a plain free with no waitIdle. No-op on backends without the
+     * stall (WebGPU).
+     */
+    virtual void setExternallyManaged(bool /*managed*/) {}
 };
 
 } // namespace rhi

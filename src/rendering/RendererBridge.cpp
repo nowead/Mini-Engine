@@ -62,15 +62,21 @@ void RendererBridge::initializeRHI(GLFWwindow* window, bool enableValidation) {
 }
 
 void RendererBridge::createSyncObjects() {
+    // In-flight fences + image-available semaphores are per frame-in-flight.
     m_inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
     m_imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
-    m_renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
 
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         m_inFlightFences[i] = m_device->createFence(true);  // Start signaled
         m_imageAvailableSemaphores[i] = m_device->createSemaphore();
-        m_renderFinishedSemaphores[i] = m_device->createSemaphore();
     }
+
+    // D3-0b: render-finished (present) semaphores are per SWAPCHAIN IMAGE, not per
+    // frame-in-flight -- they are created in createSwapchain once the image count
+    // is known. With the per-frame waitIdle stall removed, frames now actually
+    // overlap, and a present semaphore indexed by frame can still be in use by the
+    // presentation engine when reused (VUID-vkQueueSubmit-pSignalSemaphores-00067).
+    // Indexing by acquired image index is the spec-recommended fix.
 
     // Initialize command buffers (Phase 4.2)
     createCommandBuffers();
@@ -81,6 +87,10 @@ void RendererBridge::createCommandBuffers() {
     m_commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
     // Note: Command buffers are created on-demand via createCommandEncoder()
     // The vector is sized but elements remain null until populated
+
+    // D3-0b: one retirement bucket per in-flight slot.
+    m_retiredCommandBuffers.clear();
+    m_retiredCommandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
 }
 
 // ============================================================================
@@ -117,6 +127,16 @@ void RendererBridge::createSwapchain(uint32_t width, uint32_t height, bool vsync
 
     m_swapchain = m_device->createSwapchain(desc);
     m_needsResize = false;
+
+    // D3-0b: (re)create one render-finished semaphore per swapchain image. The
+    // preceding waitIdle (or, on first creation, the absence of any in-flight
+    // work) guarantees no present is still using an old semaphore here.
+    const uint32_t imageCount = m_swapchain->getBufferCount();
+    m_renderFinishedSemaphores.clear();
+    m_renderFinishedSemaphores.resize(imageCount);
+    for (uint32_t i = 0; i < imageCount; ++i) {
+        m_renderFinishedSemaphores[i] = m_device->createSemaphore();
+    }
 }
 
 void RendererBridge::onResize(uint32_t width, uint32_t height) {
@@ -157,6 +177,12 @@ bool RendererBridge::beginFrame() {
     m_inFlightFences[m_currentFrame]->wait(UINT64_MAX);
     m_inFlightFences[m_currentFrame]->reset();
 
+    // D3-0b: the fence above signalled that this slot's previous GPU work is done,
+    // so the command buffers retired into it last cycle are now safe to free.
+    if (m_currentFrame < m_retiredCommandBuffers.size()) {
+        m_retiredCommandBuffers[m_currentFrame].clear();
+    }
+
     // Phase 7.5: Acquire next image with semaphore signaling
     // The semaphore will be signaled when the image is ready to be rendered to
     auto* imageView = m_swapchain->acquireNextImage(
@@ -184,8 +210,9 @@ void RendererBridge::endFrame() {
         return;
     }
 
-    // Present with render finished semaphore to ensure rendering is complete
-    m_swapchain->present(m_renderFinishedSemaphores[m_currentFrame].get());
+    // Present waits on the render-finished semaphore for the CURRENT image
+    // (D3-0b: per-image indexing; must match the semaphore the submit signalled).
+    m_swapchain->present(m_renderFinishedSemaphores[m_currentImageIndex].get());
 
     // Advance to next frame
     m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
@@ -228,6 +255,16 @@ void RendererBridge::submitCommandBuffer(
 
     // Submit command buffer with synchronization
     queue->submit(commandBuffer, waitSemaphore, signalSemaphore, signalFence);
+}
+
+void RendererBridge::retireCommandBuffer(std::unique_ptr<rhi::RHICommandBuffer> commandBuffer) {
+    if (!commandBuffer) {
+        return;
+    }
+    // Lifetime is now owned by the frame-fence ring, so opt out of the
+    // destructor's device waitIdle (see VulkanRHICommandBuffer::~).
+    commandBuffer->setExternallyManaged(true);
+    m_retiredCommandBuffers[m_currentFrame].push_back(std::move(commandBuffer));
 }
 
 rhi::RHITextureView* RendererBridge::getCurrentSwapchainView() const {

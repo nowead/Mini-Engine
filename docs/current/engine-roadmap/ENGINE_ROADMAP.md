@@ -211,15 +211,16 @@ per-thread 풀 필요.
   레벨 독립 패스를 워커가 각자 primary CB에 기록 → 메인이 레벨 순서대로 제출.
 - **D4** — 검증(경쟁/깜빡임 없음) + 4코어 CPU 프레임 시간 측정.
 
-**D3 착수 전 해소할 장애물 (D1 착수 시 발견)**:
+**D3 착수 전 해소할 장애물 (D1 착수 시 발견)** — ✅ 둘 다 해소 (D3-0a/0b, 2026-05-27):
 
-- **전역 `s_imageLayouts` 맵** (`VulkanRHICommandEncoder.cpp`): 동적 렌더링
-  배리어용 이미지 레이아웃 추적기가 모든 인코더 공유 정적 가변 상태. 워커가
-  동시에 `beginRenderPass`하면 레이스. 대응: RenderGraph 패스는 이미 명시적
-  배리어를 emit하므로 그래프 경로에서 자동 배리어를 우회하거나 추적기를
-  thread-safe화.
-- **`~VulkanRHICommandBuffer`의 `waitIdle()`**: CB 소멸마다 디바이스 전체 대기
-  → 병렬화 무력화. 패스별 CB 수명 모델 재설계(프레임 풀 reset 기반) 필요.
+- ✅ **전역 `s_imageLayouts` 맵** (`VulkanRHICommandEncoder.cpp`): 그래프 패스가
+  이미 명시적 배리어를 emit하므로 인코더 단위 `setGraphManagedLayouts(true)`로
+  `beginRenderPass` 자동 배리어(및 전역 맵 read/write)를 우회 (D3-0a).
+- ✅ **`~VulkanRHICommandBuffer`의 `waitIdle()`**: opt-out(`setExternallyManaged`)
+  과 `RendererBridge` 프레임-펜스 retirement ring으로 대체 (D3-0b). 매 프레임
+  전체 GPU 스톨 제거, 2프레임 실제 오버랩. 부수적으로 스톨이 가리던 present
+  세마포어 재사용 버그(이미지별 세마포어로)도 수정. 자세한 내용:
+  [`CHANGELOG_2026-05-27.md`](../../archive/changelogs/CHANGELOG_2026-05-27.md) 2부.
 
 **작업량**: 3~4주(여러 세션). **얻는 것**: Vulkan 면접 단골 주제, 4코어에서 CPU
 프레임 시간 감소, "엔진 코어 활용" 시연. **의존성**: Render Graph 기반 + RHI
