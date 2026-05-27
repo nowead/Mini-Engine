@@ -247,6 +247,9 @@ if(NOT EMSCRIPTEN)
         # Phase 4: Bindless Rendering
         src/rendering/BindlessTextureManager.cpp
         src/rendering/BindlessTextureManager.hpp
+        # Phase 7: Volume Rendering (Vulkan-only)
+        src/rendering/VolumeRenderer.cpp
+        src/rendering/VolumeRenderer.hpp
     )
 
     target_include_directories(MiniEngine BEFORE PRIVATE
@@ -533,6 +536,24 @@ if(NOT EMSCRIPTEN)
         COMMENT "Compiling deferred_lighting.frag.glsl -> SPIR-V"
     )
 
+    # Phase 7: volume ray-march shaders
+    add_custom_command(
+        OUTPUT ${BUILDING_SHADER_DIR}/volume_march.vert.spv
+        COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=vertex
+                -o ${BUILDING_SHADER_DIR}/volume_march.vert.spv
+                ${BUILDING_SHADER_DIR}/volume_march.vert.glsl
+        DEPENDS ${BUILDING_SHADER_DIR}/volume_march.vert.glsl
+        COMMENT "Compiling volume_march.vert.glsl -> SPIR-V"
+    )
+    add_custom_command(
+        OUTPUT ${BUILDING_SHADER_DIR}/volume_march.frag.spv
+        COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=fragment
+                -o ${BUILDING_SHADER_DIR}/volume_march.frag.spv
+                ${BUILDING_SHADER_DIR}/volume_march.frag.glsl
+        DEPENDS ${BUILDING_SHADER_DIR}/volume_march.frag.glsl
+        COMMENT "Compiling volume_march.frag.glsl -> SPIR-V"
+    )
+
     add_custom_target(building_shaders DEPENDS
         ${BUILDING_SHADER_DIR}/building.vert.spv
         ${BUILDING_SHADER_DIR}/building.frag.spv
@@ -555,8 +576,10 @@ if(NOT EMSCRIPTEN)
         ${BUILDING_SHADER_DIR}/gbuffer_nobindless.frag.spv
         ${BUILDING_SHADER_DIR}/deferred_lighting.vert.spv
         ${BUILDING_SHADER_DIR}/deferred_lighting.frag.spv
+        ${BUILDING_SHADER_DIR}/volume_march.vert.spv
+        ${BUILDING_SHADER_DIR}/volume_march.frag.spv
     )
-    
+
     add_dependencies(MiniEngine building_shaders)
 else()
     # =============================================================================

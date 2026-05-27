@@ -139,6 +139,34 @@ Renderer::Renderer(GLFWwindow* window,
                 MAX_FRAMES_IN_FLIGHT);
         }
     }
+
+    // Phase 7: volume renderer -- create + upload a procedural 3D density volume.
+    // Phase 7-1/7-2 here only exercise the (previously untested) RHI 3D texture
+    // create + upload path; the ray-march pass + compositing come in 7-3.
+    {
+        auto* device = rhiBridge->getDevice();
+        auto* gfxQueue = device ? device->getQueue(rhi::QueueType::Graphics) : nullptr;
+        if (device && gfxQueue) {
+            volumeRenderer = std::make_unique<rendering::VolumeRenderer>(device, gfxQueue);
+            if (!volumeRenderer->initialize(128)) {
+                LOG_ERROR("Renderer") << "VolumeRenderer init failed";
+                volumeRenderer.reset();
+            } else {
+                // Ray-march pipeline + bind groups. Windows/macOS use dynamic
+                // rendering (null native pass); the volume pass writes HDR with
+                // Load + premultiplied blend, sampling scene depth for occlusion.
+                void* nativeHDRPass = nullptr;
+#ifdef __linux__
+                if (auto* sc = dynamic_cast<RHI::Vulkan::VulkanRHISwapchain*>(rhiBridge->getSwapchain()))
+                    nativeHDRPass = reinterpret_cast<void*>(static_cast<VkRenderPass>(sc->getHDRLoadRenderPass()));
+#endif
+                if (rhiDepthImageView &&
+                    !volumeRenderer->createPipeline(rhiDepthImageView.get(), nativeHDRPass)) {
+                    LOG_ERROR("Renderer") << "VolumeRenderer pipeline init failed";
+                }
+            }
+        }
+    }
 #else
     // Sub-task C (WebGPU port): TAA resolve pipeline (needs G-Buffer velocity
     // view + HDR/history textures created above).
@@ -575,6 +603,10 @@ void Renderer::handleFramebufferResize(int width, int height) {
                             rhiDepthImageView.get());
         createDeferredLightingPass();
         createTAAResources();   // rebuild TAA bind groups (HDR/history/velocity views changed)
+        // Phase 7: rebuild volume bind groups against the new depth view (otherwise
+        // the volume pass samples a freed depth image and crashes after resize).
+        if (volumeRenderer && volumeRenderer->isPipelineReady())
+            volumeRenderer->createBindGroups(rhiDepthImageView.get());
     }
     recreatePostProcessResources();
 #endif
@@ -666,6 +698,10 @@ void Renderer::recreateSwapchain() {
                             rhiDepthImageView.get());
         createDeferredLightingPass();
         createTAAResources();   // rebuild TAA bind groups (HDR/history/velocity views changed)
+        // Phase 7: rebuild volume bind groups against the new depth view (otherwise
+        // the volume pass samples a freed depth image and crashes after resize).
+        if (volumeRenderer && volumeRenderer->isPipelineReady())
+            volumeRenderer->createBindGroups(rhiDepthImageView.get());
     }
     recreatePostProcessResources();
 #endif
@@ -4578,6 +4614,52 @@ void Renderer::drawFrame() {
             m_renderGraph.addWriteDep(cp, rgHDR,   RA::CopyDst);
 
             taaRanThisFrame = true;
+        }
+
+        // ---- Phase 7: Volume ray-march (composite over HDR, after TAA, before bloom) ----
+        // Marches the procedural density volume and blends premultiplied color over
+        // the lit HDR scene, sampling scene depth so opaque geometry occludes it.
+        // Placed after TAA so the volume (which has no motion vectors) is not
+        // reprojected; bloom downstream can still pick up bright volume.
+        if (volumeRenderer && volumeRenderer->isInitialized() && volumeRenderer->isPipelineReady()
+            && volumeRenderer->isEnabled() && rgHDR != INVALID && rgDepth != INVALID) {
+            volumeRenderer->updateUBO(frameIndex,
+                                      glm::inverse(viewMatrix), glm::inverse(projectionMatrix),
+                                      cameraPosition);
+
+            rhi::RenderPassDesc vmDesc;
+            vmDesc.width  = W;
+            vmDesc.height = H;
+            vmDesc.label  = "VolumeMarch";
+            rhi::RenderPassColorAttachment vmColor;
+            vmColor.view       = hdrColorView.get();
+            vmColor.loadOp     = rhi::LoadOp::Load;   // composite over the lit scene
+            vmColor.storeOp    = rhi::StoreOp::Store;
+            vmColor.clearValue = rhi::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
+            vmDesc.colorAttachments.push_back(vmColor);
+#ifdef __linux__
+            if (auto* rhiVulkanSC = dynamic_cast<RHI::Vulkan::VulkanRHISwapchain*>(swapchain)) {
+                vmDesc.nativeRenderPass  = reinterpret_cast<void*>(
+                    static_cast<VkRenderPass>(rhiVulkanSC->getHDRLoadRenderPass()));
+                vmDesc.nativeFramebuffer = reinterpret_cast<void*>(
+                    static_cast<VkFramebuffer>(rhiVulkanSC->getHDRFramebuffer()));
+            }
+#endif
+            uint32_t vmFI = frameIndex;
+            auto pass = m_renderGraph.addPass("VolumeMarch", PT::Render,
+                [this, vmDesc, W, H, vmFI](rhi::RHICommandEncoder* enc) {
+                    auto vp = enc->beginRenderPass(vmDesc);
+                    if (vp) {
+                        vp->setViewport(0.0f, 0.0f, float(W), float(H), 0.0f, 1.0f);
+                        vp->setScissorRect(0, 0, W, H);
+                        vp->setPipeline(volumeRenderer->getPipeline());
+                        vp->setBindGroup(0, volumeRenderer->getBindGroup(vmFI));
+                        vp->draw(3);  // fullscreen triangle
+                        vp->end();
+                    }
+                });
+            m_renderGraph.addReadDep(pass, rgDepth, RA::SampleFragment);
+            m_renderGraph.addWriteDep(pass, rgHDR, RA::ColorWrite);
         }
 
         // ---- Bloom passes ----

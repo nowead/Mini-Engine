@@ -3,7 +3,8 @@
 #ifndef __EMSCRIPTEN__
 #include "src/rendering/graph/RenderGraph.hpp"
 #ifndef __EMSCRIPTEN__
-#include "src/utils/ThreadPool.hpp"   // D3-2: parallel shadow-cascade recording (native only)
+#include "src/utils/ThreadPool.hpp"     // D3-2: parallel shadow-cascade recording (native only)
+#include "src/rendering/VolumeRenderer.hpp"  // Phase 7: volume rendering (native only)
 #endif
 #endif
 
@@ -216,6 +217,20 @@ public:
     // is Vulkan-only for now).
     void setTAAEnabled(bool e) { m_taaEnabled = e; }
     bool isTAAEnabled() const { return m_taaEnabled; }
+
+    // Phase 7-4: volume rendering controls (forwarded to the VolumeRenderer).
+#ifndef __EMSCRIPTEN__
+    void setVolumeEnabled(bool e) { if (volumeRenderer) volumeRenderer->setEnabled(e); }
+    void setVolumeParams(float densityScale, float extinction, float stepSize,
+                         float threshold, float colorMix) {
+        if (volumeRenderer)
+            volumeRenderer->setParams(densityScale, extinction, stepSize, threshold, colorMix);
+    }
+    void setVolumeColors(const glm::vec3& low, const glm::vec3& high) {
+        if (volumeRenderer) volumeRenderer->setColors(low, high);
+    }
+    bool volumeAvailable() const { return volumeRenderer && volumeRenderer->isInitialized(); }
+#endif
 
     // D4: parallel shadow-cascade recording toggle + CPU measurement (A/B).
     // true = dispatch the 4 cascades to the worker pool (D3-2); false = record
@@ -676,6 +691,12 @@ private:
     std::unique_ptr<rendering::GBufferPass>          gBufferPass;
     std::unique_ptr<rendering::DeferredLightingPass> deferredLightingPass;
 
+    // D4: A/B toggle + EMA-smoothed CPU cost of the shadow-cascade recording region.
+    // Unconditional (the setters/getters are unguarded and called from Application
+    // on both backends); only the parallel path itself is Vulkan-only.
+    bool  m_parallelShadowCascades = true;
+    float m_shadowRecordCpuMs      = 0.0f;
+
 #ifndef __EMSCRIPTEN__
     std::unique_ptr<class GpuProfiler> gpuProfiler;
     rendergraph::RenderGraph m_renderGraph;
@@ -686,9 +707,8 @@ private:
     // keeps worker command-pool access (D1) safe alongside the retirement ring (D3-0b).
     std::unique_ptr<utils::ThreadPool> m_shadowThreadPool;
 
-    // D4: A/B toggle + EMA-smoothed CPU cost of the shadow-cascade recording region.
-    bool  m_parallelShadowCascades = true;
-    float m_shadowRecordCpuMs      = 0.0f;
+    // Phase 7: volume rendering (procedural density 3D texture + ray march, Vulkan-only)
+    std::unique_ptr<rendering::VolumeRenderer> volumeRenderer;
 
     // Phase 4: Bindless texture registry + 3 solid-color material textures
     std::unique_ptr<rendering::BindlessTextureManager> bindlessTextureManager;

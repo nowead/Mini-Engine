@@ -128,6 +128,20 @@ public:
     // Application reads this each frame and applies it to the Renderer.
     bool getParallelShadowRecording() const { return m_parallelShadowRecording; }
 
+    // Phase 7-4: volume rendering controls (Volume panel). Application reads this
+    // each frame and forwards to the Renderer.
+    struct VolumeSettings {
+        bool  enabled      = true;
+        float densityScale = 1.0f;   // overall thickness / visibility
+        float extinction   = 1.5f;   // Beer-Lambert absorption strength
+        float stepSize     = 0.6f;   // march step (smaller = denser sampling, slower)
+        float threshold    = 0.02f;  // clip low density (carves wispy edges)
+        float colorMix     = 2.0f;   // transfer-function color blend
+        float lowColor[3]  = { 0.35f, 0.45f, 0.75f };  // low-density color
+        float highColor[3] = { 1.00f, 0.95f, 0.88f };  // high-density color
+    };
+    const VolumeSettings& getVolumeSettings() const { return m_volumeSettings; }
+
 private:
     std::unique_ptr<ui::ImGuiBackend> backend;
 
@@ -154,6 +168,9 @@ private:
 
     // D4: parallel shadow-cascade recording toggle (default on = D3-2 path)
     bool m_parallelShadowRecording = true;
+
+    // Phase 7-4: volume rendering settings (Volume panel)
+    VolumeSettings m_volumeSettings;
 
     // Bindless + VMA metrics
     BindlessMetrics m_bindlessMetrics;

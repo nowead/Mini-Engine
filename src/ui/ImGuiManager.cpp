@@ -304,6 +304,26 @@ void ImGuiManager::renderUI(Camera& camera, uint32_t buildingCount,
 
     ImGui::Spacing();
 
+    // ── Volume Rendering (Phase 7) ────────────────────────────────────────────
+    if (ImGui::CollapsingHeader("Volume Rendering", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("Enable volume", &m_volumeSettings.enabled);
+        ImGui::TextDisabled("Procedural cloud, ray-marched + depth-composited");
+        ImGui::BeginDisabled(!m_volumeSettings.enabled);
+        ImGui::SliderFloat("Density",   &m_volumeSettings.densityScale, 0.0f, 5.0f,  "%.2f");
+        ImGui::SliderFloat("Extinction",&m_volumeSettings.extinction,   0.1f, 8.0f,  "%.2f");
+        ImGui::SliderFloat("Threshold", &m_volumeSettings.threshold,    0.0f, 0.5f,  "%.3f");
+        ImGui::SliderFloat("Color mix", &m_volumeSettings.colorMix,     0.0f, 5.0f,  "%.2f");
+        ImGui::SliderFloat("Step size", &m_volumeSettings.stepSize,     0.2f, 2.0f,  "%.2f");
+        ImGui::ColorEdit3("Low color",  m_volumeSettings.lowColor);
+        ImGui::ColorEdit3("High color", m_volumeSettings.highColor);
+        ImGui::TextDisabled("Color = low-density -> high-density (Color mix sets the ramp).");
+        ImGui::TextDisabled("Density/Extinction up = thicker; Threshold up = wispier;");
+        ImGui::TextDisabled("Step size down = finer (slower).");
+        ImGui::EndDisabled();
+    }
+
+    ImGui::Spacing();
+
     // ── Statistics ───────────────────────────────────────────────────────────
     if (ImGui::CollapsingHeader("Statistics", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Text("FPS: %.1f  |  Frame: %.3f ms",

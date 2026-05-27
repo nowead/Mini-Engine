@@ -407,3 +407,71 @@ D1~D4 완료. 멀티스레드 커맨드 레코딩 인프라(per-thread 풀 → �
 해소 → 멀티-CB → 병렬 → 측정)가 정확성·동시성 검증과 정직한 성능 규명까지 끝났다.
 후속 후보(이득이 실제로 날 워크로드): GBuffer 등 **비인스턴스 다중 드로우 패스의
 병렬/secondary-CB 분할** — §D "secondary 안 씀" 결정과 충돌하므로 별도 재논의.
+
+---
+
+## 변경 이력 (5부) — 볼륨 렌더링 (Vulkan 우선)
+
+> 로드맵 D 종결 후 다음 방향으로 **볼륨 렌더링**(CAREER_ROADMAP의 해당 단계 —
+> 3D 텍스처 + Ray Marching, 의료/디지털 트윈 도메인 진입)을 착수. 백엔드 범위는
+> **Vulkan 전용 먼저**로 합의(WebGPU 포팅은 후속).
+
+### 22. 착수 조사 — 문서 vs 실제 코드
+
+CAREER_ROADMAP Task 7.1은 "RHI 3D 텍스처 미구현, 추가 필요"라 했으나 **현재 코드엔
+이미 구현돼 있었다**: `VulkanRHITexture.cpp`의 `VK_IMAGE_TYPE_3D`/`extent.depth`/
+`View3D → VK_IMAGE_VIEW_TYPE_3D` 경로와 `copyBufferToTexture`의 `copySize.depth`
+처리. 단 **아무도 안 써봐서 미검증**이었다. → 7-1은 "구현"이 아니라 **"검증"**으로 축소.
+
+엔진-로드맵 렌즈가 제기한 실제 난제(ENGINE_ROADMAP §1 "투명 패스 없음"): 이 엔진은
+**디퍼드 단독(불투명만)**이라, 레이마칭 볼륨을 **씬 위에 알파 합성 + 씬 뎁스로
+가림(occlusion)**하는 단계가 없었다. 볼륨 렌더링의 핵심은 "3D 텍스처"가 아니라 이
+**뎁스-인식 투명 합성**이었다.
+
+### 23. 단계별 구현
+
+- **7-1/7-2 — 3D 텍스처 + 절차적 볼륨** (`VolumeRenderer`): 128³ R8Unorm 밀도
+  텍스처를 만들고, CPU에서 **소프트 스피어 + 3옥타브 value noise**로 구름형 밀도장을
+  생성해 스테이징 → `copyBufferToTexture`(depth=128, tightly-packed) 업로드 →
+  `View3D` + linear/clamp 샘플러. 미검증이던 RHI 3D 경로가 검증 에러 0으로 동작 확인.
+- **7-3 — 레이마칭 + 뎁스-인식 합성**: 신규 `volume_march.{vert,frag}.glsl`.
+  풀스크린 프래그가 픽셀별 카메라 레이 복원(`deferred_lighting.frag`와 동일하게
+  invProj→/w→invView) → **ray-AABB 교차**[tNear,tFar] → **씬 뎁스로 tFar 클램프**
+  (불투명 지오메트리가 볼륨을 가림) → Beer-Lambert front-to-back 누적 →
+  **premultiplied** 출력. `VolumeRenderer`가 파이프라인(premult-alpha 블렌드
+  `One`/`OneMinusSrcAlpha`, depth write 없음) + per-frame UBO + 바인드그룹
+  (depth + 3D 볼륨 + 샘플러) 보유. drawFrame이 **RenderGraph 패스 "VolumeMarch"**를
+  TAA 뒤·bloom 앞에 삽입(reads depth, writes HDR with blend) — 볼륨은 모션벡터가
+  없으니 TAA 뒤에 둬 고스팅 회피, bloom이 밝은 볼륨 픽업. 두 네이티브 리사이즈
+  경로에서 볼륨 바인드그룹을 새 depth view로 재생성(dangling 방지).
+- **7-4 — 실시간 컨트롤** (ImGui "Volume Rendering" 패널): Enable + Density·
+  Extinction·Threshold·Color mix·Step size 슬라이더 + **Low/High color 픽커**
+  (전이함수가 두 색을 density로 보간 — 사용자가 색 직접 지정). 기존 라이팅/D4 토글과
+  동일 패턴(ImGuiManager 설정 → Application 매 프레임 적용 → Renderer 포워드).
+
+### 24. 통합 설계 결정
+
+- **합성 위치**: 디퍼드 라이팅(+TAA) 결과 HDR 위에 **알파 블렌드 합성**, 씬 뎁스는
+  **샘플(read-only)**로 occlusion에만 사용. 엔진에 없던 "투명/반투명 합성" 단계를
+  RenderGraph 패스로 깔끔히 추가(자동 배리어가 depth→read, HDR→ColorWrite 처리).
+- **Vulkan 전용**: 헤더/소스/Renderer 멤버 모두 `#ifndef __EMSCRIPTEN__` 가드,
+  CMake도 네이티브 타깃에만. WebGPU/WGSL 포팅은 후속(WASM 데모엔 아직 볼륨 없음).
+
+### 25. 수정 파일 요약 (5부)
+
+| 파일 | 변경 |
+| --- | --- |
+| `src/rendering/VolumeRenderer.{hpp,cpp}` | **신규** — 3D 밀도 텍스처 생성·절차 생성·업로드 + 레이마칭 파이프라인/UBO/바인드그룹 + 런타임 튜닝(파라미터·색) |
+| `shaders/volume_march.{vert,frag}.glsl` | **신규** — 풀스크린 레이마칭(ray-AABB, 뎁스 occlusion, Beer-Lambert, 사용자 색 전이함수) |
+| `src/rendering/Renderer.{hpp,cpp}` | VolumeRenderer 멤버 + init/pipeline 생성 + drawFrame VolumeMarch 그래프 패스 + 리사이즈 시 바인드그룹 재생성 + 볼륨 setter 포워드 |
+| `src/ui/ImGuiManager.{hpp,cpp}` | "Volume Rendering" 패널 — enable + 파라미터 슬라이더 + Low/High 색 픽커; `VolumeSettings` + getter |
+| `src/Application.cpp` | 매 프레임 볼륨 설정/색을 Renderer에 적용(`#ifndef __EMSCRIPTEN__`) |
+| `CMakeLists.txt` | VolumeRenderer 소스(네이티브) + volume_march SPV 컴파일/목록 |
+
+### 26. 후속
+
+- **WASM 볼륨 포팅** (WebGPU/WGSL 레이마칭 + 3D 텍스처) — 듀얼 백엔드 데모 복원.
+- **WASM TAA 미연결 수정** (별도 커밋) — TAA가 WebGPU 포팅됐으나 브라우저 UI/바인딩에
+  연결 안 돼 기본 off였음(톱니 원인). 기본 on + `setTAAEnabled` 바인딩 + HTML 토글
+  추가는 다음 커밋으로 분리.
+- Transfer Function을 1D LUT 텍스처로 확장(의료 CT Hounsfield 프리셋 등).

@@ -415,6 +415,19 @@ void Application::mainLoopFrame() {
             // D4: apply the parallel-shadow-recording toggle from the UI.
             renderer->setParallelShadowCascades(imgui->getParallelShadowRecording());
 
+            // Phase 7-4: apply volume rendering controls from the UI (Vulkan-only).
+#ifndef __EMSCRIPTEN__
+            {
+                const auto& vs = imgui->getVolumeSettings();
+                renderer->setVolumeEnabled(vs.enabled);
+                renderer->setVolumeParams(vs.densityScale, vs.extinction, vs.stepSize,
+                                          vs.threshold, vs.colorMix);
+                renderer->setVolumeColors(
+                    glm::vec3(vs.lowColor[0],  vs.lowColor[1],  vs.lowColor[2]),
+                    glm::vec3(vs.highColor[0], vs.highColor[1], vs.highColor[2]));
+            }
+#endif
+
             // Bindless + VMA metrics
             {
                 auto bm = renderer->getBindlessMetrics();
