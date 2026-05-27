@@ -57,10 +57,13 @@ public:
      * @param frameIndex   Current frame index
      * @param cascadeIndex Cascade layer to render (0-3)
      */
-    rhi::RHIRenderPassEncoder* beginShadowPass(rhi::RHICommandEncoder* encoder,
-                                               uint32_t frameIndex,
-                                               uint32_t cascadeIndex);
-    void endShadowPass();
+    // D3-2: returns an owned render-pass encoder (no shared member), so cascades
+    // can be recorded concurrently on worker threads. The caller ends it via
+    // ->end() or by letting the unique_ptr destruct. Each call touches only
+    // per-cascade state, so concurrent calls for distinct cascades are safe.
+    std::unique_ptr<rhi::RHIRenderPassEncoder> beginShadowPass(rhi::RHICommandEncoder* encoder,
+                                                               uint32_t frameIndex,
+                                                               uint32_t cascadeIndex);
 
     // Accessors
     rhi::RHITextureView* getShadowMapView()    const { return m_shadowMapView.get(); }
@@ -116,8 +119,6 @@ private:
     // Per-frame × per-cascade UBOs and bind groups
     std::array<std::array<std::unique_ptr<rhi::RHIBuffer>,    NUM_CASCADES>, MAX_FRAMES_IN_FLIGHT> m_uniformBuffers;
     std::array<std::array<std::unique_ptr<rhi::RHIBindGroup>, NUM_CASCADES>, MAX_FRAMES_IN_FLIGHT> m_bindGroups;
-
-    std::unique_ptr<rhi::RHIRenderPassEncoder> m_currentRenderPass;
 
     // CSM data
     std::array<glm::mat4, NUM_CASCADES> m_lightSpaceMatrices{};

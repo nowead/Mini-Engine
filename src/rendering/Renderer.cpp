@@ -3621,6 +3621,17 @@ void Renderer::drawFrame() {
         return;
     }
 
+#ifndef __EMSCRIPTEN__
+    // D3-1: this frame's command buffers, in submission/execution order. The
+    // shadow cascades (below) are each recorded into their own primary buffer so
+    // they can be recorded in parallel (D3-2); they are submitted between the
+    // "pre" buffer (this encoder up to the shadow before-barrier) and the "post"
+    // buffer (everything after) in a single vkQueueSubmit, which the queue
+    // executes in array order. `encoder` is reassigned to the post buffer after
+    // the cascades, so all downstream recording is unchanged.
+    std::vector<std::unique_ptr<rhi::RHICommandBuffer>> frameCBs;
+#endif
+
     // Phase 4.1: GPU Profiling — begin frame (read back previous results, reset query pool)
 #ifndef __EMSCRIPTEN__
     if (gpuProfiler) {
@@ -3736,21 +3747,97 @@ void Renderer::drawFrame() {
                 }
 #endif
 
+#ifndef __EMSCRIPTEN__
+                // ============================================================
+                // D3-2: record the 4 CSM cascades IN PARALLEL on the worker pool.
+                //
+                // Each cascade is an independent render pass writing a distinct
+                // shadow-map layer, drawing all instances. A task per cascade
+                // records into its OWN primary command buffer (allocated from the
+                // running worker thread's command pool -- D1) and returns it.
+                //
+                // COMMAND-POOL LIFETIME INVARIANT (read before changing this):
+                //   The retired cascade buffers are freed on the MAIN thread by the
+                //   frame-fence retirement ring (D3-0b, RendererBridge::beginFrame).
+                //   A VkCommandPool requires external synchronization across
+                //   alloc / record / free. Worker W allocates+records its pool
+                //   here; the main thread later frees buffers from W's pool. Those
+                //   two never overlap ONLY because waitForAll() below makes every
+                //   worker idle before this frame returns, so the next frame's
+                //   beginFrame ring-clear runs while W is parked in the pool's
+                //   condition-variable wait (not touching its VkCommandPool).
+                //   => If you ever let a worker run across frame boundaries (e.g.
+                //   remove this waitForAll, or add fire-and-forget worker tasks),
+                //   this free-vs-alloc serialization breaks and the pool races.
+                //   The robust alternative is per-(thread,frame-slot) pools reset
+                //   by their owning worker; see CHANGELOG_2026-05-27 part 3.
+                //
+                // The pre buffer's before-barrier already put every layer in the
+                // depth-attachment layout, so each cascade encoder runs in
+                // graph-managed-layout mode (D3-0a): beginRenderPass skips its
+                // auto-barrier and the global s_imageLayouts access that would
+                // otherwise race across the worker threads.
+                // ============================================================
+                frameCBs.push_back(encoder->finish());
+
+                if (!m_shadowThreadPool) {
+                    m_shadowThreadPool = std::make_unique<utils::ThreadPool>(
+                        rendering::ShadowRenderer::NUM_CASCADES);
+                }
+
+                // Read-only handles shared by all cascade tasks (safe: bound into
+                // distinct per-cascade command buffers, never mutated here).
+                rhi::RHIBindGroup* ssboBG = ssboBindGroups[frameIndex].get();
+                rhi::RHIBuffer*    vbuf   = mesh->getVertexBuffer();
+                rhi::RHIBuffer*    ibuf   = mesh->getIndexBuffer();
+
+                std::array<std::future<std::unique_ptr<rhi::RHICommandBuffer>>,
+                           rendering::ShadowRenderer::NUM_CASCADES> cascadeFutures;
                 for (uint32_t cascade = 0; cascade < rendering::ShadowRenderer::NUM_CASCADES; ++cascade) {
-                    auto* shadowPass = shadowRenderer->beginShadowPass(encoder.get(), frameIndex, cascade);
+                    cascadeFutures[cascade] = m_shadowThreadPool->submit(
+                        [this, cascade, frameIndex, instanceCount, meshIndexCount, ssboBG, vbuf, ibuf]()
+                            -> std::unique_ptr<rhi::RHICommandBuffer> {
+                            auto enc = rhiBridge->createCommandEncoder();
+                            if (!enc) return nullptr;
+                            if (auto* ve = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(enc.get()))
+                                ve->setGraphManagedLayouts(true);
+                            auto shadowPass = shadowRenderer->beginShadowPass(enc.get(), frameIndex, cascade);
+                            if (shadowPass) {
+                                if (ssboBG) shadowPass->setBindGroup(1, ssboBG);
+                                shadowPass->setVertexBuffer(0, vbuf, 0);
+                                shadowPass->setIndexBuffer(ibuf, rhi::IndexFormat::Uint32, 0);
+                                // Render ALL instances with trivial 0-based indexing;
+                                // shadow.wgsl culls the ground by its huge AABB.
+                                shadowPass->drawIndexed(meshIndexCount, instanceCount, 0, 0, 0);
+                                shadowPass->end();
+                            }
+                            return enc->finish();
+                        });
+                }
+
+                // Barrier: every cascade task must complete before we read the
+                // buffers and before this frame returns (upholds the invariant above).
+                m_shadowThreadPool->waitForAll();
+                for (uint32_t cascade = 0; cascade < rendering::ShadowRenderer::NUM_CASCADES; ++cascade) {
+                    frameCBs.push_back(cascadeFutures[cascade].get());
+                }
+
+                // Resume recording the rest of the frame in a fresh "post" buffer.
+                encoder = rhiBridge->createCommandEncoder();
+#else
+                // WebGPU: single-threaded, record cascades on the main encoder.
+                for (uint32_t cascade = 0; cascade < rendering::ShadowRenderer::NUM_CASCADES; ++cascade) {
+                    auto shadowPass = shadowRenderer->beginShadowPass(encoder.get(), frameIndex, cascade);
                     if (shadowPass) {
                         if (ssboBindGroups[frameIndex])
                             shadowPass->setBindGroup(1, ssboBindGroups[frameIndex].get());
                         shadowPass->setVertexBuffer(0, mesh->getVertexBuffer(), 0);
                         shadowPass->setIndexBuffer(mesh->getIndexBuffer(), rhi::IndexFormat::Uint32, 0);
-                        // Render ALL instances with trivial 0-based indexing;
-                        // shadow.wgsl culls the ground by its huge AABB. This
-                        // avoids the Vulkan↔WebGPU instance_index/firstInstance
-                        // discrepancy that let the ground into the shadow map.
                         shadowPass->drawIndexed(meshIndexCount, instanceCount, 0, 0, 0);
-                        shadowRenderer->endShadowPass();
+                        shadowPass->end();
                     }
                 }
+#endif
 
 #if !defined(__EMSCRIPTEN__) && !defined(__linux__)
                 // macOS/Windows: Transition shadow array to shader read
@@ -4620,43 +4707,50 @@ void Renderer::drawFrame() {
     }
 #endif
 
-    // Finish command buffer
-    auto commandBuffer = encoder->finish();
-#ifdef __EMSCRIPTEN__
-    m_passTimeTotal = std::chrono::duration<float, std::milli>(_Clock::now() - _tFrame).count();
-#endif
+#ifndef __EMSCRIPTEN__
+    // D3-1: finish the last ("post") buffer and submit the whole frame in a single
+    // vkQueueSubmit. The queue executes commandBuffers in array order
+    // [pre, cascade0..3, post] (or just [single] when shadows did not run), so the
+    // explicit shadow before/after barriers in the pre/post buffers correctly
+    // bracket the cascade draws across buffer boundaries.
+    frameCBs.push_back(encoder->finish());
 
-    // Step 4: Submit command buffer with synchronization
-    if (commandBuffer) {
+    rhi::SubmitInfo frameSubmit;
+    for (auto& cb : frameCBs) {
+        if (cb) frameSubmit.commandBuffers.push_back(cb.get());
+    }
+    if (!frameSubmit.commandBuffers.empty()) {
+        frameSubmit.waitSemaphores.push_back(rhiBridge->getImageAvailableSemaphore());
+        frameSubmit.signalSemaphores.push_back(rhiBridge->getRenderFinishedSemaphore());
+        frameSubmit.signalFence = rhiBridge->getInFlightFence();
         if (useAsyncCompute && computeTimelineValue > 0) {
-            // Async compute path: use SubmitInfo with timeline wait
-            rhi::SubmitInfo graphicsSubmit;
-            graphicsSubmit.commandBuffers.push_back(commandBuffer.get());
-            graphicsSubmit.waitSemaphores.push_back(rhiBridge->getImageAvailableSemaphore());
-            graphicsSubmit.signalSemaphores.push_back(rhiBridge->getRenderFinishedSemaphore());
-            graphicsSubmit.signalFence = rhiBridge->getInFlightFence();
-            graphicsSubmit.timelineWaits.push_back(
+            // Wait for the async culling compute (signals this timeline value).
+            frameSubmit.timelineWaits.push_back(
                 rhi::TimelineWait{computeTimelineSemaphore.get(), computeTimelineValue});
-
-            auto* graphicsQueue = rhiBridge->getDevice()->getQueue(rhi::QueueType::Graphics);
-            graphicsQueue->submit(graphicsSubmit);
-        } else {
-            // Inline compute path: simple submit
-            rhiBridge->submitCommandBuffer(
-                commandBuffer.get(),
-                rhiBridge->getImageAvailableSemaphore(),
-                rhiBridge->getRenderFinishedSemaphore(),
-                rhiBridge->getInFlightFence()
-            );
         }
 
-#ifndef __EMSCRIPTEN__
-        // D3-0b: hand the submitted buffer to the frame-fence retirement ring
-        // instead of destroying it here (which would device-waitIdle every frame
-        // and serialize the GPU). It is freed when this slot's fence next signals.
-        rhiBridge->retireCommandBuffer(std::move(commandBuffer));
-#endif
+        auto* graphicsQueue = rhiBridge->getDevice()->getQueue(rhi::QueueType::Graphics);
+        graphicsQueue->submit(frameSubmit);
+
+        // D3-0b: retire every buffer into the frame-fence ring (no per-CB stall);
+        // freed when this slot's fence next signals.
+        for (auto& cb : frameCBs) {
+            rhiBridge->retireCommandBuffer(std::move(cb));
+        }
     }
+#else
+    // Finish command buffer (WebGPU single-CB path)
+    auto commandBuffer = encoder->finish();
+    m_passTimeTotal = std::chrono::duration<float, std::milli>(_Clock::now() - _tFrame).count();
+    if (commandBuffer) {
+        rhiBridge->submitCommandBuffer(
+            commandBuffer.get(),
+            rhiBridge->getImageAvailableSemaphore(),
+            rhiBridge->getRenderFinishedSemaphore(),
+            rhiBridge->getInFlightFence()
+        );
+    }
+#endif
 
     // Step 5: Present frame
     rhiBridge->endFrame();

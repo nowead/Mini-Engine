@@ -207,9 +207,14 @@ per-thread 풀 필요.
   검증. 동시성 버그 2종 수정(종료 데드락: `condition_variable_any`+`stop_token`
   회피 / 멤버 소멸 순서 레이스: 소멸자 명시적 join). 자세한 내용:
   [`CHANGELOG_2026-05-27.md`](../../archive/changelogs/CHANGELOG_2026-05-27.md).
-- **D3** — RenderGraph 병렬 스케줄러: 정렬 패스를 의존성 레벨로 그룹화 → 같은
-  레벨 독립 패스를 워커가 각자 primary CB에 기록 → 메인이 레벨 순서대로 제출.
-- **D4** — 검증(경쟁/깜빡임 없음) + 4코어 CPU 프레임 시간 측정.
+- **D3** — ✅ 병렬 패스 기록. **조사 결과 병렬 대상을 셰도우 4 캐스케이드로 재설정**
+  (무거운 패스는 RenderGraph 밖 — 그래프는 가벼운 post-geometry만 보유). D3-1: 캐스
+  케이드를 분리 primary CB로 + 단일 `vkQueueSubmit`(멀티-CB, 단일 스레드). D3-2:
+  `utils::ThreadPool`(4 워커)에 dispatch + `waitForAll`. ShadowRenderer stateless화
+  (공유 render-pass 멤버 제거). 풀 수명 불변식(waitForAll 직렬화) 문서화. 검증 레이어
+  thread-safety 무에러 + 시각 확인. 자세한 내용:
+  [`CHANGELOG_2026-05-27.md`](../../archive/changelogs/CHANGELOG_2026-05-27.md) 3부.
+- **D4** — 검증(경쟁/깜빡임 없음) ✅ + 4코어 CPU 프레임 시간 측정(병렬 이득 정량화, 후속).
 
 **D3 착수 전 해소할 장애물 (D1 착수 시 발견)** — ✅ 둘 다 해소 (D3-0a/0b, 2026-05-27):
 

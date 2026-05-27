@@ -339,10 +339,15 @@ void ShadowRenderer::updateLightMatrices(const glm::vec3& lightDir,
 // Per-frame rendering
 // ---------------------------------------------------------------------------
 
-rhi::RHIRenderPassEncoder* ShadowRenderer::beginShadowPass(rhi::RHICommandEncoder* encoder,
-                                                            uint32_t frameIndex,
-                                                            uint32_t cascadeIndex) {
+std::unique_ptr<rhi::RHIRenderPassEncoder> ShadowRenderer::beginShadowPass(
+    rhi::RHICommandEncoder* encoder, uint32_t frameIndex, uint32_t cascadeIndex) {
     if (!m_initialized || !encoder || cascadeIndex >= NUM_CASCADES) return nullptr;
+
+    // D3-2: this method touches only per-cascade state (m_uniformBuffers[fi][c],
+    // m_cascadeViews[c], m_bindGroups[fi][c], m_lightSpaceMatrices[c]) plus
+    // read-only shared handles (m_pipeline). It no longer stores the render-pass
+    // encoder in a member, so different cascades may run it concurrently on worker
+    // threads. The caller owns the returned encoder and ends it (end() or dtor).
 
     uint32_t fi = frameIndex % MAX_FRAMES_IN_FLIGHT;
 
@@ -369,25 +374,18 @@ rhi::RHIRenderPassEncoder* ShadowRenderer::beginShadowPass(rhi::RHICommandEncode
     passDesc.nativeFramebuffer = m_nativeFramebuffers[cascadeIndex];
 #endif
 
-    m_currentRenderPass = encoder->beginRenderPass(passDesc);
-    if (!m_currentRenderPass) {
+    auto pass = encoder->beginRenderPass(passDesc);
+    if (!pass) {
         std::cerr << "[ShadowRenderer] Failed to begin cascade " << cascadeIndex << " pass\n";
         return nullptr;
     }
 
-    m_currentRenderPass->setViewport(0, 0, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, 0.0f, 1.0f);
-    m_currentRenderPass->setScissorRect(0, 0, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
-    m_currentRenderPass->setPipeline(m_pipeline.get());
-    m_currentRenderPass->setBindGroup(0, m_bindGroups[fi][cascadeIndex].get());
+    pass->setViewport(0, 0, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, 0.0f, 1.0f);
+    pass->setScissorRect(0, 0, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
+    pass->setPipeline(m_pipeline.get());
+    pass->setBindGroup(0, m_bindGroups[fi][cascadeIndex].get());
 
-    return m_currentRenderPass.get();
-}
-
-void ShadowRenderer::endShadowPass() {
-    if (m_currentRenderPass) {
-        m_currentRenderPass->end();
-        m_currentRenderPass.reset();
-    }
+    return pass;
 }
 
 // ---------------------------------------------------------------------------

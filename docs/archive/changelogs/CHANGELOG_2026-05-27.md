@@ -233,8 +233,100 @@ per-frame 디스크립터 풀)가 **이미 frameIndex로 분리**돼 있어, 스
 
 ### 11. 다음 — D3-1
 
-장애물 2개 해소 완료. D3-1: `compile()`이 의존성 레벨 산출 → `execute()`가
-패스마다 자체 primary CB에 진입 배리어 + 드로우 기록 → 메인이 레벨/순서대로
-제출(**아직 단일 스레드**). 배리어 상태는 레벨 진입 전 스냅샷에서 계산. 검증은
-단일-CB 때와 픽셀 동일. notifyImageLayoutChange의 전역 write도 배리어가 per-pass
-CB로 이동하는 이 시점에 정리한다.
+장애물 2개 해소 완료. 다음은 멀티-CB 스케줄러 + 병렬 기록.
+
+---
+
+## 변경 이력 (3부) — D3-1/D3-2 셰도우 캐스케이드 병렬 기록
+
+> **방향 전환 (조사 결과)**: §D는 원래 "RenderGraph 패스를 병렬 기록"을 전제했으나,
+> 코드 조사 결과 **RenderGraph는 지오메트리 이후의 가벼운 패스(SSAO/deferred/TAA/
+> bloom/postprocess)만** 보유하고, **CPU 기록 비용이 큰 무거운 패스는 그래프 밖**에서
+> 메인 인코더에 직접 기록됨을 발견: 셰도우 4 캐스케이드(각 전 인스턴스) + GBuffer
+> (전 인스턴스). 따라서 병렬 대상을 **셰도우 4 캐스케이드**로 재설정 — 교과서적
+> 독립 패스(서로 다른 레이어), §D의 "패스당 primary CB" 모델에 정확히 부합. (사용자
+> 승인.)
+>
+> 승인된 시퀀스: **D3-1 단일 스레드 멀티-CB → D3-2 병렬**. 정확성과 동시성을 분리
+> 검증.
+
+### 12. D3-1 — 셰도우 캐스케이드를 분리 CB로, 단일 스레드 멀티-CB 제출
+
+핵심 메커니즘: 한 번의 `vkQueueSubmit`에 **CB 배열을 순서대로** 넘기면 큐가 그
+순서로 실행하고, 배리어는 CB 경계를 넘어 동작한다. 동기화(wait imageAvailable /
+signal renderFinished+fence)는 단일 제출로 그대로 유지.
+
+drawFrame Vulkan 경로를 분리 — 셰도우 캐스케이드가 culling과 GBuffer 사이에서
+실행돼야 하므로 단일 CB를 쪼갠다:
+
+- **pre 버퍼**(기존 `encoder`): 프로파일러 beginFrame, IBL/스카이박스 init 배리어,
+  프러스텀 컬링(inline), 셰도우 before-barrier(전 레이어 undef→depth), ShadowPass
+  타이머 begin → `finish()`.
+- **캐스케이드 i (0..3)**: 각자 인코더 + `setGraphManagedLayouts(true)` →
+  `beginShadowPass` + 전 인스턴스 draw + end → `finish()`. (D3-1은 메인 스레드 순차)
+- **post 버퍼**: `encoder`를 새 인코더로 **재할당**(이후 GBuffer/graph 코드 무변경)
+  → 셰도우 after-barrier(전 레이어 depth→shaderRead) + GBuffer + 그래프 + 프로파일러
+  endFrame → `finish()`.
+- 프레임 CB를 순서 리스트 `frameCBs = [pre, cas0..3, post]`로 모아 **단일
+  `vkQueueSubmit`**(commandBuffers 배열). 셰도우가 없으면(인스턴스 ≤1) `frameCBs =
+  [single]`. 전부 retirement ring으로.
+
+캐스케이드 인코더의 `setGraphManagedLayouts(true)`(D3-0a)로 per-cascade
+beginRenderPass 자동 배리어를 우회 — pre의 before-barrier가 이미 전 레이어를 depth로
+전이했으므로. WebGPU는 단일 CB 경로 유지(`#ifndef` 분기).
+
+검증: 검증 레이어 10초 무에러(sync 해저드·레이아웃·"command buffer in use" 0).
+여전히 단일 스레드라 동작 동일.
+
+### 13. D3-2 — 4 캐스케이드를 ThreadPool에 dispatch
+
+- **D3-2a (전제)**: `ShadowRenderer::beginShadowPass`를 stateless화 —
+  공유 멤버 `m_currentRenderPass`(+ `endShadowPass`)를 제거하고
+  `unique_ptr<RHIRenderPassEncoder>`를 **반환**. 메서드가 per-cascade 상태
+  (`m_uniformBuffers[fi][c]`, `m_cascadeViews[c]`, `m_bindGroups[fi][c]`,
+  `m_lightSpaceMatrices[c]`)와 read-only 핸들(`m_pipeline`)만 만지므로 서로 다른
+  캐스케이드의 동시 호출이 안전. 단일 스레드 무회귀 검증.
+- **D3-2b**: 캐스케이드 루프를 `utils::ThreadPool`(NUM_CASCADES 워커, lazy 생성,
+  Vulkan 전용) dispatch로 교체. 각 태스크 = { 워커 thread-local 풀(D1)에서 인코더
+  생성 + `setGraphManagedLayouts(true)` + beginShadowPass→draw→end + `finish()`
+  반환 }. `waitForAll` 후 4 CB를 캐스케이드 순서로 수집. CB는 기존 retirement ring.
+
+#### 핵심 위험과 그 해소 — 커맨드 풀 수명 불변식 (반드시 숙지)
+
+D1은 "`VkCommandPool`은 소유 스레드가 lock-free 사용"이 불변식. 그런데 D3-0b
+retirement ring은 **메인 스레드가 워커 CB를 free**(`beginFrame`의 ring clear)한다.
+Vulkan은 풀의 alloc/record/free를 외부 동기화해야 하므로, 워커 W의 alloc/record와
+메인의 free가 겹치면 풀 레이스.
+
+**해소 근거 — 시간적 분리**: 매 프레임 `waitForAll()`이 캐스케이드 태스크를 모두
+끝낸 뒤에야 프레임이 반환된다. 따라서 다음 프레임 `beginFrame`의 ring clear(메인,
+W의 풀 CB free)가 도는 시점에 W는 풀의 condition_variable에 park돼 있어(태스크 없음)
+자신의 `VkCommandPool`을 만지지 않는다. alloc/record는 dispatch~waitForAll 창
+안에서만 발생. 두 구간이 절대 겹치지 않아 외부 동기화가 충족된다(프레임 구조 +
+waitForAll 배리어가 직렬화). 검증 레이어 thread-safety 체커로 실증 — 13초 무에러
+(이 레이어는 앞서 D3-0b의 세마포어 VUID를 실제로 잡았으므로 활성·유효함이 확인됨).
+
+> ⚠️ **이 불변식을 깨는 변경 금지**: 워커를 프레임 경계 너머로 돌리거나(이
+> `waitForAll` 제거), fire-and-forget 워커 태스크를 추가하면 free↔alloc 직렬화가
+> 깨져 풀이 조용히 레이스한다. 견고한 대안은 **(thread, frame-slot)별 풀 + 소유
+> 워커가 reset**(§D "프레임 풀 reset 기반") — 그땐 풀을 단일 스레드만 만져 시간적
+> 분리에 의존하지 않는다. drawFrame 셰도우 구간의 `COMMAND-POOL LIFETIME INVARIANT`
+> 블록 주석에도 동일 경고를 박아 두었다.
+
+검증: 빌드 통과, 검증 레이어(thread-safety 포함) 13초 무에러(경쟁/깜빡임/레이아웃/
+sync 해저드 0). 사용자 시각 확인 완료(그림자 깜빡임·아티팩트 없음). 여전히 단일
+스레드 대비 픽셀 동일.
+
+### 14. 수정 파일 요약 (3부)
+
+| 파일 | 변경 |
+| --- | --- |
+| `src/rendering/ShadowRenderer.{hpp,cpp}` | D3-2a: `beginShadowPass` → `unique_ptr` 반환(stateless), `m_currentRenderPass`/`endShadowPass` 제거 |
+| `src/rendering/Renderer.hpp` | `m_shadowThreadPool` 멤버(Vulkan 전용) + `ThreadPool.hpp` include |
+| `src/rendering/Renderer.cpp` | D3-1: drawFrame 셰도우~제출을 pre/cascade/post 멀티-CB + 단일 `vkQueueSubmit`로 재구성. D3-2: 캐스케이드를 ThreadPool dispatch + waitForAll + 풀 수명 불변식 주석 |
+
+### 15. 다음 — D4
+
+D4: 4코어 CPU 프레임 시간 측정(단일 스레드 D3-1 vs 병렬 D3-2)으로 병렬 기록 이득
+정량화. 정성 검증(경쟁/깜빡임 없음)은 D3-2에서 완료. (후속 후보: GBuffer 드로우
+분할 — secondary CB 필요, §D "secondary 안 씀" 결정과 충돌하므로 별도 재논의.)

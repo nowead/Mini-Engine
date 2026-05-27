@@ -2,6 +2,9 @@
 
 #ifndef __EMSCRIPTEN__
 #include "src/rendering/graph/RenderGraph.hpp"
+#ifndef __EMSCRIPTEN__
+#include "src/utils/ThreadPool.hpp"   // D3-2: parallel shadow-cascade recording (native only)
+#endif
 #endif
 
 #include "src/resources/ResourceManager.hpp"
@@ -668,6 +671,12 @@ private:
 #ifndef __EMSCRIPTEN__
     std::unique_ptr<class GpuProfiler> gpuProfiler;
     rendergraph::RenderGraph m_renderGraph;
+
+    // D3-2: worker pool for parallel command recording (currently the CSM shadow
+    // cascades). Created lazily on first use. Vulkan-only -- WebGPU records on the
+    // main thread. See drawFrame's shadow section for the lifetime invariant that
+    // keeps worker command-pool access (D1) safe alongside the retirement ring (D3-0b).
+    std::unique_ptr<utils::ThreadPool> m_shadowThreadPool;
 
     // Phase 4: Bindless texture registry + 3 solid-color material textures
     std::unique_ptr<rendering::BindlessTextureManager> bindlessTextureManager;
