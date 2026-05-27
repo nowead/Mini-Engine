@@ -506,3 +506,49 @@ TAA 리졸브·velocity 타깃은 WebGPU에 구현돼 있었으나, **활성화 
 > 교훈: **Vulkan 전용 멤버를 가드 없는 공개 메서드가 참조하면 안 된다.** 또한
 > 기능을 "포팅 완료"로 간주하기 전에 **양 백엔드에서 실제로 켜져 동작하는지** 확인할
 > 것 — 구현과 배선(기본값·UI·바인딩)은 별개다.
+
+---
+
+## 변경 이력 (7부) — 볼륨 렌더링 WebGPU 포팅 (듀얼 백엔드 복원)
+
+> 볼륨 렌더링은 Vulkan 전용으로 먼저 만들었다(5부). 라이브 데모가 WebGPU이므로
+> 듀얼 백엔드 명제 복원을 위해 WebGPU로 포팅. `VolumeRenderer`를 dual-backend로
+> 전환(전면 `#ifndef __EMSCRIPTEN__` 가드 제거).
+
+### 29. 구현
+
+- `VolumeRenderer`가 양 백엔드 컴파일. 셰이더 로딩 분기(Vulkan SPIR-V / WebGPU
+  `volume_march.wgsl`), 바인드그룹 레이아웃·바인딩 분기(아래 함정 참조). Renderer의
+  `volumeRenderer` 멤버·생성·`createPipeline`을 무조건 경로로 이동, CMake는 WASM
+  타깃에도 `VolumeRenderer.cpp` + WGSL preload 추가.
+- WebGPU는 RenderGraph가 없으므로 drawFrame의 순차 패스 목록에 **볼륨 패스를 직접
+  삽입**(TAA copy 뒤·bloom 앞, `hdrColorView`에 Load + premult 블렌드).
+
+### 30. WebGPU 함정 3종 (미리 회피)
+
+1. **3D 업로드의 256-row 정렬** (CLAUDE.md §9). 128³ R8은 한 행 128B인데 WebGPU는
+   `bytesPerRow`가 256의 배수여야 함. `uploadVolume`을 분기: WebGPU는 256B 패딩
+   스테이징 + depth 슬라이스마다 per-row memcpy + `bytesPerRow=256, rowsPerImage=128`;
+   Vulkan은 tightly-packed(0/0).
+2. **뎁스 샘플링.** WebGPU 뎁스는 `texture_depth_2d` + `textureLoad`(샘플러 불필요).
+   바인드그룹 레이아웃을 분기: WebGPU는 `DepthTexture`(샘플러 없음, 바인딩 0/1/2/3),
+   Vulkan은 `SampledTexture`+`Sampler`(GLSL texelFetch용, 바인딩 0/1/2/3/4).
+3. **NDC y-flip.** WebGPU는 projection y-flip이 없어 `deferred_lighting.wgsl`처럼
+   `ndc.y = 1 - uv.y*2`(Vulkan은 `uv.y*2 - 1`). `volume_march.wgsl`이 deferred의
+   재구성(invProj→/w→invView, y-flip)을 그대로 미러해 트랩 회피.
+
+추가: WGSL 마칭 루프의 동적 break 안에서 `textureSample`은 비균일 제어흐름 위반이라
+**`textureSampleLevel(..., 0.0)`** 사용(파생값 불필요).
+
+### 31. 수정 파일 요약 (7부)
+
+| 파일 | 변경 |
+| --- | --- |
+| `src/rendering/VolumeRenderer.{hpp,cpp}` | dual-backend화(가드 제거); WebGPU 256-row 3D 업로드; WGSL 셰이더 로딩 + 뎁스/바인딩 레이아웃 백엔드 분기 |
+| `shaders/volume_march.wgsl` | **신규** — WGSL 레이마칭(y-flip 재구성, `texture_depth_2d` textureLoad, `textureSampleLevel`) |
+| `src/rendering/Renderer.{hpp,cpp}` | `volumeRenderer` 멤버·init·createPipeline 무조건화; WebGPU drawFrame에 볼륨 패스 삽입(bloom 앞) |
+| `CMakeLists.txt` | WASM 타깃에 `VolumeRenderer.cpp` + WGSL preload에 `volume_march.wgsl` |
+
+검증: WASM 빌드 통과(`MiniEngine.wasm` 재생성), 네이티브 무회귀, 브라우저에서 구름
+합성 + 건물 occlusion 정상(사용자 확인). 듀얼 백엔드 볼륨 렌더링 복원. (브라우저
+파라미터 컨트롤은 후속 — 현재 기본값 고정.)

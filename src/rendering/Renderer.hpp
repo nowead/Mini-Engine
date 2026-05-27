@@ -1,12 +1,10 @@
 #pragma once
 
 #ifndef __EMSCRIPTEN__
-#include "src/rendering/graph/RenderGraph.hpp"
-#ifndef __EMSCRIPTEN__
-#include "src/utils/ThreadPool.hpp"     // D3-2: parallel shadow-cascade recording (native only)
-#include "src/rendering/VolumeRenderer.hpp"  // Phase 7: volume rendering (native only)
+#include "src/rendering/graph/RenderGraph.hpp"   // Vulkan-only (render graph)
+#include "src/utils/ThreadPool.hpp"              // Vulkan-only (D3-2 parallel recording)
 #endif
-#endif
+#include "src/rendering/VolumeRenderer.hpp"      // dual-backend (volume rendering)
 
 #include "src/resources/ResourceManager.hpp"
 #include "src/scene/SceneManager.hpp"
@@ -698,6 +696,9 @@ private:
     bool  m_parallelShadowCascades = true;
     float m_shadowRecordCpuMs      = 0.0f;
 
+    // Volume rendering (procedural density 3D texture + ray march). Dual-backend.
+    std::unique_ptr<rendering::VolumeRenderer> volumeRenderer;
+
 #ifndef __EMSCRIPTEN__
     std::unique_ptr<class GpuProfiler> gpuProfiler;
     rendergraph::RenderGraph m_renderGraph;
@@ -707,9 +708,6 @@ private:
     // main thread. See drawFrame's shadow section for the lifetime invariant that
     // keeps worker command-pool access (D1) safe alongside the retirement ring (D3-0b).
     std::unique_ptr<utils::ThreadPool> m_shadowThreadPool;
-
-    // Phase 7: volume rendering (procedural density 3D texture + ray march, Vulkan-only)
-    std::unique_ptr<rendering::VolumeRenderer> volumeRenderer;
 
     // Phase 4: Bindless texture registry + 3 solid-color material textures
     std::unique_ptr<rendering::BindlessTextureManager> bindlessTextureManager;

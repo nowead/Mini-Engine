@@ -1,18 +1,13 @@
 #pragma once
-#ifndef __EMSCRIPTEN__
 
 // ============================================================================
-// Roadmap Phase 7 -- Volume Rendering (Vulkan-first).
+// Volume Rendering -- owns a 3D density texture and ray-marches it, compositing
+// the result over the deferred HDR scene with depth-aware occlusion.
 //
-// Owns a 3D density texture and (Phase 7-3) ray-marches it, compositing the
-// result over the deferred HDR scene with depth-aware occlusion. Phase 7-1/7-2
-// here cover the 3D texture: create it, fill it with a procedural density
-// field on the CPU, and upload it. The RHI already implements the
-// VK_IMAGE_TYPE_3D / VK_IMAGE_VIEW_TYPE_3D paths (VulkanRHITexture.cpp); this
-// is their first real user, so creation + upload double as their verification.
-//
-// Vulkan-only for now (WebGPU parity is a possible follow-up). The whole header
-// is guarded so the WASM build never sees it.
+// Dual-backend: Vulkan (SPIR-V, render-graph pass) and WebGPU (WGSL, sequential
+// fullscreen pass). The 3D-texture upload differs per backend -- Vulkan packs
+// rows tightly; WebGPU requires bytesPerRow to be a 256-byte multiple, so rows
+// are padded (see uploadVolume).
 // ============================================================================
 
 #include <array>
@@ -143,5 +138,3 @@ private:
 };
 
 } // namespace rendering
-
-#endif // !__EMSCRIPTEN__

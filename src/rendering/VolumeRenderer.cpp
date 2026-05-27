@@ -1,5 +1,3 @@
-#ifndef __EMSCRIPTEN__
-
 #include "VolumeRenderer.hpp"
 #include "src/utils/Logger.hpp"
 #include "src/utils/FileUtils.hpp"
@@ -95,16 +93,38 @@ void VolumeRenderer::generateProceduralVolume(std::vector<uint8_t>& out, uint32_
 // ---------------------------------------------------------------------------
 
 bool VolumeRenderer::uploadVolume(const std::vector<uint8_t>& density, uint32_t resolution) {
-    const uint64_t bytes = static_cast<uint64_t>(resolution) * resolution * resolution;
+    // R8Unorm: 1 byte per voxel. WebGPU requires bytesPerRow to be a 256-byte
+    // multiple, so pad each row (and the staging buffer) on that backend; Vulkan
+    // packs tightly. (See CLAUDE.md: copyBufferToTexture bytesPerRow semantics.)
+    const uint32_t tightBytesPerRow = resolution;          // width * 1 byte
+#ifdef __EMSCRIPTEN__
+    const uint32_t paddedBytesPerRow = (tightBytesPerRow + 255u) & ~255u;
+#else
+    const uint32_t paddedBytesPerRow = tightBytesPerRow;
+#endif
+    const uint64_t stagingSize =
+        static_cast<uint64_t>(paddedBytesPerRow) * resolution * resolution;
 
     rhi::BufferDesc stagingDesc{};
-    stagingDesc.size  = bytes;
+    stagingDesc.size  = stagingSize;
     stagingDesc.usage = rhi::BufferUsage::CopySrc | rhi::BufferUsage::MapWrite;
     auto staging = m_device->createBuffer(stagingDesc);
     if (!staging) { LOG_ERROR("VolumeRenderer") << "staging buffer create failed"; return false; }
     {
-        void* mapped = staging->map();
-        std::memcpy(mapped, density.data(), bytes);
+        uint8_t* mapped = static_cast<uint8_t*>(staging->map());
+#ifdef __EMSCRIPTEN__
+        // Per-row copy honoring the padded stride across every depth slice.
+        for (uint32_t z = 0; z < resolution; ++z) {
+            for (uint32_t y = 0; y < resolution; ++y) {
+                const uint64_t row = static_cast<uint64_t>(z) * resolution + y;
+                std::memcpy(mapped + row * paddedBytesPerRow,
+                            density.data() + row * tightBytesPerRow,
+                            tightBytesPerRow);
+            }
+        }
+#else
+        std::memcpy(mapped, density.data(), stagingSize);
+#endif
         staging->unmap();
     }
 
@@ -127,8 +147,13 @@ bool VolumeRenderer::uploadVolume(const std::vector<uint8_t>& density, uint32_t 
     rhi::BufferTextureCopyInfo bufferCopy{};
     bufferCopy.buffer       = staging.get();
     bufferCopy.offset       = 0;
+#ifdef __EMSCRIPTEN__
+    bufferCopy.bytesPerRow  = paddedBytesPerRow;  // bytes, 256-aligned (WebGPU)
+    bufferCopy.rowsPerImage = resolution;          // rows per depth slice
+#else
     bufferCopy.bytesPerRow  = 0;   // tightly packed (Vulkan reads this as texels; 0 = packed)
     bufferCopy.rowsPerImage = 0;   // tightly packed slices
+#endif
 
     rhi::TextureCopyInfo texCopy{};
     texCopy.texture  = m_volumeTexture.get();
@@ -210,6 +235,17 @@ bool VolumeRenderer::initialize(uint32_t resolution) {
 // ---------------------------------------------------------------------------
 
 bool VolumeRenderer::createPipeline(rhi::RHITextureView* depthView, void* nativeRenderPass) {
+#ifdef __EMSCRIPTEN__
+    {
+        auto raw = FileUtils::readFile("shaders/volume_march.wgsl");
+        if (raw.empty()) { LOG_ERROR("VolumeRenderer") << "missing volume_march.wgsl"; return false; }
+        std::vector<uint8_t> code(raw.begin(), raw.end());
+        rhi::ShaderSource vs(rhi::ShaderLanguage::WGSL, code, rhi::ShaderStage::Vertex,   "vs_main");
+        rhi::ShaderSource fs(rhi::ShaderLanguage::WGSL, code, rhi::ShaderStage::Fragment, "fs_main");
+        m_vertexShader   = m_device->createShader(rhi::ShaderDesc(vs, "VolumeMarchVS"));
+        m_fragmentShader = m_device->createShader(rhi::ShaderDesc(fs, "VolumeMarchFS"));
+    }
+#else
     auto loadSpv = [&](const char* path, rhi::ShaderStage stage, const char* label) {
         auto raw = FileUtils::readFile(path);
         if (raw.empty()) { LOG_ERROR("VolumeRenderer") << "missing " << path; return std::unique_ptr<rhi::RHIShader>{}; }
@@ -219,6 +255,7 @@ bool VolumeRenderer::createPipeline(rhi::RHITextureView* depthView, void* native
     };
     m_vertexShader   = loadSpv("shaders/volume_march.vert.spv", rhi::ShaderStage::Vertex,   "VolumeMarchVS");
     m_fragmentShader = loadSpv("shaders/volume_march.frag.spv", rhi::ShaderStage::Fragment, "VolumeMarchFS");
+#endif
     if (!m_vertexShader || !m_fragmentShader) return false;
 
     using S = rhi::ShaderStage;
@@ -231,6 +268,16 @@ bool VolumeRenderer::createPipeline(rhi::RHITextureView* depthView, void* native
     };
 
     rhi::BindGroupLayoutDesc layoutDesc;
+#ifdef __EMSCRIPTEN__
+    // WebGPU: depth is texture_depth_2d read via textureLoad (no sampler).
+    layoutDesc.entries = {
+        entry(0, S::Fragment, T::UniformBuffer),
+        entry(1, S::Fragment, T::DepthTexture,   D::View2D),  // scene depth (textureLoad)
+        entry(2, S::Fragment, T::SampledTexture, D::View3D),  // volume density
+        entry(3, S::Fragment, T::Sampler),                    // volume sampler (linear)
+    };
+#else
+    // Vulkan: GLSL texelFetch(sampler2D(depth, sampler)) needs a depth sampler.
     layoutDesc.entries = {
         entry(0, S::Fragment, T::UniformBuffer),
         entry(1, S::Fragment, T::SampledTexture, D::View2D),  // scene depth
@@ -238,6 +285,7 @@ bool VolumeRenderer::createPipeline(rhi::RHITextureView* depthView, void* native
         entry(3, S::Fragment, T::SampledTexture, D::View3D),  // volume density
         entry(4, S::Fragment, T::Sampler),                    // volume sampler (linear)
     };
+#endif
     layoutDesc.label = "VolumeBGLayout";
     m_bindGroupLayout = m_device->createBindGroupLayout(layoutDesc);
     if (!m_bindGroupLayout) return false;
@@ -283,6 +331,14 @@ bool VolumeRenderer::createBindGroups(rhi::RHITextureView* depthView) {
     for (uint32_t i = 0; i < kFramesInFlight; ++i) {
         rhi::BindGroupDesc desc;
         desc.layout = m_bindGroupLayout.get();
+#ifdef __EMSCRIPTEN__
+        desc.entries = {
+            rhi::BindGroupEntry::Buffer(0, m_uniformBuffers[i].get(), 0, sizeof(VolumeUBO)),
+            rhi::BindGroupEntry::TextureView(1, depthView),
+            rhi::BindGroupEntry::TextureView(2, m_volumeView.get()),
+            rhi::BindGroupEntry::Sampler(3, m_sampler.get()),
+        };
+#else
         desc.entries = {
             rhi::BindGroupEntry::Buffer(0, m_uniformBuffers[i].get(), 0, sizeof(VolumeUBO)),
             rhi::BindGroupEntry::TextureView(1, depthView),
@@ -290,6 +346,7 @@ bool VolumeRenderer::createBindGroups(rhi::RHITextureView* depthView) {
             rhi::BindGroupEntry::TextureView(3, m_volumeView.get()),
             rhi::BindGroupEntry::Sampler(4, m_sampler.get()),
         };
+#endif
         desc.label = "VolumeBindGroup";
         m_bindGroups[i] = m_device->createBindGroup(desc);
         if (!m_bindGroups[i]) { LOG_ERROR("VolumeRenderer") << "bind group create failed"; return false; }
@@ -317,5 +374,3 @@ void VolumeRenderer::updateUBO(uint32_t frameIndex, const glm::mat4& invView,
 }
 
 } // namespace rendering
-
-#endif // !__EMSCRIPTEN__

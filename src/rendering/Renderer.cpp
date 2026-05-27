@@ -140,33 +140,6 @@ Renderer::Renderer(GLFWwindow* window,
         }
     }
 
-    // Phase 7: volume renderer -- create + upload a procedural 3D density volume.
-    // Phase 7-1/7-2 here only exercise the (previously untested) RHI 3D texture
-    // create + upload path; the ray-march pass + compositing come in 7-3.
-    {
-        auto* device = rhiBridge->getDevice();
-        auto* gfxQueue = device ? device->getQueue(rhi::QueueType::Graphics) : nullptr;
-        if (device && gfxQueue) {
-            volumeRenderer = std::make_unique<rendering::VolumeRenderer>(device, gfxQueue);
-            if (!volumeRenderer->initialize(128)) {
-                LOG_ERROR("Renderer") << "VolumeRenderer init failed";
-                volumeRenderer.reset();
-            } else {
-                // Ray-march pipeline + bind groups. Windows/macOS use dynamic
-                // rendering (null native pass); the volume pass writes HDR with
-                // Load + premultiplied blend, sampling scene depth for occlusion.
-                void* nativeHDRPass = nullptr;
-#ifdef __linux__
-                if (auto* sc = dynamic_cast<RHI::Vulkan::VulkanRHISwapchain*>(rhiBridge->getSwapchain()))
-                    nativeHDRPass = reinterpret_cast<void*>(static_cast<VkRenderPass>(sc->getHDRLoadRenderPass()));
-#endif
-                if (rhiDepthImageView &&
-                    !volumeRenderer->createPipeline(rhiDepthImageView.get(), nativeHDRPass)) {
-                    LOG_ERROR("Renderer") << "VolumeRenderer pipeline init failed";
-                }
-            }
-        }
-    }
 #else
     // Sub-task C (WebGPU port): TAA resolve pipeline (needs G-Buffer velocity
     // view + HDR/history textures created above).
@@ -184,6 +157,32 @@ Renderer::Renderer(GLFWwindow* window,
         }
     }
 #endif
+
+    // Volume renderer (dual-backend): create + upload the procedural 3D density
+    // texture, then build the ray-march pipeline. Vulkan loads SPIR-V; WebGPU
+    // loads WGSL. nativeHDRPass is only meaningful on Linux Vulkan (traditional
+    // render pass); elsewhere dynamic rendering / WebGPU uses null.
+    {
+        auto* device = rhiBridge->getDevice();
+        auto* gfxQueue = device ? device->getQueue(rhi::QueueType::Graphics) : nullptr;
+        if (device && gfxQueue) {
+            volumeRenderer = std::make_unique<rendering::VolumeRenderer>(device, gfxQueue);
+            if (!volumeRenderer->initialize(128)) {
+                LOG_ERROR("Renderer") << "VolumeRenderer init failed";
+                volumeRenderer.reset();
+            } else {
+                void* nativeHDRPass = nullptr;
+#if !defined(__EMSCRIPTEN__) && defined(__linux__)
+                if (auto* sc = dynamic_cast<RHI::Vulkan::VulkanRHISwapchain*>(rhiBridge->getSwapchain()))
+                    nativeHDRPass = reinterpret_cast<void*>(static_cast<VkRenderPass>(sc->getHDRLoadRenderPass()));
+#endif
+                if (rhiDepthImageView &&
+                    !volumeRenderer->createPipeline(rhiDepthImageView.get(), nativeHDRPass)) {
+                    LOG_ERROR("Renderer") << "VolumeRenderer pipeline init failed";
+                }
+            }
+        }
+    }
 
     // Phase 3.1: Log GPU memory statistics
     rhiBridge->getDevice()->logMemoryStats();
@@ -4292,6 +4291,35 @@ void Renderer::drawFrame() {
     }
     m_passTimeSSAO = std::chrono::duration<float, std::milli>(_Clock::now() - _tPass).count();
     _tPass = _Clock::now();
+
+    // Volume ray-march (WebGPU): composite the procedural volume over the lit HDR
+    // before bloom (so bloom can pick up bright volume). Reads scene depth for
+    // occlusion; premultiplied One/OneMinusSrcAlpha blend. No render graph here --
+    // inserted directly into the sequential WebGPU pass list.
+    if (volumeRenderer && volumeRenderer->isInitialized() && volumeRenderer->isPipelineReady()
+        && volumeRenderer->isEnabled() && hdrColorView && rhiDepthImageView) {
+        volumeRenderer->updateUBO(frameIndex, glm::inverse(viewMatrix),
+                                  glm::inverse(projectionMatrix), cameraPosition);
+        rhi::RenderPassDesc pd;
+        pd.width  = rhiBridge->getSwapchain()->getWidth();
+        pd.height = rhiBridge->getSwapchain()->getHeight();
+        pd.label  = "VolumeMarch";
+        rhi::RenderPassColorAttachment ca;
+        ca.view       = hdrColorView.get();
+        ca.loadOp     = rhi::LoadOp::Load;       // composite over the lit scene
+        ca.storeOp    = rhi::StoreOp::Store;
+        ca.clearValue = rhi::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
+        pd.colorAttachments.push_back(ca);
+        auto pass = encoder->beginRenderPass(pd);
+        if (pass) {
+            pass->setViewport(0, 0, float(pd.width), float(pd.height), 0.0f, 1.0f);
+            pass->setScissorRect(0, 0, pd.width, pd.height);
+            pass->setPipeline(volumeRenderer->getPipeline());
+            pass->setBindGroup(0, volumeRenderer->getBindGroup(frameIndex));
+            pass->draw(3);
+            pass->end();
+        }
+    }
 
     // Bloom passes (WebGPU): prefilter HDR → half-res, then 2× separable Gaussian blur
     if (wgslBloomPrefilterPipeline && bloomTextureView && bloomPingView) {

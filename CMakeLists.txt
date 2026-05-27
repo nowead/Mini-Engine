@@ -657,6 +657,9 @@ else()
         src/rendering/GBufferPass.hpp
         src/rendering/DeferredLightingPass.cpp
         src/rendering/DeferredLightingPass.hpp
+        # Volume rendering (dual-backend)
+        src/rendering/VolumeRenderer.cpp
+        src/rendering/VolumeRenderer.hpp
         # WASM/JS bindings
         src/wasm/WASMBindings.hpp
         src/wasm/WASMBindings.cpp
@@ -697,6 +700,7 @@ else()
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/ssao.wgsl
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/ssao_blur.wgsl
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/taa_resolve.wgsl
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/volume_march.wgsl
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess.wgsl
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shadow.wgsl
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/skybox.wgsl
