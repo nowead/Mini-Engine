@@ -217,6 +217,14 @@ public:
     void setTAAEnabled(bool e) { m_taaEnabled = e; }
     bool isTAAEnabled() const { return m_taaEnabled; }
 
+    // D4: parallel shadow-cascade recording toggle + CPU measurement (A/B).
+    // true = dispatch the 4 cascades to the worker pool (D3-2); false = record
+    // them sequentially on the main thread (D3-1). getShadowRecordCpuMs() returns
+    // the EMA-smoothed wall-clock cost of the cascade-recording region in ms.
+    void  setParallelShadowCascades(bool e) { m_parallelShadowCascades = e; }
+    bool  getParallelShadowCascades() const { return m_parallelShadowCascades; }
+    float getShadowRecordCpuMs() const { return m_shadowRecordCpuMs; }
+
     // PBR tone mapping
     void setExposure(float exp) { exposure = exp; }
     float getExposure() const { return exposure; }
@@ -677,6 +685,10 @@ private:
     // main thread. See drawFrame's shadow section for the lifetime invariant that
     // keeps worker command-pool access (D1) safe alongside the retirement ring (D3-0b).
     std::unique_ptr<utils::ThreadPool> m_shadowThreadPool;
+
+    // D4: A/B toggle + EMA-smoothed CPU cost of the shadow-cascade recording region.
+    bool  m_parallelShadowCascades = true;
+    float m_shadowRecordCpuMs      = 0.0f;
 
     // Phase 4: Bindless texture registry + 3 solid-color material textures
     std::unique_ptr<rendering::BindlessTextureManager> bindlessTextureManager;

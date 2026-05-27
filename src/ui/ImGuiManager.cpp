@@ -339,6 +339,16 @@ void ImGuiManager::renderUI(Camera& camera, uint32_t buildingCount,
             ImGui::ProgressBar(b.ms / barMax, ImVec2(barWidth, 14.0f), lbl);
             ImGui::PopStyleColor();
         }
+
+        // D4: multithreaded shadow-cascade recording -- CPU cost + A/B toggle.
+        // This is a CPU-side measurement (command recording), distinct from the
+        // GPU "Shadow Pass" bar above which is unaffected by parallel recording.
+        ImGui::Separator();
+        ImGui::Checkbox("Parallel shadow recording", &m_parallelShadowRecording);
+        ImGui::SameLine();
+        ImGui::TextDisabled("(%s)", m_parallelShadowRecording ? "4 threads" : "1 thread");
+        ImGui::Text("Shadow Rec (CPU): %.3f ms", m_gpuTiming.shadowRecordCpuMs);
+        ImGui::TextDisabled("  toggle + watch this number; raise the stress count to see the gap");
     }
 
     ImGui::Separator();

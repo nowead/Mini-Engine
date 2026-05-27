@@ -120,8 +120,13 @@ public:
         float bloomMs        = 0.0f;
         float deferredMs     = 0.0f;
         float postprocessMs  = 0.0f;
+        float shadowRecordCpuMs = 0.0f;  // D4: CPU cost of recording the cascades
     };
     void setGPUTiming(const GPUTiming& timing) { m_gpuTiming = timing; }
+
+    // D4: parallel shadow-cascade recording toggle (checkbox in Statistics panel).
+    // Application reads this each frame and applies it to the Renderer.
+    bool getParallelShadowRecording() const { return m_parallelShadowRecording; }
 
 private:
     std::unique_ptr<ui::ImGuiBackend> backend;
@@ -146,6 +151,9 @@ private:
 
     // GPU timing (written by Application, read by Statistics panel)
     GPUTiming m_gpuTiming;
+
+    // D4: parallel shadow-cascade recording toggle (default on = D3-2 path)
+    bool m_parallelShadowRecording = true;
 
     // Bindless + VMA metrics
     BindlessMetrics m_bindlessMetrics;

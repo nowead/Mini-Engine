@@ -3780,47 +3780,78 @@ void Renderer::drawFrame() {
                 // ============================================================
                 frameCBs.push_back(encoder->finish());
 
-                if (!m_shadowThreadPool) {
-                    m_shadowThreadPool = std::make_unique<utils::ThreadPool>(
-                        rendering::ShadowRenderer::NUM_CASCADES);
-                }
+                // D4: measure the wall-clock cost of recording all cascades and A/B
+                // between parallel (D3-2) and single-threaded (D3-1) recording.
+                const auto _shadowRecT0 = std::chrono::steady_clock::now();
 
-                // Read-only handles shared by all cascade tasks (safe: bound into
+                // Read-only handles shared by every cascade (safe: bound into
                 // distinct per-cascade command buffers, never mutated here).
                 rhi::RHIBindGroup* ssboBG = ssboBindGroups[frameIndex].get();
                 rhi::RHIBuffer*    vbuf   = mesh->getVertexBuffer();
                 rhi::RHIBuffer*    ibuf   = mesh->getIndexBuffer();
 
-                std::array<std::future<std::unique_ptr<rhi::RHICommandBuffer>>,
-                           rendering::ShadowRenderer::NUM_CASCADES> cascadeFutures;
-                for (uint32_t cascade = 0; cascade < rendering::ShadowRenderer::NUM_CASCADES; ++cascade) {
-                    cascadeFutures[cascade] = m_shadowThreadPool->submit(
-                        [this, cascade, frameIndex, instanceCount, meshIndexCount, ssboBG, vbuf, ibuf]()
-                            -> std::unique_ptr<rhi::RHICommandBuffer> {
-                            auto enc = rhiBridge->createCommandEncoder();
-                            if (!enc) return nullptr;
-                            if (auto* ve = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(enc.get()))
-                                ve->setGraphManagedLayouts(true);
-                            auto shadowPass = shadowRenderer->beginShadowPass(enc.get(), frameIndex, cascade);
-                            if (shadowPass) {
-                                if (ssboBG) shadowPass->setBindGroup(1, ssboBG);
-                                shadowPass->setVertexBuffer(0, vbuf, 0);
-                                shadowPass->setIndexBuffer(ibuf, rhi::IndexFormat::Uint32, 0);
-                                // Render ALL instances with trivial 0-based indexing;
-                                // shadow.wgsl culls the ground by its huge AABB.
-                                shadowPass->drawIndexed(meshIndexCount, instanceCount, 0, 0, 0);
-                                shadowPass->end();
-                            }
-                            return enc->finish();
-                        });
+                // Records one cascade into the given encoder. Shared by both paths.
+                // Captures by reference are safe: this lambda (and the locals it
+                // reads) outlive every worker task because waitForAll() joins below
+                // before the lambda leaves scope. Concurrent calls touch only
+                // per-cascade state (D3-2a), so they do not race.
+                auto recordCascade = [&](rhi::RHICommandEncoder* enc, uint32_t cascade) {
+                    auto shadowPass = shadowRenderer->beginShadowPass(enc, frameIndex, cascade);
+                    if (shadowPass) {
+                        if (ssboBG) shadowPass->setBindGroup(1, ssboBG);
+                        shadowPass->setVertexBuffer(0, vbuf, 0);
+                        shadowPass->setIndexBuffer(ibuf, rhi::IndexFormat::Uint32, 0);
+                        // Render ALL instances with trivial 0-based indexing;
+                        // shadow.wgsl culls the ground by its huge AABB.
+                        shadowPass->drawIndexed(meshIndexCount, instanceCount, 0, 0, 0);
+                        shadowPass->end();
+                    }
+                };
+
+                if (m_parallelShadowCascades) {
+                    // D3-2: dispatch one task per cascade to the worker pool.
+                    if (!m_shadowThreadPool) {
+                        m_shadowThreadPool = std::make_unique<utils::ThreadPool>(
+                            rendering::ShadowRenderer::NUM_CASCADES);
+                    }
+                    std::array<std::future<std::unique_ptr<rhi::RHICommandBuffer>>,
+                               rendering::ShadowRenderer::NUM_CASCADES> cascadeFutures;
+                    for (uint32_t cascade = 0; cascade < rendering::ShadowRenderer::NUM_CASCADES; ++cascade) {
+                        cascadeFutures[cascade] = m_shadowThreadPool->submit(
+                            [this, cascade, &recordCascade]() -> std::unique_ptr<rhi::RHICommandBuffer> {
+                                auto enc = rhiBridge->createCommandEncoder();
+                                if (!enc) return nullptr;
+                                if (auto* ve = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(enc.get()))
+                                    ve->setGraphManagedLayouts(true);
+                                recordCascade(enc.get(), cascade);
+                                return enc->finish();
+                            });
+                    }
+                    // Barrier: every cascade task completes here (upholds the
+                    // command-pool lifetime invariant documented above).
+                    m_shadowThreadPool->waitForAll();
+                    for (uint32_t cascade = 0; cascade < rendering::ShadowRenderer::NUM_CASCADES; ++cascade) {
+                        frameCBs.push_back(cascadeFutures[cascade].get());
+                    }
+                } else {
+                    // D3-1: record the cascades sequentially on the main thread
+                    // (kept as the A/B reference path).
+                    for (uint32_t cascade = 0; cascade < rendering::ShadowRenderer::NUM_CASCADES; ++cascade) {
+                        auto enc = rhiBridge->createCommandEncoder();
+                        if (!enc) continue;
+                        if (auto* ve = dynamic_cast<RHI::Vulkan::VulkanRHICommandEncoder*>(enc.get()))
+                            ve->setGraphManagedLayouts(true);
+                        recordCascade(enc.get(), cascade);
+                        frameCBs.push_back(enc->finish());
+                    }
                 }
 
-                // Barrier: every cascade task must complete before we read the
-                // buffers and before this frame returns (upholds the invariant above).
-                m_shadowThreadPool->waitForAll();
-                for (uint32_t cascade = 0; cascade < rendering::ShadowRenderer::NUM_CASCADES; ++cascade) {
-                    frameCBs.push_back(cascadeFutures[cascade].get());
-                }
+                const auto _shadowRecT1 = std::chrono::steady_clock::now();
+                const float _shadowRecMs =
+                    std::chrono::duration<float, std::milli>(_shadowRecT1 - _shadowRecT0).count();
+                m_shadowRecordCpuMs = (m_shadowRecordCpuMs <= 0.0f)
+                    ? _shadowRecMs
+                    : m_shadowRecordCpuMs * 0.9f + _shadowRecMs * 0.1f;  // EMA smoothing
 
                 // Resume recording the rest of the frame in a fresh "post" buffer.
                 encoder = rhiBridge->createCommandEncoder();

@@ -327,6 +327,83 @@ sync 해저드 0). 사용자 시각 확인 완료(그림자 깜빡임·아티팩
 
 ### 15. 다음 — D4
 
-D4: 4코어 CPU 프레임 시간 측정(단일 스레드 D3-1 vs 병렬 D3-2)으로 병렬 기록 이득
-정량화. 정성 검증(경쟁/깜빡임 없음)은 D3-2에서 완료. (후속 후보: GBuffer 드로우
-분할 — secondary CB 필요, §D "secondary 안 씀" 결정과 충돌하므로 별도 재논의.)
+D4: CPU 프레임 시간 측정(단일 스레드 D3-1 vs 병렬 D3-2)으로 병렬 기록 이득 정량화.
+
+---
+
+## 변경 이력 (4부) — D4 측정과 정직한 결론
+
+> D3-2의 정성 검증(경쟁/깜빡임 없음)은 끝났다. D4는 **정량 측정**으로 "병렬 기록이
+> 실제로 빨라지는가"를 따진다. 결과는 예상과 달랐고, 그 다름 자체가 D4의 산출물이다.
+
+### 16. 측정 인프라
+
+- Renderer에 셰도우 캐스케이드 **기록 구간**(첫 캐스케이드 인코더 생성 ~ 4개 CB 수집)
+  의 CPU 벽시계 시간을 `std::chrono::steady_clock`로 재고 EMA 평활(`m_shadowRecordCpuMs`).
+- **A/B 런타임 토글** `m_parallelShadowCascades`: true=ThreadPool dispatch(D3-2),
+  false=메인 스레드 순차 기록(D3-1, 레퍼런스 경로로 보존). 두 경로 모두 동일한
+  `frameCBs`를 만들고 기록 방식만 다름.
+- ImGui Statistics 패널에 **"Shadow Rec (CPU)" 수치 + "Parallel shadow recording"
+  체크박스** 추가(Application이 매 프레임 토글을 Renderer에 적용, 측정값을
+  ImGuiManager로 push). GPU "Shadow Pass" 바와는 **별개의 CPU 측정**임을 명시.
+
+측정 방법: 임시 콘솔 로그 + 시작 시 `regenerateBuildings(1000)` 임시 주입으로 헤드리스
+자동 측정(측정 후 임시 코드 제거).
+
+### 17. 측정 결과
+
+| 인스턴스 | serial (D3-1) | parallel (D3-2) |
+| --- | --- | --- |
+| 17 (기본 씬) | ~0.135 ms | ~0.145 ms |
+| 1001 (스트레스) | ~0.11 ms | ~0.14 ms |
+
+두 가지가 드러났다:
+
+1. **기록 비용이 인스턴스 수와 무관(O(1))** — 1001 인스턴스가 17과 거의 같다.
+   이유: 셰도우 캐스케이드가 **단일 인스턴스드 드로우**
+   (`drawIndexed(idx, instanceCount)`)다. 캐스케이드당 기록은 beginRenderPass +
+   setBindGroup + setVertexBuffer + setIndexBuffer + drawIndexed + end ≈ **6개 명령**
+   으로, 인스턴스가 17이든 1001이든 동일. GPU가 인스턴싱을 처리하지 CPU 기록량은
+   안 늘어난다.
+2. **parallel이 serial보다 항상 ~0.02–0.03ms 느림** — 캐스케이드당 분할할 CPU
+   기록량(6 명령)이 thread dispatch + waitForAll 오버헤드보다 작아, 병렬화가 이길
+   crossover에 **영원히 도달 못 함**.
+
+### 18. 정직한 결론
+
+이 엔진의 셰도우 패스는 **기록-바운드(record-bound)가 아니다.** 인스턴스드 드로우라
+캐스케이드당 명령이 6개뿐이고, 그걸 4스레드로 쪼개면 스레드 오버헤드만 추가된다.
+**병렬 커맨드 기록이 이기려면 각 병렬 단위가 상당한 CPU 기록(수백 개의 개별·비인스턴스
+드로우)을 해야 한다** — 예: 다양한 메시·머티리얼의 비인스턴스 지오메트리, 또는 한
+패스가 수천 드로우콜을 내는 경우.
+
+이것이 D4의 가치다: **능력을 만들고(측정 가능한 토글까지) → 측정하고 → "이 워크로드엔
+이득 없음 + 어떤 워크로드라야 이득"을 정량적으로 규명**했다. D3 인프라(스레드 풀,
+멀티-CB, 풀 수명 불변식)는 정확·검증됐고 재사용 가능하다. 단지 이 특정 패스가
+기록-바운드가 아닐 뿐.
+
+> 면접 스토리: "멀티스레드 커맨드 레코딩을 구현하고 측정했더니 이 패스에선 이득이
+> 없었다. 왜냐면 인스턴스드 드로우라 기록이 O(1)이기 때문. 병렬 기록은 패스당
+> 드로우콜이 많을 때만 의미가 있고, 그 임계점을 측정으로 보일 수 있다." — 측정 기반
+> 판단을 보여주는 강한 답변.
+
+### 19. 기본값 결정 — 병렬 ON 유지
+
+측정상 병렬이 미세하게 느리지만(0.02ms, 16ms 프레임 예산 대비 무의미), 이 엔진은
+시연 중심이라 **핵심 역량(멀티스레드 기록)을 기본 노출**하기로 함(사용자 결정).
+패널 체크박스로 즉시 A/B 토글 가능. `m_parallelShadowCascades = true` 기본.
+
+### 20. 수정 파일 요약 (4부)
+
+| 파일 | 변경 |
+| --- | --- |
+| `src/rendering/Renderer.{hpp,cpp}` | `m_parallelShadowCascades` 토글 + `m_shadowRecordCpuMs` EMA 측정; drawFrame 캐스케이드 구간을 timing + parallel/serial 분기(`recordCascade` 람다 공유); getter/setter |
+| `src/ui/ImGuiManager.{hpp,cpp}` | GPUTiming에 `shadowRecordCpuMs`; "Parallel shadow recording" 체크박스 + CPU 수치 표시; `getParallelShadowRecording()` |
+| `src/Application.cpp` | 매 프레임 UI 토글을 Renderer에 적용 + 측정값 push |
+
+### 21. 로드맵 D 종결
+
+D1~D4 완료. 멀티스레드 커맨드 레코딩 인프라(per-thread 풀 → 스레드 풀 → 장애물
+해소 → 멀티-CB → 병렬 → 측정)가 정확성·동시성 검증과 정직한 성능 규명까지 끝났다.
+후속 후보(이득이 실제로 날 워크로드): GBuffer 등 **비인스턴스 다중 드로우 패스의
+병렬/secondary-CB 분할** — §D "secondary 안 씀" 결정과 충돌하므로 별도 재논의.

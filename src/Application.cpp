@@ -408,8 +408,12 @@ void Application::mainLoopFrame() {
                 gpuTiming.bloomMs       = profiler->getElapsedMs(GpuProfiler::TimerId::BloomPass);
                 gpuTiming.deferredMs    = profiler->getElapsedMs(GpuProfiler::TimerId::DeferredLighting);
                 gpuTiming.postprocessMs = profiler->getElapsedMs(GpuProfiler::TimerId::PostProcess);
+                gpuTiming.shadowRecordCpuMs = renderer->getShadowRecordCpuMs();  // D4
                 imgui->setGPUTiming(gpuTiming);
             }
+
+            // D4: apply the parallel-shadow-recording toggle from the UI.
+            renderer->setParallelShadowCascades(imgui->getParallelShadowRecording());
 
             // Bindless + VMA metrics
             {
