@@ -552,3 +552,33 @@ TAA 리졸브·velocity 타깃은 WebGPU에 구현돼 있었으나, **활성화 
 검증: WASM 빌드 통과(`MiniEngine.wasm` 재생성), 네이티브 무회귀, 브라우저에서 구름
 합성 + 건물 occlusion 정상(사용자 확인). 듀얼 백엔드 볼륨 렌더링 복원. (브라우저
 파라미터 컨트롤은 후속 — 현재 기본값 고정.)
+
+---
+
+## 변경 이력 (8부) — WASM 볼륨 HTML 컨트롤
+
+> 7부에서 WASM 볼륨은 기본값 고정이었다. 브라우저에서도 네이티브 ImGui 패널처럼
+> 조작 가능하게 wasm_shell HTML 패널에 Volume 섹션을 추가.
+
+### 32. 구현
+
+- 볼륨 setter를 무조건 경로로 노출(`Renderer::setVolume*`) + JS 친화적 개별 setter:
+  density/extinction/threshold/colorMix(스칼라) + enable(bool) + low/high color.
+- WASM 바인딩: `WASMBindings.cpp`의 `setVolume*` + `Application::wasm_setVolume*`
+  (기존 FXAA/TAA 패턴 동일).
+- `wasm_shell.html` "Volume" 섹션: 체크박스 + 슬라이더 4종 + 컬러 픽커 2종.
+- **색상은 `#rrggbb` → `0xRRGGBB` int로 패킹**해 단일 인자로 전달 — `_queue`가
+  함수당 단일 값만 coalesce하므로(rAF 플러시로 ASYNCIFY 충돌 회피) 다중 인자 불가.
+  C++ `Renderer::unpackRGB`가 int를 vec3로 복원.
+
+### 33. 수정 파일 요약 (8부)
+
+| 파일 | 변경 |
+| --- | --- |
+| `src/rendering/Renderer.hpp` | 볼륨 setter 무조건화 + 개별 setter(스칼라/packed-color) + `unpackRGB` |
+| `src/rendering/VolumeRenderer.hpp` | 개별 setter(densityScale/extinction/threshold/colorMix/low·highColor) |
+| `src/Application.hpp` | `wasm_setVolume*` 포워더 |
+| `src/wasm/WASMBindings.cpp` | `setVolume*` 바인딩 |
+| `tests/wasm_shell.html` | "Volume" 섹션 — enable + 슬라이더 4 + 컬러 픽커 2, packed-color 큐잉 |
+
+검증: WASM 빌드 통과, 네이티브 무회귀, 브라우저에서 슬라이더/색 실시간 반영(사용자 확인).

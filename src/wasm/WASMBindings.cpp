@@ -16,6 +16,13 @@ static void js_setTonemapEnabled(bool on) { if (g_app) g_app->wasm_setTonemapEna
 static void js_setFXAAEnabled(bool on)    { if (g_app) g_app->wasm_setFXAAEnabled(on); }
 static void js_setTAAEnabled(bool on)     { if (g_app) g_app->wasm_setTAAEnabled(on); }
 static void js_setDebugCascades(bool on)  { if (g_app) g_app->wasm_setDebugCascades(on); }
+static void js_setVolumeEnabled(bool on)     { if (g_app) g_app->wasm_setVolumeEnabled(on); }
+static void js_setVolumeDensity(float v)     { if (g_app) g_app->wasm_setVolumeDensity(v); }
+static void js_setVolumeExtinction(float v)  { if (g_app) g_app->wasm_setVolumeExtinction(v); }
+static void js_setVolumeThreshold(float v)   { if (g_app) g_app->wasm_setVolumeThreshold(v); }
+static void js_setVolumeColorMix(float v)    { if (g_app) g_app->wasm_setVolumeColorMix(v); }
+static void js_setVolumeLowColor(int rgb)  { if (g_app) g_app->wasm_setVolumeLowColor(rgb); }
+static void js_setVolumeHighColor(int rgb) { if (g_app) g_app->wasm_setVolumeHighColor(rgb); }
 static void js_setSunIntensity(float i)   { if (g_app) g_app->wasm_setSunIntensity(i); }
 static void js_setExposure(float e)       { if (g_app) g_app->wasm_setExposure(e); }
 static void js_setPointLightCount(int n)  { if (g_app) g_app->wasm_setPointLightCount(n); }
@@ -39,6 +46,13 @@ EMSCRIPTEN_BINDINGS(mini_engine) {
     emscripten::function("setFXAAEnabled",     &wasm::js_setFXAAEnabled);
     emscripten::function("setTAAEnabled",      &wasm::js_setTAAEnabled);
     emscripten::function("setDebugCascades",   &wasm::js_setDebugCascades);
+    emscripten::function("setVolumeEnabled",   &wasm::js_setVolumeEnabled);
+    emscripten::function("setVolumeDensity",   &wasm::js_setVolumeDensity);
+    emscripten::function("setVolumeExtinction",&wasm::js_setVolumeExtinction);
+    emscripten::function("setVolumeThreshold", &wasm::js_setVolumeThreshold);
+    emscripten::function("setVolumeColorMix",  &wasm::js_setVolumeColorMix);
+    emscripten::function("setVolumeLowColor",  &wasm::js_setVolumeLowColor);
+    emscripten::function("setVolumeHighColor", &wasm::js_setVolumeHighColor);
     emscripten::function("setSunIntensity",    &wasm::js_setSunIntensity);
     emscripten::function("setExposure",        &wasm::js_setExposure);
     emscripten::function("setPointLightCount", &wasm::js_setPointLightCount);

@@ -464,6 +464,37 @@
                 <span class="val" id="aoVal">0.60</span>
             </div>
 
+            <div class="section-label">Volume</div>
+            <label class="toggle"><input type="checkbox" id="volumeEnabled" checked> Volume cloud</label>
+            <div class="slider-row">
+                <span>Density</span>
+                <input type="range" id="volDensity" aria-label="Volume Density" min="0" max="5" step="0.05" value="1.0">
+                <span class="val" id="volDensityVal">1.00</span>
+            </div>
+            <div class="slider-row">
+                <span>Extinction</span>
+                <input type="range" id="volExtinction" aria-label="Volume Extinction" min="0.1" max="8" step="0.1" value="1.5">
+                <span class="val" id="volExtinctionVal">1.5</span>
+            </div>
+            <div class="slider-row">
+                <span>Threshold</span>
+                <input type="range" id="volThreshold" aria-label="Volume Threshold" min="0" max="0.5" step="0.005" value="0.02">
+                <span class="val" id="volThresholdVal">0.020</span>
+            </div>
+            <div class="slider-row">
+                <span>Color mix</span>
+                <input type="range" id="volColorMix" aria-label="Volume Color Mix" min="0" max="5" step="0.1" value="2.0">
+                <span class="val" id="volColorMixVal">2.0</span>
+            </div>
+            <div class="slider-row">
+                <span>Low color</span>
+                <input type="color" id="volLowColor" aria-label="Volume Low Color" value="#5973bf">
+            </div>
+            <div class="slider-row">
+                <span>High color</span>
+                <input type="color" id="volHighColor" aria-label="Volume High Color" value="#fff2e0">
+            </div>
+
             <div class="section-label">Lighting</div>
             <div class="slider-row">
                 <span>Sun</span>
@@ -596,6 +627,23 @@
 
             bindSlider('exposure',      'exposureVal', 1, 'setExposure');
             bindSlider('bloomStrength', 'bloomVal',    2, 'setBloomStrength');
+
+            // ── Volume controls ──────────────────────────────────────────────
+            document.getElementById('volumeEnabled').addEventListener('change', function() {
+                _queue('setVolumeEnabled', this.checked);
+            });
+            bindSlider('volDensity',    'volDensityVal',    2, 'setVolumeDensity');
+            bindSlider('volExtinction', 'volExtinctionVal', 1, 'setVolumeExtinction');
+            bindSlider('volThreshold',  'volThresholdVal',  3, 'setVolumeThreshold');
+            bindSlider('volColorMix',   'volColorMixVal',   1, 'setVolumeColorMix');
+            // Color pickers: "#rrggbb" -> packed 0xRRGGBB int (single-arg, queueable).
+            function bindVolColor(id, fn) {
+                document.getElementById(id).addEventListener('input', function() {
+                    _queue(fn, parseInt(this.value.slice(1), 16));
+                });
+            }
+            bindVolColor('volLowColor',  'setVolumeLowColor');
+            bindVolColor('volHighColor', 'setVolumeHighColor');
 
             document.getElementById('aoStrength').addEventListener('input', function() {
                 document.getElementById('aoVal').textContent = parseFloat(this.value).toFixed(2);

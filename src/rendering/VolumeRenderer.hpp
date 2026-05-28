@@ -83,6 +83,13 @@ public:
         m_lowColor  = low;
         m_highColor = high;
     }
+    // Granular setters (WebGPU/JS bindings, one per HTML control).
+    void setDensityScale(float v) { m_densityScale = v; }
+    void setExtinction(float v)   { m_extinction   = v; }
+    void setThreshold(float v)    { m_tfThreshold  = v; }
+    void setColorMix(float v)     { m_tfColorMix   = v; }
+    void setLowColor(const glm::vec3& c)  { m_lowColor  = c; }
+    void setHighColor(const glm::vec3& c) { m_highColor = c; }
     // Defaults so the UI can initialize its sliders to the live values.
     float defDensityScale() const { return m_densityScale; }
     float defExtinction()   const { return m_extinction; }

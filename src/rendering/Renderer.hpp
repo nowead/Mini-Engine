@@ -217,8 +217,8 @@ public:
     void setTAAEnabled(bool e) { m_taaEnabled = e; }
     bool isTAAEnabled() const { return m_taaEnabled; }
 
-    // Phase 7-4: volume rendering controls (forwarded to the VolumeRenderer).
-#ifndef __EMSCRIPTEN__
+    // Volume rendering controls (forwarded to the VolumeRenderer). Unconditional:
+    // native drives them from the ImGui panel, WebGPU from the wasm_shell panel.
     void setVolumeEnabled(bool e) { if (volumeRenderer) volumeRenderer->setEnabled(e); }
     void setVolumeParams(float densityScale, float extinction, float stepSize,
                          float threshold, float colorMix) {
@@ -229,7 +229,20 @@ public:
         if (volumeRenderer) volumeRenderer->setColors(low, high);
     }
     bool volumeAvailable() const { return volumeRenderer && volumeRenderer->isInitialized(); }
-#endif
+
+    // Granular setters (used by the WebGPU/JS bindings -- one per HTML control).
+    void setVolumeDensity(float v)    { if (volumeRenderer) volumeRenderer->setDensityScale(v); }
+    void setVolumeExtinction(float v) { if (volumeRenderer) volumeRenderer->setExtinction(v); }
+    void setVolumeThreshold(float v)  { if (volumeRenderer) volumeRenderer->setThreshold(v); }
+    void setVolumeColorMix(float v)   { if (volumeRenderer) volumeRenderer->setColorMix(v); }
+    // Colors come from JS as packed 0xRRGGBB ints (single-arg, queue-friendly).
+    void setVolumeLowColor(int rgb)  { if (volumeRenderer) volumeRenderer->setLowColor(unpackRGB(rgb)); }
+    void setVolumeHighColor(int rgb) { if (volumeRenderer) volumeRenderer->setHighColor(unpackRGB(rgb)); }
+    static glm::vec3 unpackRGB(int rgb) {
+        return glm::vec3(float((rgb >> 16) & 0xFF) / 255.0f,
+                         float((rgb >> 8)  & 0xFF) / 255.0f,
+                         float( rgb        & 0xFF) / 255.0f);
+    }
 
     // D4: parallel shadow-cascade recording toggle + CPU measurement (A/B).
     // true = dispatch the 4 cascades to the worker pool (D3-2); false = record
