@@ -1125,6 +1125,29 @@ if(BUILD_TESTS)
 
     endif() # NOT EMSCRIPTEN (showcase_demo)
 
+    # ── Standalone CT/MRI Volume Viewer (separate app reusing the engine core) ──
+    if(NOT EMSCRIPTEN)
+    add_executable(volume_viewer
+        tests/volume_viewer.cpp
+        src/rendering/RendererBridge.cpp
+        src/rendering/RendererBridge.hpp
+        src/rendering/VolumeRenderer.cpp
+        src/rendering/VolumeRenderer.hpp
+        src/assets/VolumeFile.cpp
+        src/assets/VolumeFile.hpp
+        src/scene/Camera.cpp
+        src/scene/Camera.hpp
+        src/ui/ImGuiBackend.hpp
+        src/ui/ImGuiVulkanBackend.cpp
+        src/ui/ImGuiVulkanBackend.hpp
+        src/utils/FileUtils.hpp
+        src/utils/Logger.hpp
+    )
+    configure_rhi_test(volume_viewer)
+    target_link_libraries(volume_viewer PRIVATE imgui::imgui)
+    add_dependencies(volume_viewer building_shaders)   # needs volume_march.*.spv
+    endif()
+
     # Custom target to run PBR demo
     add_custom_target(run
         COMMAND ${CMAKE_CURRENT_BINARY_DIR}/pbr_demo
