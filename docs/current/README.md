@@ -4,6 +4,24 @@
 
 ---
 
+## 현재 활성 방향 — 의료 볼륨 렌더링 (2026-05-29~)
+
+WebGPU 기반 차세대 클라이언트 사이드 **의료 볼륨 렌더러**로 엔진을 심화하되,
+네이티브 Vulkan을 한 기능도 빠짐없이 동등하게 유지(dual-backend parity).
+
+| 문서 | 설명 |
+| --- | --- |
+| [MEDICAL_VOLUME_ROADMAP.md](medical-volume/MEDICAL_VOLUME_ROADMAP.md) | 전략 결정(방향 1) + 격차 진단 + 마일스톤 M1~M4 + 첫 작업(M1-1 R16Float 승격) |
+
+**진입 작업**: **M1-1 — 3D 텍스처 R8Unorm → R16Float 승격**(무회귀 토대).
+이후 M1-2(window/level) → M1-3(NIfTI/DICOM 실파일 로더). 사용자 확정 대기:
+실파일 포맷 우선순위(NIfTI 우선 권장).
+
+**선행 완료**: 볼륨 렌더링 기초(3D 텍스처 + 레이마칭, Vulkan + WebGPU) ·
+TF 프리셋 · 브라우저 컨트롤 · 독립 실행 뷰어(`volume_viewer`, CT raw 로드).
+
+---
+
 ## 엔진 성숙도 로드맵 (2026-05-20~)
 
 쇼케이스 격상이 종결된 시점에서 **엔진 자체의 성숙도** 관점으로 다시 그린 다음
