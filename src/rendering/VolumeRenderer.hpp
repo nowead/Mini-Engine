@@ -58,6 +58,14 @@ public:
     // Returns false on failure (logged).
     bool initialize(uint32_t resolution = 128);
 
+    // Generic data source (engine seam): replace the volume with an external R8
+    // density buffer of arbitrary dimensions (w*h*d bytes). Any source -- the
+    // procedural generator, a raw-file loader, a future DICOM importer -- feeds
+    // this; the engine itself stays domain-agnostic. Safe at runtime (recreates
+    // the texture/view + rebuilds bind groups).
+    bool loadFromData(const std::vector<uint8_t>& density,
+                      uint32_t w, uint32_t h, uint32_t d);
+
     // Phase 7-3: create the ray-march pipeline + per-frame UBO/bind groups.
     // `depthView` is the scene depth (sampled for occlusion); `nativeRenderPass`
     // is the Vulkan HDR (Load) render pass on Linux, null on dynamic-rendering
@@ -130,7 +138,7 @@ private:
     // a soft sphere modulated by a little value noise -> cloud-like blob.
     void generateProceduralVolume(std::vector<uint8_t>& out, uint32_t resolution) const;
 
-    bool uploadVolume(const std::vector<uint8_t>& density, uint32_t resolution);
+    bool uploadVolume(const std::vector<uint8_t>& density, uint32_t w, uint32_t h, uint32_t d);
 
     rhi::RHIDevice* m_device        = nullptr;
     rhi::RHIQueue*  m_graphicsQueue = nullptr;
@@ -142,6 +150,8 @@ private:
     std::unique_ptr<rhi::RHITextureView> m_volumeView;     // View3D
     std::unique_ptr<rhi::RHISampler>     m_sampler;        // linear, clamp (volume + LUT)
     std::unique_ptr<rhi::RHISampler>     m_depthSampler;   // nearest, clamp (depth)
+    rhi::RHITextureView*                 m_depthView = nullptr;  // non-owning; for bind-group rebuild
+    uint32_t m_volW = 0, m_volH = 0, m_volD = 0;          // current volume dimensions
     std::unique_ptr<rhi::RHITexture>     m_lutTexture;     // 256x1 RGBA8, preset density->color/alpha
     std::unique_ptr<rhi::RHITextureView> m_lutView;
 

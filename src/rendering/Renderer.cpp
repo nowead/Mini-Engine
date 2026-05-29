@@ -6,6 +6,10 @@
 #include "InstancedRenderData.hpp"
 #include "src/utils/Logger.hpp"
 #include "src/utils/FileUtils.hpp"
+#ifndef __EMSCRIPTEN__
+#include "src/assets/VolumeFile.hpp"   // app-layer raw volume loader (native)
+#include <cstdlib>                     // getenv, strtoul
+#endif
 
 // Phase 9: Vulkan-specific includes for platform-specific functionality
 // TODO Phase 10: Consider adding getRenderPass() to RHI interface to remove this last dependency
@@ -180,6 +184,33 @@ Renderer::Renderer(GLFWwindow* window,
                     !volumeRenderer->createPipeline(rhiDepthImageView.get(), nativeHDRPass)) {
                     LOG_ERROR("Renderer") << "VolumeRenderer pipeline init failed";
                 }
+#ifndef __EMSCRIPTEN__
+                // App-layer data source: if MINIENGINE_VOLUME is set, load a raw
+                // volume file and feed it to the engine's generic loadFromData.
+                // Format: "path,W,H,D[,bytesPerVoxel]" (bytesPerVoxel 1 or 2; 2 =
+                // little-endian uint16 normalized, e.g. CT). Absent -> procedural.
+                if (const char* env = std::getenv("MINIENGINE_VOLUME")) {
+                    std::string spec(env);
+                    std::vector<std::string> parts;
+                    for (size_t p = 0; p != std::string::npos; ) {
+                        size_t c = spec.find(',', p);
+                        parts.push_back(spec.substr(p, c == std::string::npos ? c : c - p));
+                        p = (c == std::string::npos) ? c : c + 1;
+                    }
+                    if (parts.size() >= 4) {
+                        const std::string path = parts[0];
+                        uint32_t vw = std::strtoul(parts[1].c_str(), nullptr, 10);
+                        uint32_t vh = std::strtoul(parts[2].c_str(), nullptr, 10);
+                        uint32_t vd = std::strtoul(parts[3].c_str(), nullptr, 10);
+                        uint32_t bpv = parts.size() >= 5 ? std::strtoul(parts[4].c_str(), nullptr, 10) : 1;
+                        std::vector<uint8_t> data;
+                        if (assets::loadRawVolume(path, vw, vh, vd, bpv, data))
+                            volumeRenderer->loadFromData(data, vw, vh, vd);
+                        else
+                            LOG_WARN("Renderer") << "MINIENGINE_VOLUME load failed; using procedural";
+                    }
+                }
+#endif
             }
         }
     }

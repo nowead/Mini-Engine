@@ -1,3 +1,6 @@
+# Volume data (CT/MRI raw volumes are large; loaded via MINIENGINE_VOLUME, not committed)
+*.raw
+
 # Visual Studio
 .vs/
 *.vsidx

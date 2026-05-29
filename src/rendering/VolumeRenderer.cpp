@@ -92,18 +92,25 @@ void VolumeRenderer::generateProceduralVolume(std::vector<uint8_t>& out, uint32_
 // Upload
 // ---------------------------------------------------------------------------
 
-bool VolumeRenderer::uploadVolume(const std::vector<uint8_t>& density, uint32_t resolution) {
+bool VolumeRenderer::uploadVolume(const std::vector<uint8_t>& density,
+                                  uint32_t w, uint32_t h, uint32_t d) {
+    if (density.size() < static_cast<size_t>(w) * h * d) {
+        LOG_ERROR("VolumeRenderer") << "density buffer too small for " << w << "x" << h << "x" << d;
+        return false;
+    }
+    m_volW = w; m_volH = h; m_volD = d;
+
     // R8Unorm: 1 byte per voxel. WebGPU requires bytesPerRow to be a 256-byte
     // multiple, so pad each row (and the staging buffer) on that backend; Vulkan
     // packs tightly. (See CLAUDE.md: copyBufferToTexture bytesPerRow semantics.)
-    const uint32_t tightBytesPerRow = resolution;          // width * 1 byte
+    const uint32_t tightBytesPerRow = w;          // width * 1 byte
 #ifdef __EMSCRIPTEN__
     const uint32_t paddedBytesPerRow = (tightBytesPerRow + 255u) & ~255u;
 #else
     const uint32_t paddedBytesPerRow = tightBytesPerRow;
 #endif
     const uint64_t stagingSize =
-        static_cast<uint64_t>(paddedBytesPerRow) * resolution * resolution;
+        static_cast<uint64_t>(paddedBytesPerRow) * h * d;
 
     rhi::BufferDesc stagingDesc{};
     stagingDesc.size  = stagingSize;
@@ -114,9 +121,9 @@ bool VolumeRenderer::uploadVolume(const std::vector<uint8_t>& density, uint32_t 
         uint8_t* mapped = static_cast<uint8_t*>(staging->map());
 #ifdef __EMSCRIPTEN__
         // Per-row copy honoring the padded stride across every depth slice.
-        for (uint32_t z = 0; z < resolution; ++z) {
-            for (uint32_t y = 0; y < resolution; ++y) {
-                const uint64_t row = static_cast<uint64_t>(z) * resolution + y;
+        for (uint32_t z = 0; z < d; ++z) {
+            for (uint32_t y = 0; y < h; ++y) {
+                const uint64_t row = static_cast<uint64_t>(z) * h + y;
                 std::memcpy(mapped + row * paddedBytesPerRow,
                             density.data() + row * tightBytesPerRow,
                             tightBytesPerRow);
@@ -129,7 +136,7 @@ bool VolumeRenderer::uploadVolume(const std::vector<uint8_t>& density, uint32_t 
     }
 
     rhi::TextureDesc texDesc{};
-    texDesc.size          = rhi::Extent3D{resolution, resolution, resolution};
+    texDesc.size          = rhi::Extent3D{w, h, d};
     texDesc.dimension     = rhi::TextureDimension::Texture3D;
     texDesc.format        = rhi::TextureFormat::R8Unorm;
     texDesc.mipLevelCount = 1;
@@ -149,7 +156,7 @@ bool VolumeRenderer::uploadVolume(const std::vector<uint8_t>& density, uint32_t 
     bufferCopy.offset       = 0;
 #ifdef __EMSCRIPTEN__
     bufferCopy.bytesPerRow  = paddedBytesPerRow;  // bytes, 256-aligned (WebGPU)
-    bufferCopy.rowsPerImage = resolution;          // rows per depth slice
+    bufferCopy.rowsPerImage = h;                   // rows per depth slice
 #else
     bufferCopy.bytesPerRow  = 0;   // tightly packed (Vulkan reads this as texels; 0 = packed)
     bufferCopy.rowsPerImage = 0;   // tightly packed slices
@@ -161,8 +168,7 @@ bool VolumeRenderer::uploadVolume(const std::vector<uint8_t>& density, uint32_t 
     texCopy.origin   = {0, 0, 0};
     texCopy.aspect   = 0;
 
-    encoder->copyBufferToTexture(bufferCopy, texCopy,
-                                 rhi::Extent3D{resolution, resolution, resolution});
+    encoder->copyBufferToTexture(bufferCopy, texCopy, rhi::Extent3D{w, h, d});
 
     encoder->transitionTextureLayout(m_volumeTexture.get(),
                                      rhi::TextureLayout::TransferDst,
@@ -193,7 +199,7 @@ bool VolumeRenderer::initialize(uint32_t resolution) {
     std::vector<uint8_t> density;
     generateProceduralVolume(density, resolution);
 
-    if (!uploadVolume(density, resolution)) return false;
+    if (!uploadVolume(density, resolution, resolution, resolution)) return false;
 
     // Linear, clamp-to-edge sampler for the volume.
     rhi::SamplerDesc samplerDesc{};
@@ -261,6 +267,22 @@ bool VolumeRenderer::initialize(uint32_t resolution) {
 
     m_initialized = true;
     LOG_INFO("VolumeRenderer") << "initialized: " << resolution << "^3 R8 density volume";
+    return true;
+}
+
+// Generic data source: replace the volume texture with an external R8 density
+// buffer of arbitrary dimensions. This is the seam between the engine (which only
+// knows "a 3D density texture") and any data source -- procedural, a raw file
+// loader, a future DICOM/NIfTI importer, etc. Safe to call at runtime: the texture
+// + view are recreated and the bind groups rebuilt against the stored depth view.
+bool VolumeRenderer::loadFromData(const std::vector<uint8_t>& density,
+                                  uint32_t w, uint32_t h, uint32_t d) {
+    if (!m_device || !m_graphicsQueue || w == 0 || h == 0 || d == 0) return false;
+    if (!uploadVolume(density, w, h, d)) return false;   // recreates m_volumeTexture + m_volumeView
+    if (m_bindGroupLayout && m_depthView) {
+        if (!createBindGroups(m_depthView)) return false; // rebind the new view
+    }
+    LOG_INFO("VolumeRenderer") << "loaded volume data " << w << "x" << h << "x" << d;
     return true;
 }
 
@@ -364,6 +386,7 @@ bool VolumeRenderer::createPipeline(rhi::RHITextureView* depthView, void* native
 
 bool VolumeRenderer::createBindGroups(rhi::RHITextureView* depthView) {
     if (!m_bindGroupLayout || !depthView || !m_volumeView) return false;
+    m_depthView = depthView;   // remembered so loadFromData() can rebind after a reload
     for (uint32_t i = 0; i < kFramesInFlight; ++i) {
         rhi::BindGroupDesc desc;
         desc.layout = m_bindGroupLayout.get();

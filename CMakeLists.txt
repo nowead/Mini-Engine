@@ -250,6 +250,9 @@ if(NOT EMSCRIPTEN)
         # Phase 7: Volume Rendering (Vulkan-only)
         src/rendering/VolumeRenderer.cpp
         src/rendering/VolumeRenderer.hpp
+        # App-layer raw volume file loader (native)
+        src/assets/VolumeFile.cpp
+        src/assets/VolumeFile.hpp
     )
 
     target_include_directories(MiniEngine BEFORE PRIVATE
