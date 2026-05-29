@@ -4,6 +4,7 @@
 
 #include <glm/gtc/packing.hpp>   // packHalf1x16 (R8 -> R16Float upload conversion)
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -618,6 +619,13 @@ void VolumeRenderer::updateUBO(uint32_t frameIndex, const glm::mat4& invView,
     ubo.lowColor  = glm::vec4(m_lowColor, 1.0f);
     ubo.highColor = glm::vec4(m_highColor, 1.0f);
     ubo.window    = glm::vec4(m_windowCenter, m_windowWidth, 0.0f, 0.0f);
+    // Gradient-shading params. gradEps = ~1 voxel in [0,1] texture space (use the
+    // largest dim so the step never exceeds one voxel on any axis).
+    const uint32_t maxDim = std::max(m_volW, std::max(m_volH, m_volD));
+    const float gradEps = (maxDim > 0) ? (1.0f / static_cast<float>(maxDim)) : (1.0f / 128.0f);
+    const glm::vec3 L = glm::length(m_lightDir) > 1e-6f ? glm::normalize(m_lightDir) : glm::vec3(0, 1, 0);
+    ubo.light = glm::vec4(L, m_shadingEnabled ? 1.0f : 0.0f);
+    ubo.shade = glm::vec4(m_ambient, m_diffuse, gradEps, 0.0f);
 
     m_uniformBuffers[fi]->write(&ubo, sizeof(VolumeUBO));
 }

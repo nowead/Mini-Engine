@@ -70,6 +70,8 @@ private:
     int   m_preset    = 3;       // CT - Bone by default for a CT viewer
     float m_density   = 1.5f, m_extinction = 3.0f, m_threshold = 0.05f, m_colorMix = 2.0f;
     float m_winCenter = 0.5f, m_winWidth = 1.0f;   // intensity window (normalized [0,1])
+    bool  m_shading   = true;                      // gradient-based Lambert shading
+    float m_shAmbient = 0.4f, m_shDiffuse = 0.8f;
     float m_low[3]    = { 0.35f, 0.45f, 0.75f };
     float m_high[3]   = { 1.00f, 0.95f, 0.88f };
 
@@ -279,6 +281,13 @@ private:
         ImGui::SliderFloat("Extinction", &m_extinction, 0.1f, 30.0f, "%.2f");
         ImGui::SliderFloat("Threshold",  &m_threshold,  0.0f, 0.5f, "%.3f");
 
+        ImGui::SeparatorText("Shading");
+        ImGui::Checkbox("Gradient shading", &m_shading);
+        ImGui::BeginDisabled(!m_shading);
+        ImGui::SliderFloat("Ambient", &m_shAmbient, 0.0f, 1.0f, "%.2f");
+        ImGui::SliderFloat("Diffuse", &m_shDiffuse, 0.0f, 1.5f, "%.2f");
+        ImGui::EndDisabled();
+
         const bool customTF = (m_preset == 0);
         ImGui::BeginDisabled(!customTF);
         ImGui::SliderFloat("Color mix", &m_colorMix, 0.0f, 5.0f, "%.2f");
@@ -301,6 +310,9 @@ private:
         m_volume->setParams(m_density, m_extinction, /*stepSize*/0.01f, m_threshold, m_colorMix);
         m_volume->setMaxSteps(512.0f);
         m_volume->setWindow(m_winCenter, m_winWidth);
+        m_volume->setShadingEnabled(m_shading);
+        m_volume->setShadeAmbient(m_shAmbient);
+        m_volume->setShadeDiffuse(m_shDiffuse);
         m_volume->setColors(glm::vec3(m_low[0], m_low[1], m_low[2]),
                             glm::vec3(m_high[0], m_high[1], m_high[2]));
     }

@@ -22,6 +22,8 @@ layout(set = 0, binding = 0) uniform VolumeUBO {
     vec4 lowColor;    // rgb = color at low density (Custom preset)
     vec4 highColor;   // rgb = color at high density (Custom preset)
     vec4 window;      // x = windowCenter, y = windowWidth (intensity -> [0,1]); zw spare
+    vec4 light;       // xyz = light dir (world), w = shadingEnable (0/1)
+    vec4 shade;       // x = ambient, y = diffuse, z = gradEps (texture-space step), w spare
 } ubo;
 
 layout(set = 0, binding = 1) uniform texture2D depthTex;
@@ -109,6 +111,23 @@ void main() {
                                     clamp(density * ubo.tf.y, 0.0, 1.0));
                 opacityWeight = density;
             }
+            // Gradient shading: the density gradient is the surface normal; light it
+            // with Lambert. Gives the volume 3D form instead of flat absorption.
+            if (ubo.light.w > 0.5) {
+                float e = ubo.shade.z;
+                vec3 g;
+                g.x = texture(sampler3D(volumeTex, volumeSampler), uvw + vec3(e, 0, 0)).r
+                    - texture(sampler3D(volumeTex, volumeSampler), uvw - vec3(e, 0, 0)).r;
+                g.y = texture(sampler3D(volumeTex, volumeSampler), uvw + vec3(0, e, 0)).r
+                    - texture(sampler3D(volumeTex, volumeSampler), uvw - vec3(0, e, 0)).r;
+                g.z = texture(sampler3D(volumeTex, volumeSampler), uvw + vec3(0, 0, e)).r
+                    - texture(sampler3D(volumeTex, volumeSampler), uvw - vec3(0, 0, e)).r;
+                float glen = length(g);
+                // Normal points toward DECREASING density (outward from a dense body).
+                float ndl = (glen > 1e-6) ? max(dot(-g / glen, normalize(ubo.light.xyz)), 0.0) : 0.0;
+                color *= ubo.shade.x + ubo.shade.y * ndl;   // ambient + diffuse
+            }
+
             // Beer-Lambert opacity for this step.
             float alpha = 1.0 - exp(-opacityWeight * extinction * stepSize);
             accum.rgb += (1.0 - accum.a) * color * alpha;   // premultiplied

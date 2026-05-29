@@ -18,6 +18,8 @@ struct VolumeUBO {
     lowColor:  vec4<f32>,
     highColor: vec4<f32>,
     window:    vec4<f32>,   // x=windowCenter, y=windowWidth (intensity -> [0,1]); zw spare
+    light:     vec4<f32>,   // xyz = light dir (world), w = shadingEnable (0/1)
+    shade:     vec4<f32>,   // x=ambient, y=diffuse, z=gradEps (texture-space step), w spare
 };
 
 @group(0) @binding(0) var<uniform> ubo: VolumeUBO;
@@ -119,6 +121,23 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
                             clamp(density * ubo.tf.y, 0.0, 1.0));
                 opacityWeight = density;
             }
+
+            // Gradient shading: density gradient = surface normal, lit with Lambert.
+            if (ubo.light.w > 0.5) {
+                let e = ubo.shade.z;
+                let gx = textureSampleLevel(volumeTex, volumeSampler, uvw + vec3<f32>(e, 0.0, 0.0), 0.0).r
+                       - textureSampleLevel(volumeTex, volumeSampler, uvw - vec3<f32>(e, 0.0, 0.0), 0.0).r;
+                let gy = textureSampleLevel(volumeTex, volumeSampler, uvw + vec3<f32>(0.0, e, 0.0), 0.0).r
+                       - textureSampleLevel(volumeTex, volumeSampler, uvw - vec3<f32>(0.0, e, 0.0), 0.0).r;
+                let gz = textureSampleLevel(volumeTex, volumeSampler, uvw + vec3<f32>(0.0, 0.0, e), 0.0).r
+                       - textureSampleLevel(volumeTex, volumeSampler, uvw - vec3<f32>(0.0, 0.0, e), 0.0).r;
+                let g = vec3<f32>(gx, gy, gz);
+                let glen = length(g);
+                // Normal points toward DECREASING density (outward from a dense body).
+                let ndl = select(0.0, max(dot(-g / glen, normalize(ubo.light.xyz)), 0.0), glen > 1e-6);
+                color = color * (ubo.shade.x + ubo.shade.y * ndl);
+            }
+
             let alpha = 1.0 - exp(-opacityWeight * extinction * stepSize);
             accum = vec4<f32>(accum.rgb + (1.0 - accum.a) * color * alpha,
                               accum.a   + (1.0 - accum.a) * alpha);
