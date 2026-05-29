@@ -149,6 +149,10 @@ non-uniform control flow는 `textureSampleLevel`로(현 셰이더 관례 유지)
 **목표**: "브라우저에서 대용량 실데이터를 60fps로" 주장의 근거. WebGPU 컴퓨트가
 차별화를 만드는 핵심 마일스톤.
 
+**상태 (2026-05-29)**: ~~M3-1 컴퓨트 occupancy 그리드 + 마칭 스킵~~ ✅ (`b6fbaed`,
+양 백엔드, 셀 8³, storage buffer). M3-2는 네이티브 뷰어 FPS 표시로 부분 착수 —
+**대용량 볼륨(512³급) 60fps 측정은 미완**. M3-3(bricking)은 별도 결정.
+
 **작업**:
 
 - **M3-1 — min/max occupancy 그리드(컴퓨트 빌드).** 볼륨을 매크로셀(예 8³)로

@@ -16,13 +16,18 @@ WebGPU 기반 차세대 클라이언트 사이드 **의료 볼륨 렌더러**로
 **M1 (실데이터 기반) 완료** (2026-05-29): R16Float 16비트 · window/level ·
 NIfTI 로더 + float 강도 경로 + 임상 윈도우 프리셋.
 **M2 (시네마틱 품질) 완료** (2026-05-29): gradient 셰이딩 + 볼류메트릭 소프트
-섀도우(양 백엔드, 토글). 합성 .nii로 검증.
+섀도우(양 백엔드, 토글).
+**M3-1 (empty-space skipping) 완료** (2026-05-29): 컴퓨트 min/max occupancy
+그리드 + 마칭 셀 스킵(양 백엔드). FPS 측정(네이티브 뷰어).
+**독립 WASM 볼륨 뷰어 완료** (2026-05-29): 브라우저에서 볼륨만 풀스크린 렌더하는
+별도 실행파일(`volume_viewer_wasm`) — M1/M2/M3 전부 + HTML 컨트롤. 랜딩 인덱스에서
+클릭 진입. M1의 "브라우저에서도 실 볼륨" 격차 해소.
 
-**다음 후보**: **M3 — 스케일·성능**(컴퓨트 empty-space skipping → bricking).
-또는 M1 후속(WASM .nii preload / DICOM).
+**다음 후보**: M3-2 측정 심화(대용량 볼륨 60fps) / M3-3 bricking ·
+M1 후속(DICOM 로더) · M4(path-traced 산란).
 
 **선행 완료**: 볼륨 렌더링 기초(3D 텍스처 + 레이마칭, Vulkan + WebGPU) ·
-TF 프리셋 · 브라우저 컨트롤 · 독립 뷰어(`volume_viewer`, raw/NIfTI 로드).
+TF 프리셋 · 독립 뷰어(네이티브 `volume_viewer` + 브라우저 `volume_viewer_wasm`).
 
 ---
 
