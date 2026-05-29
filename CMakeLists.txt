@@ -792,6 +792,78 @@ else()
         -O2 -g0 -ffunction-sections -fdata-sections
         --use-port=${EMDAWNWEBGPU_PORT}
     )
+
+    # -------------------------------------------------------------------------
+    # Standalone WASM Volume Viewer (browser sibling of native volume_viewer).
+    # Reuses RendererBridge + VolumeRenderer only -- no deferred/city showcase.
+    # -------------------------------------------------------------------------
+    add_executable(volume_viewer_wasm
+        tests/volume_viewer_wasm.cpp
+        src/rendering/RendererBridge.cpp
+        src/rendering/RendererBridge.hpp
+        src/rendering/VolumeRenderer.cpp
+        src/rendering/VolumeRenderer.hpp
+        src/assets/NiftiFile.cpp
+        src/assets/NiftiFile.hpp
+        src/scene/Camera.cpp
+        src/scene/Camera.hpp
+        src/utils/FileUtils.hpp
+        src/utils/Logger.hpp
+    )
+    target_include_directories(volume_viewer_wasm BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(volume_viewer_wasm PRIVATE glm::glm rhi::factory)
+    target_compile_definitions(volume_viewer_wasm PRIVATE
+        $<$<BOOL:${RHI_BACKEND_WEBGPU}>:RHI_BACKEND_WEBGPU=1>)
+    set_target_properties(volume_viewer_wasm PROPERTIES SUFFIX ".html")
+
+    # Stage the volume WGSL shaders + a generated synthetic CT into preload dirs.
+    set(VV_SHADER_DIR ${CMAKE_CURRENT_BINARY_DIR}/vv_shaders)
+    set(VV_ASSET_DIR  ${CMAKE_CURRENT_BINARY_DIR}/vv_assets)
+    set(VV_WGSL_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/volume_march.wgsl
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/volume_occupancy.comp.wgsl
+    )
+    add_custom_command(TARGET volume_viewer_wasm PRE_LINK
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${VV_SHADER_DIR}
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${VV_WGSL_SOURCES} ${VV_SHADER_DIR}/
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${VV_ASSET_DIR}
+        COMMAND python ${CMAKE_CURRENT_SOURCE_DIR}/scripts/make_synthetic_nii.py
+                ${VV_ASSET_DIR}/synthetic_ct.nii 96 96 48
+        COMMENT "Staging WGSL + synthetic CT for volume_viewer_wasm"
+    )
+    set_target_properties(volume_viewer_wasm PROPERTIES
+        LINK_DEPENDS "${VV_WGSL_SOURCES};${CMAKE_CURRENT_SOURCE_DIR}/tests/volume_viewer_shell.html"
+    )
+    # Refresh the landing index (links both demos) when building this target too.
+    add_custom_command(TARGET volume_viewer_wasm POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm_index.html
+            ${CMAKE_CURRENT_BINARY_DIR}/index.html
+        COMMENT "Copying landing index.html"
+    )
+    target_link_options(volume_viewer_wasm PRIVATE
+        "SHELL:--use-port=${EMDAWNWEBGPU_PORT}"
+        "SHELL:-s USE_GLFW=3"
+        "SHELL:-s ALLOW_MEMORY_GROWTH=1"
+        "SHELL:-s WASM=1"
+        "SHELL:-s INITIAL_MEMORY=134217728"
+        "SHELL:-s MAXIMUM_MEMORY=4294967296"
+        "SHELL:-s STACK_SIZE=16777216"
+        "SHELL:-s ASYNCIFY=1"
+        "SHELL:-s ASYNCIFY_STACK_SIZE=16384"
+        "SHELL:-s ASSERTIONS=1"
+        "SHELL:-s DISABLE_EXCEPTION_CATCHING=0"
+        "SHELL:-s ERROR_ON_UNDEFINED_SYMBOLS=0"
+        "SHELL:-O2"
+        "SHELL:--bind"
+        "SHELL:--preload-file ${VV_SHADER_DIR}@/shaders"
+        "SHELL:--preload-file ${VV_ASSET_DIR}/synthetic_ct.nii@/synthetic_ct.nii"
+        "SHELL:--shell-file ${CMAKE_CURRENT_SOURCE_DIR}/tests/volume_viewer_shell.html"
+    )
+    target_compile_options(volume_viewer_wasm PRIVATE
+        -O2 -g0 -ffunction-sections -fdata-sections
+        --use-port=${EMDAWNWEBGPU_PORT}
+    )
 endif()
 
 # =============================================================================

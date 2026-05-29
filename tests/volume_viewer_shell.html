@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mini-Engine — CT/MRI Volume Viewer (WebGPU)</title>
+<style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden;
+        background: #0a0c10; color: #e6e9ef;
+        font: 13px/1.4 -apple-system, Segoe UI, Roboto, sans-serif; }
+    #canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+    #panel { position: fixed; top: 12px; right: 12px; width: 280px;
+        background: rgba(16,19,26,0.92); border: 1px solid #2a3140; border-radius: 10px;
+        padding: 14px 16px; -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+    #panel h1 { font-size: 14px; margin: 0 0 2px; }
+    #panel .sub { color: #8b95a7; font-size: 11px; margin-bottom: 10px; }
+    .sec { color: #7fa7ff; font-size: 11px; text-transform: uppercase;
+        letter-spacing: .04em; margin: 12px 0 6px; border-top: 1px solid #232a36; padding-top: 8px; }
+    .row { display: flex; align-items: center; gap: 8px; margin: 5px 0; }
+    .row span.lbl { width: 78px; color: #b6becb; font-size: 12px; }
+    .row input[type=range] { flex: 1; }
+    .row .val { width: 46px; text-align: right; color: #cdd4df; font-variant-numeric: tabular-nums; }
+    label.tog { display: flex; align-items: center; gap: 6px; margin: 5px 0; cursor: pointer; }
+    select, button { background: #1a2030; color: #e6e9ef; border: 1px solid #2a3140;
+        border-radius: 6px; padding: 4px 8px; font-size: 12px; }
+    .winbtns { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .winbtns button { cursor: pointer; }
+    #status { position: fixed; left: 12px; bottom: 12px; color: #8b95a7; font-size: 11px; }
+    #hint { position: fixed; left: 12px; top: 12px; color: #6f7a8c; font-size: 11px; }
+</style>
+</head>
+<body>
+    <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+    <div id="hint">Drag: orbit &nbsp;|&nbsp; Scroll: zoom</div>
+    <div id="status">Downloading…</div>
+
+    <div id="panel">
+        <h1>CT / MRI Volume Viewer</h1>
+        <div class="sub">WebGPU · synthetic CT (HU)</div>
+
+        <div class="sec">Transfer function</div>
+        <div class="row">
+            <span class="lbl">Preset</span>
+            <select id="preset" aria-label="Transfer function preset">
+                <option value="0">Custom</option>
+                <option value="1">Cloud</option>
+                <option value="2">Fire</option>
+                <option value="3" selected>CT - Bone</option>
+                <option value="4">CT - Soft Tissue</option>
+            </select>
+        </div>
+
+        <div class="sec">Window / Level (HU)</div>
+        <div class="winbtns">
+            <button type="button" id="wFull">Full</button>
+            <button type="button" id="wBone">Bone</button>
+            <button type="button" id="wSoft">Soft</button>
+            <button type="button" id="wLung">Lung</button>
+        </div>
+        <div class="row"><span class="lbl">Center</span>
+            <input type="range" id="winC" aria-label="Window center" min="-1000" max="1000" step="1" value="300">
+            <span class="val" id="winCv">300</span></div>
+        <div class="row"><span class="lbl">Width</span>
+            <input type="range" id="winW" aria-label="Window width" min="1" max="2000" step="1" value="1500">
+            <span class="val" id="winWv">1500</span></div>
+
+        <div class="sec">Appearance</div>
+        <div class="row"><span class="lbl">Density</span>
+            <input type="range" id="dens" aria-label="Density scale" min="0" max="5" step="0.05" value="1.5">
+            <span class="val" id="densv">1.50</span></div>
+        <div class="row"><span class="lbl">Extinction</span>
+            <input type="range" id="ext" aria-label="Extinction" min="0.1" max="30" step="0.1" value="10">
+            <span class="val" id="extv">10.0</span></div>
+        <div class="row"><span class="lbl">Threshold</span>
+            <input type="range" id="thr" aria-label="Density threshold" min="0" max="0.5" step="0.005" value="0.05">
+            <span class="val" id="thrv">0.050</span></div>
+
+        <div class="sec">Lighting</div>
+        <label class="tog"><input type="checkbox" id="shade" checked> Gradient shading</label>
+        <label class="tog"><input type="checkbox" id="shadow" checked> Soft shadows</label>
+        <div class="row"><span class="lbl">Shadow</span>
+            <input type="range" id="shadowS" aria-label="Shadow strength" min="0" max="4" step="0.05" value="1">
+            <span class="val" id="shadowSv">1.00</span></div>
+
+        <div class="sec">Performance</div>
+        <label class="tog"><input type="checkbox" id="skip" checked> Empty-space skip</label>
+    </div>
+
+    <script>
+        var canvas     = document.getElementById('canvas');
+        var statusText = document.getElementById('status');
+
+        // ── Pending command queue, flushed on rAF, gated on _wasmBusy ──
+        var _pending = {};
+        function _queue(fn, val) { _pending[fn] = val; }
+        function _flushPending() {
+            if (!Module._wasmBusy) {
+                var cmds = _pending; _pending = {};
+                for (var fn in cmds) { try { Module[fn](cmds[fn]); } catch (e) {} }
+            }
+            requestAnimationFrame(_flushPending);
+        }
+        requestAnimationFrame(_flushPending);
+
+        function bindRange(id, valId, prec, fn) {
+            var el = document.getElementById(id), v = document.getElementById(valId);
+            el.addEventListener('input', function() {
+                var x = parseFloat(this.value);
+                v.textContent = x.toFixed(prec);
+                _queue(fn, x);
+            });
+        }
+        function setWin(c, w) {
+            var ec = document.getElementById('winC'), ew = document.getElementById('winW');
+            ec.value = c; ew.value = w;
+            document.getElementById('winCv').textContent = c;
+            document.getElementById('winWv').textContent = w;
+            _queue('setWinCenter', c); _queue('setWinWidth', w);
+        }
+
+        function wireControls() {
+            document.getElementById('preset').addEventListener('change', function() {
+                _queue('setPreset', parseInt(this.value, 10));
+            });
+            bindRange('winC', 'winCv', 0, 'setWinCenter');
+            bindRange('winW', 'winWv', 0, 'setWinWidth');
+            bindRange('dens', 'densv', 2, 'setDensity');
+            bindRange('ext',  'extv',  1, 'setExtinction');
+            bindRange('thr',  'thrv',  3, 'setThreshold');
+            bindRange('shadowS', 'shadowSv', 2, 'setShadowStrength');
+            document.getElementById('shade').addEventListener('change',  function() { _queue('setShading', this.checked); });
+            document.getElementById('shadow').addEventListener('change', function() { _queue('setShadow', this.checked); });
+            document.getElementById('skip').addEventListener('change',   function() { _queue('setSkip', this.checked); });
+
+            document.getElementById('wFull').addEventListener('click', function() {
+                // Use the cached data range (pushed from wasm at load) -- never call
+                // into wasm from a DOM handler, which may fire mid-frame (ASYNCIFY).
+                var lo = (Module._dataMin !== undefined) ? Module._dataMin : -1000;
+                var hi = (Module._dataMax !== undefined) ? Module._dataMax :  800;
+                setWin(Math.round((lo + hi) / 2), Math.max(1, Math.round(hi - lo)));
+            });
+            document.getElementById('wBone').addEventListener('click', function() { setWin(300, 1500); });
+            document.getElementById('wSoft').addEventListener('click', function() { setWin(40, 400); });
+            document.getElementById('wLung').addEventListener('click', function() { setWin(-600, 1500); });
+        }
+
+        // ── Emscripten Module ──
+        var Module = {
+            _wasmBusy: true,   // true until the first frame clears it (ASYNCIFY guard)
+            canvas: canvas,
+            preRun: [], postRun: [],
+            onRuntimeInitialized: function() { wireControls(); },
+            print:    function(t) { console.log('[stdout] ' + t); },
+            printErr: function(t) { console.error('[stderr] ' + t); },
+            setStatus: function(t) {
+                if (statusText) statusText.textContent = t || '';
+                if (!t) statusText.style.display = 'none';
+            },
+            monitorRunDependencies: function() {}
+        };
+        Module.setStatus('Downloading…');
+        window.onerror = function(msg) { Module.setStatus('Exception: ' + msg); };
+    </script>
+
+    {{{ SCRIPT }}}
+</body>
+</html>
