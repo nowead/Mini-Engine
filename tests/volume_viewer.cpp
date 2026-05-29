@@ -17,6 +17,7 @@
 #include "src/rendering/RendererBridge.hpp"
 #include "src/rendering/VolumeRenderer.hpp"
 #include "src/assets/VolumeFile.hpp"
+#include "src/assets/NiftiFile.hpp"
 #include "src/scene/Camera.hpp"
 #include "src/ui/ImGuiVulkanBackend.hpp"
 #include <rhi/vulkan/VulkanRHICommandEncoder.hpp>
@@ -26,6 +27,7 @@
 #include <glm/glm.hpp>
 #include <imgui.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -59,7 +61,9 @@ private:
 
     // CT spec from the command line.
     std::string m_volPath;
+    bool     m_isNifti = false;     // .nii path -> dims/spacing/intensity from header
     uint32_t m_vw = 0, m_vh = 0, m_vd = 0, m_vbpv = 1;
+    float    m_winLo = 0.0f, m_winHi = 1.0f;   // window-slider bounds (data units)
 
     // UI state (mirrors the engine's volume controls).
     bool  m_enabled   = true;
@@ -73,16 +77,26 @@ private:
     bool   m_drag = false;
     double m_lastX = 0, m_lastY = 0;
 
+    static bool endsWith(const std::string& s, const std::string& suffix) {
+        return s.size() >= suffix.size() &&
+               s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
+    }
+
     void parseArgs(int argc, char** argv) {
-        if (argc >= 5) {
+        if (argc >= 2 && endsWith(argv[1], ".nii")) {
+            // NIfTI carries dims/spacing/intensity in its header -- no extra args.
+            m_volPath = argv[1];
+            m_isNifti = true;
+        } else if (argc >= 5) {
             m_volPath = argv[1];
             m_vw = std::strtoul(argv[2], nullptr, 10);
             m_vh = std::strtoul(argv[3], nullptr, 10);
             m_vd = std::strtoul(argv[4], nullptr, 10);
             if (argc >= 6) m_vbpv = std::strtoul(argv[5], nullptr, 10);
         } else {
-            std::cout << "[VolumeViewer] no volume given -> procedural. "
-                         "Usage: volume_viewer <raw> <W> <H> <D> [bytesPerVoxel]\n";
+            std::cout << "[VolumeViewer] no volume given -> procedural. Usage:\n"
+                         "  volume_viewer <file.nii>\n"
+                         "  volume_viewer <raw> <W> <H> <D> [bytesPerVoxel]\n";
         }
     }
 
@@ -147,7 +161,32 @@ private:
         m_volume = std::make_unique<rendering::VolumeRenderer>(m_device, q);
         if (!m_volume->initialize(128)) { std::cerr << "volume init failed\n"; std::exit(1); }
 
-        if (!m_volPath.empty()) {
+        glm::vec3 halfExtent(1.0f);   // unit box default (procedural / raw)
+
+        if (m_isNifti) {
+            assets::NiftiVolume vol;
+            if (assets::loadNifti(m_volPath, vol)) {
+                m_volume->loadFromFloatData(vol.intensity, vol.w, vol.h, vol.d);
+                m_vw = vol.w; m_vh = vol.h; m_vd = vol.d;
+                // Aspect-correct box: the largest PHYSICAL extent spans [-1,1] so an
+                // anisotropic CT (e.g. thicker slices) is not distorted.
+                glm::vec3 ext(vol.w * vol.spacingX, vol.h * vol.spacingY, vol.d * vol.spacingZ);
+                const float m = std::max({ext.x, ext.y, ext.z});
+                halfExtent = (m > 0.0f) ? ext / m : glm::vec3(1.0f);
+                // Window slider bounds follow the data range (HU); start on a bone
+                // window since the default TF preset is CT - Bone. Centering on the
+                // bone value would put it mid-window (transparent in the LUT) -- the
+                // window's UPPER half must cover bone for the LUT to make it opaque.
+                m_winLo = m_volume->getDataMin();
+                m_winHi = m_volume->getDataMax();
+                m_winCenter = 300.0f;     // clinical bone window center (HU)
+                m_winWidth  = 1500.0f;    // clinical bone window width (HU)
+                // A small dense core needs more extinction than the big showcase cloud.
+                m_extinction = 10.0f;
+            } else {
+                std::cerr << "[VolumeViewer] failed to load " << m_volPath << " -> procedural\n";
+            }
+        } else if (!m_volPath.empty()) {
             std::vector<uint8_t> data;
             if (assets::loadRawVolume(m_volPath, m_vw, m_vh, m_vd, m_vbpv, data))
                 m_volume->loadFromData(data, m_vw, m_vh, m_vd);
@@ -155,8 +194,7 @@ private:
                 std::cerr << "[VolumeViewer] failed to load " << m_volPath << " -> procedural\n";
         }
 
-        // Center a unit box at the origin; the camera orbits it.
-        m_volume->setAABB(glm::vec3(-1.0f), glm::vec3(1.0f));
+        m_volume->setAABB(-halfExtent, halfExtent);   // centered at origin; camera orbits it
         m_volume->setUseDepthOcclusion(false);   // no scene geometry to occlude
 
         // Dummy depth at the RENDER resolution. The bind group requires a depth
@@ -219,12 +257,26 @@ private:
         ImGui::Combo("TF preset", &m_preset, kPresets, IM_ARRAYSIZE(kPresets));
 
         ImGui::SeparatorText("Window / Level");
-        ImGui::SliderFloat("Win center", &m_winCenter, 0.0f, 1.0f, "%.3f");
-        ImGui::SliderFloat("Win width",  &m_winWidth,  0.01f, 1.0f, "%.3f");
+        if (m_isNifti) {
+            // Clinical HU window presets (data is in Hounsfield Units). Each maps a
+            // tissue band into the displayed [0,1] range so the TF can color it.
+            // 2x2 grid so all four fit the panel width (a single SameLine row
+            // overflows 320px and clips the later buttons).
+            const ImVec2 bsz(70.0f, 0.0f);
+            if (ImGui::Button("Full", bsz)) { m_winCenter = 0.5f * (m_winLo + m_winHi);
+                                              m_winWidth  = std::max(m_winHi - m_winLo, 1.0f); }
+            ImGui::SameLine(); if (ImGui::Button("Bone", bsz)) { m_winCenter =  300.0f; m_winWidth = 1500.0f; }
+            if (ImGui::Button("Soft", bsz)) { m_winCenter = 40.0f; m_winWidth = 400.0f; }
+            ImGui::SameLine(); if (ImGui::Button("Lung", bsz)) { m_winCenter = -600.0f; m_winWidth = 1500.0f; }
+        }
+        const float wRange = std::max(m_winHi - m_winLo, 1.0f);
+        const char* wFmt = (wRange > 10.0f) ? "%.0f" : "%.3f";   // HU integers vs [0,1]
+        ImGui::SliderFloat("Win center", &m_winCenter, m_winLo, m_winHi, wFmt);
+        ImGui::SliderFloat("Win width",  &m_winWidth,  0.01f * wRange, wRange, wFmt);
 
         ImGui::SeparatorText("Transfer function");
         ImGui::SliderFloat("Density",    &m_density,    0.0f, 5.0f, "%.2f");
-        ImGui::SliderFloat("Extinction", &m_extinction, 0.1f, 8.0f, "%.2f");
+        ImGui::SliderFloat("Extinction", &m_extinction, 0.1f, 30.0f, "%.2f");
         ImGui::SliderFloat("Threshold",  &m_threshold,  0.0f, 0.5f, "%.3f");
 
         const bool customTF = (m_preset == 0);

@@ -67,6 +67,18 @@ public:
     bool loadFromData(const std::vector<uint8_t>& density,
                       uint32_t w, uint32_t h, uint32_t d);
 
+    // Float-intensity data source (e.g. CT/MRI in Hounsfield Units from NIfTI/DICOM).
+    // Stores raw intensity in R16Float so window/level works in the data's own units;
+    // records the data range and defaults the window to span it. Same runtime-safe
+    // texture/bind-group recreation as loadFromData.
+    bool loadFromFloatData(const std::vector<float>& intensity,
+                           uint32_t w, uint32_t h, uint32_t d);
+
+    // Intensity range of the loaded volume (data units, e.g. HU) -- lets the UI set
+    // window-slider bounds and clinical presets sensibly.
+    float getDataMin() const { return m_dataMin; }
+    float getDataMax() const { return m_dataMax; }
+
     // Phase 7-3: create the ray-march pipeline + per-frame UBO/bind groups.
     // `depthView` is the scene depth (sampled for occlusion); `nativeRenderPass`
     // is the Vulkan HDR (Load) render pass on Linux, null on dynamic-rendering
@@ -162,6 +174,8 @@ private:
     void generateProceduralVolume(std::vector<uint8_t>& out, uint32_t resolution) const;
 
     bool uploadVolume(const std::vector<uint8_t>& density, uint32_t w, uint32_t h, uint32_t d);
+    // Core upload shared by both data paths: pre-packed R16Float half data -> 3D texture.
+    bool uploadHalf(const std::vector<uint16_t>& halfData, uint32_t w, uint32_t h, uint32_t d);
 
     rhi::RHIDevice* m_device        = nullptr;
     rhi::RHIQueue*  m_graphicsQueue = nullptr;
@@ -197,8 +211,10 @@ private:
     float m_maxSteps     = 128.0f;
     float m_tfThreshold  = 0.02f;
     float m_tfColorMix   = 2.0f;
-    float m_windowCenter = 0.5f;   // intensity-window center (normalized [0,1] domain)
-    float m_windowWidth  = 1.0f;   // intensity-window width; 1.0 = full range (no-op)
+    float m_windowCenter = 0.5f;   // intensity-window center (data units; [0,1] for synthetic)
+    float m_windowWidth  = 1.0f;   // intensity-window width; full range = no-op
+    float m_dataMin      = 0.0f;   // loaded-volume intensity range (data units, e.g. HU)
+    float m_dataMax      = 1.0f;
     glm::vec3 m_lowColor { 0.35f, 0.45f, 0.75f };  // low-density (bluish) default
     glm::vec3 m_highColor{ 1.00f, 0.95f, 0.88f };  // high-density (warm white) default
 

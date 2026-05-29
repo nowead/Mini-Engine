@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace rendering {
 
@@ -100,15 +101,19 @@ bool VolumeRenderer::uploadVolume(const std::vector<uint8_t>& density,
         LOG_ERROR("VolumeRenderer") << "density buffer too small for " << w << "x" << h << "x" << d;
         return false;
     }
-    m_volW = w; m_volH = h; m_volD = d;
-
-    // Store density as R16Float (2 bytes/voxel). The source is R8 [0,255]; convert
-    // to normalized [0,1] half-floats. R16Float is the dual-backend choice -- core
-    // and filterable on both Vulkan and WebGPU (16-bit unorm is NOT WebGPU core).
-    // This is the format foundation for real 16-bit CT/MRI intensity (M1).
+    // R8 [0,255] source -> normalized [0,1] half-floats (procedural / synthetic path).
     std::vector<uint16_t> halfData(static_cast<size_t>(w) * h * d);
     for (size_t i = 0; i < halfData.size(); ++i)
         halfData[i] = glm::packHalf1x16(density[i] / 255.0f);
+    return uploadHalf(halfData, w, h, d);
+}
+
+// Core upload: pre-packed R16Float half data -> 3D texture + view. R16Float is the
+// dual-backend choice -- core and filterable on both Vulkan and WebGPU (16-bit
+// unorm is NOT WebGPU core). This is the format foundation for real 16-bit CT/MRI.
+bool VolumeRenderer::uploadHalf(const std::vector<uint16_t>& halfData,
+                                uint32_t w, uint32_t h, uint32_t d) {
+    m_volW = w; m_volH = h; m_volD = d;
     const auto* halfBytes = reinterpret_cast<const uint8_t*>(halfData.data());
 
     // WebGPU requires bytesPerRow to be a 256-byte multiple, so pad each row (and
@@ -294,6 +299,40 @@ bool VolumeRenderer::loadFromData(const std::vector<uint8_t>& density,
         if (!createBindGroups(m_depthView)) return false; // rebind the new view
     }
     LOG_INFO("VolumeRenderer") << "loaded volume data " << w << "x" << h << "x" << d;
+    return true;
+}
+
+// Float-intensity data source (e.g. NIfTI/DICOM in Hounsfield Units). Stores the
+// raw intensity directly in R16Float so window/level operates in the data's own
+// units; tracks the data range and defaults the window to span it (no clipping).
+bool VolumeRenderer::loadFromFloatData(const std::vector<float>& intensity,
+                                       uint32_t w, uint32_t h, uint32_t d) {
+    if (!m_device || !m_graphicsQueue || w == 0 || h == 0 || d == 0) return false;
+    if (intensity.size() < static_cast<size_t>(w) * h * d) {
+        LOG_ERROR("VolumeRenderer") << "intensity buffer too small for " << w << "x" << h << "x" << d;
+        return false;
+    }
+    std::vector<uint16_t> halfData(static_cast<size_t>(w) * h * d);
+    float mn = std::numeric_limits<float>::max();
+    float mx = std::numeric_limits<float>::lowest();
+    for (size_t i = 0; i < halfData.size(); ++i) {
+        const float v = intensity[i];
+        halfData[i] = glm::packHalf1x16(v);
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
+    }
+    m_dataMin = mn;
+    m_dataMax = mx;
+    // Default window spans the full data range (shows everything) until narrowed.
+    m_windowCenter = 0.5f * (mn + mx);
+    m_windowWidth  = (mx > mn) ? (mx - mn) : 1.0f;
+
+    if (!uploadHalf(halfData, w, h, d)) return false;
+    if (m_bindGroupLayout && m_depthView) {
+        if (!createBindGroups(m_depthView)) return false;  // rebind the new view
+    }
+    LOG_INFO("VolumeRenderer") << "loaded float volume " << w << "x" << h << "x" << d
+                               << " range [" << mn << "," << mx << "]";
     return true;
 }
 

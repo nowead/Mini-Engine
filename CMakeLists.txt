@@ -1135,6 +1135,8 @@ if(BUILD_TESTS)
         src/rendering/VolumeRenderer.hpp
         src/assets/VolumeFile.cpp
         src/assets/VolumeFile.hpp
+        src/assets/NiftiFile.cpp
+        src/assets/NiftiFile.hpp
         src/scene/Camera.cpp
         src/scene/Camera.hpp
         src/ui/ImGuiBackend.hpp
