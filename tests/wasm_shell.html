@@ -467,6 +467,7 @@
             <div class="section-label">Volume</div>
             <label class="toggle"><input type="checkbox" id="volumeEnabled" checked> Volume cloud</label>
             <label class="toggle"><input type="checkbox" id="volShading" checked> Gradient shading</label>
+            <label class="toggle"><input type="checkbox" id="volShadow"> Soft shadows</label>
             <div class="slider-row">
                 <span>TF preset</span>
                 <select id="volPreset" aria-label="Volume Transfer Function Preset">
@@ -655,6 +656,9 @@
             });
             document.getElementById('volShading').addEventListener('change', function() {
                 _queue('setVolumeShading', this.checked);
+            });
+            document.getElementById('volShadow').addEventListener('change', function() {
+                _queue('setVolumeShadow', this.checked);
             });
             document.getElementById('volPreset').addEventListener('change', function() {
                 var p = parseInt(this.value, 10);

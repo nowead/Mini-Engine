@@ -72,6 +72,8 @@ private:
     float m_winCenter = 0.5f, m_winWidth = 1.0f;   // intensity window (normalized [0,1])
     bool  m_shading   = true;                      // gradient-based Lambert shading
     float m_shAmbient = 0.4f, m_shDiffuse = 0.8f;
+    bool  m_shadow    = true;                       // volumetric self-shadowing
+    float m_shadowStrength = 1.0f;
     float m_low[3]    = { 0.35f, 0.45f, 0.75f };
     float m_high[3]   = { 1.00f, 0.95f, 0.88f };
 
@@ -198,6 +200,8 @@ private:
 
         m_volume->setAABB(-halfExtent, halfExtent);   // centered at origin; camera orbits it
         m_volume->setUseDepthOcclusion(false);   // no scene geometry to occlude
+        // Shadow light-ray step scaled to the box (~24 steps span its larger half).
+        m_volume->setShadowParams(0.04f, 24.0f, m_shadowStrength);
 
         // Dummy depth at the RENDER resolution. The bind group requires a depth
         // binding, and although occlusion is off (never texelFetch'd), the shader
@@ -286,6 +290,10 @@ private:
         ImGui::BeginDisabled(!m_shading);
         ImGui::SliderFloat("Ambient", &m_shAmbient, 0.0f, 1.0f, "%.2f");
         ImGui::SliderFloat("Diffuse", &m_shDiffuse, 0.0f, 1.5f, "%.2f");
+        ImGui::Checkbox("Soft shadows", &m_shadow);
+        ImGui::BeginDisabled(!m_shadow);
+        ImGui::SliderFloat("Shadow",  &m_shadowStrength, 0.0f, 4.0f, "%.2f");
+        ImGui::EndDisabled();
         ImGui::EndDisabled();
 
         const bool customTF = (m_preset == 0);
@@ -313,6 +321,8 @@ private:
         m_volume->setShadingEnabled(m_shading);
         m_volume->setShadeAmbient(m_shAmbient);
         m_volume->setShadeDiffuse(m_shDiffuse);
+        m_volume->setShadowEnabled(m_shadow);
+        m_volume->setShadowStrength(m_shadowStrength);
         m_volume->setColors(glm::vec3(m_low[0], m_low[1], m_low[2]),
                             glm::vec3(m_high[0], m_high[1], m_high[2]));
     }

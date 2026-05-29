@@ -55,6 +55,7 @@ public:
         glm::vec4 window;      // x=windowCenter, y=windowWidth (intensity -> [0,1]); zw spare
         glm::vec4 light;       // xyz = light dir (world), w = shadingEnable (0/1)
         glm::vec4 shade;       // x=ambient, y=diffuse, z=gradEps (texture-space step), w spare
+        glm::vec4 shadow;      // x=enable(0/1), y=stepSize(world), z=maxSteps, w=strength
     };
 
     // Create the 3D texture + sampler and upload a procedural density volume.
@@ -141,6 +142,16 @@ public:
     void setLightDir(const glm::vec3& d) { m_lightDir = d; }
     void setShadeAmbient(float a) { m_ambient = a; }
     void setShadeDiffuse(float d) { m_diffuse = d; }
+
+    // Volumetric soft shadows (M2-2): a secondary ray per sample accumulates optical
+    // depth toward the light, so dense regions self-shadow. step/maxSteps set the
+    // light-ray reach (scale with the volume box); strength scales the extinction.
+    void setShadowEnabled(bool e) { m_shadowEnabled = e; }
+    bool isShadowEnabled() const  { return m_shadowEnabled; }
+    void setShadowParams(float stepWorld, float maxSteps, float strength) {
+        m_shadowStep = stepWorld; m_shadowMaxSteps = maxSteps; m_shadowStrength = strength;
+    }
+    void setShadowStrength(float s) { m_shadowStrength = s; }
     // Granular setters (WebGPU/JS bindings, one per HTML control).
     void setDensityScale(float v) { m_densityScale = v; }
     void setExtinction(float v)   { m_extinction   = v; }
@@ -232,6 +243,13 @@ private:
     glm::vec3 m_lightDir{-0.4f, 0.7f, 0.6f};
     float     m_ambient = 0.4f;
     float     m_diffuse = 0.8f;
+
+    // Volumetric soft-shadow state (M2-2). Off by default so the showcase cloud is
+    // unchanged; the standalone medical viewer turns it on with box-scaled steps.
+    bool  m_shadowEnabled  = false;
+    float m_shadowStep     = 0.04f;   // world-space light-ray step
+    float m_shadowMaxSteps = 24.0f;
+    float m_shadowStrength = 1.0f;    // extinction multiplier along the light ray
     glm::vec3 m_lowColor { 0.35f, 0.45f, 0.75f };  // low-density (bluish) default
     glm::vec3 m_highColor{ 1.00f, 0.95f, 0.88f };  // high-density (warm white) default
 

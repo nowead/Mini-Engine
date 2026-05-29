@@ -184,6 +184,9 @@ Renderer::Renderer(GLFWwindow* window,
                     !volumeRenderer->createPipeline(rhiDepthImageView.get(), nativeHDRPass)) {
                     LOG_ERROR("Renderer") << "VolumeRenderer pipeline init failed";
                 }
+                // Shadow light-ray step scaled to the showcase cloud box (~80 units);
+                // shadows stay off by default (opt-in via the browser toggle).
+                volumeRenderer->setShadowParams(2.5f, 24.0f, 1.0f);
 #ifndef __EMSCRIPTEN__
                 // App-layer data source: if MINIENGINE_VOLUME is set, load a raw
                 // volume file and feed it to the engine's generic loadFromData.

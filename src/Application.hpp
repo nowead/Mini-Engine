@@ -62,6 +62,7 @@ public:
     void wasm_setVolumeWinCenter(float v) { if (renderer) renderer->setVolumeWinCenter(v); }
     void wasm_setVolumeWinWidth(float v)  { if (renderer) renderer->setVolumeWinWidth(v); }
     void wasm_setVolumeShading(bool on)   { if (renderer) renderer->setVolumeShading(on); }
+    void wasm_setVolumeShadow(bool on)    { if (renderer) renderer->setVolumeShadow(on); }
     void wasm_setVolumePreset(int p)      { if (renderer) renderer->setVolumePreset(p); }
     void wasm_setVolumeLowColor(int rgb)  { if (renderer) renderer->setVolumeLowColor(rgb); }
     void wasm_setVolumeHighColor(int rgb) { if (renderer) renderer->setVolumeHighColor(rgb); }

@@ -626,6 +626,8 @@ void VolumeRenderer::updateUBO(uint32_t frameIndex, const glm::mat4& invView,
     const glm::vec3 L = glm::length(m_lightDir) > 1e-6f ? glm::normalize(m_lightDir) : glm::vec3(0, 1, 0);
     ubo.light = glm::vec4(L, m_shadingEnabled ? 1.0f : 0.0f);
     ubo.shade = glm::vec4(m_ambient, m_diffuse, gradEps, 0.0f);
+    ubo.shadow = glm::vec4(m_shadowEnabled ? 1.0f : 0.0f, m_shadowStep,
+                           m_shadowMaxSteps, m_shadowStrength);
 
     m_uniformBuffers[fi]->write(&ubo, sizeof(VolumeUBO));
 }

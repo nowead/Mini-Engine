@@ -20,6 +20,7 @@ struct VolumeUBO {
     window:    vec4<f32>,   // x=windowCenter, y=windowWidth (intensity -> [0,1]); zw spare
     light:     vec4<f32>,   // xyz = light dir (world), w = shadingEnable (0/1)
     shade:     vec4<f32>,   // x=ambient, y=diffuse, z=gradEps (texture-space step), w spare
+    shadow:    vec4<f32>,   // x=enable (0/1), y=stepSize (world), z=maxSteps, w=strength
 };
 
 @group(0) @binding(0) var<uniform> ubo: VolumeUBO;
@@ -134,8 +135,30 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
                 let g = vec3<f32>(gx, gy, gz);
                 let glen = length(g);
                 // Normal points toward DECREASING density (outward from a dense body).
-                let ndl = select(0.0, max(dot(-g / glen, normalize(ubo.light.xyz)), 0.0), glen > 1e-6);
-                color = color * (ubo.shade.x + ubo.shade.y * ndl);
+                let L = normalize(ubo.light.xyz);
+                let ndl = select(0.0, max(dot(-g / glen, L), 0.0), glen > 1e-6);
+
+                // Volumetric soft shadow: secondary ray toward the light accumulates
+                // optical depth so dense regions self-shadow.
+                var shadowF = 1.0;
+                if (ubo.shadow.x > 0.5 && ndl > 0.0) {
+                    let sStep = ubo.shadow.y;
+                    let sMax  = i32(ubo.shadow.z);
+                    var tau   = 0.0;
+                    var st    = sStep;   // start one step out to avoid self-occlusion
+                    for (var s = 0; s < sMax; s = s + 1) {
+                        let suvw = (wp + L * st - ubo.aabbMin.xyz) / boxSize;
+                        if (any(suvw < vec3<f32>(0.0)) || any(suvw > vec3<f32>(1.0))) { break; }
+                        let sr = textureSampleLevel(volumeTex, volumeSampler, suvw, 0.0).r;
+                        let sn = clamp((sr - (ubo.window.x - ubo.window.y * 0.5)) / max(ubo.window.y, 1e-6), 0.0, 1.0);
+                        let sd = max(sn * ubo.params.z - ubo.tf.x, 0.0);
+                        tau = tau + sd * extinction * ubo.shadow.w * sStep;
+                        if (tau > 8.0) { break; }
+                        st = st + sStep;
+                    }
+                    shadowF = exp(-tau);
+                }
+                color = color * (ubo.shade.x + ubo.shade.y * ndl * shadowF);
             }
 
             let alpha = 1.0 - exp(-opacityWeight * extinction * stepSize);

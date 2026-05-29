@@ -24,6 +24,7 @@ layout(set = 0, binding = 0) uniform VolumeUBO {
     vec4 window;      // x = windowCenter, y = windowWidth (intensity -> [0,1]); zw spare
     vec4 light;       // xyz = light dir (world), w = shadingEnable (0/1)
     vec4 shade;       // x = ambient, y = diffuse, z = gradEps (texture-space step), w spare
+    vec4 shadow;      // x = enable (0/1), y = stepSize (world), z = maxSteps, w = strength
 } ubo;
 
 layout(set = 0, binding = 1) uniform texture2D depthTex;
@@ -124,8 +125,30 @@ void main() {
                     - texture(sampler3D(volumeTex, volumeSampler), uvw - vec3(0, 0, e)).r;
                 float glen = length(g);
                 // Normal points toward DECREASING density (outward from a dense body).
-                float ndl = (glen > 1e-6) ? max(dot(-g / glen, normalize(ubo.light.xyz)), 0.0) : 0.0;
-                color *= ubo.shade.x + ubo.shade.y * ndl;   // ambient + diffuse
+                vec3  L   = normalize(ubo.light.xyz);
+                float ndl = (glen > 1e-6) ? max(dot(-g / glen, L), 0.0) : 0.0;
+
+                // Volumetric soft shadow: march a secondary ray toward the light and
+                // accumulate optical depth, so dense regions self-shadow.
+                float shadowF = 1.0;
+                if (ubo.shadow.x > 0.5 && ndl > 0.0) {
+                    float sStep = ubo.shadow.y;
+                    int   sMax  = int(ubo.shadow.z);
+                    float tau   = 0.0;
+                    float st    = sStep;   // start one step out to avoid self-occlusion
+                    for (int s = 0; s < sMax; ++s) {
+                        vec3 suvw = (wp + L * st - ubo.aabbMin.xyz) / boxSize;
+                        if (any(lessThan(suvw, vec3(0.0))) || any(greaterThan(suvw, vec3(1.0)))) break;
+                        float sr = texture(sampler3D(volumeTex, volumeSampler), suvw).r;
+                        float sn = clamp((sr - (ubo.window.x - ubo.window.y * 0.5)) / max(ubo.window.y, 1e-6), 0.0, 1.0);
+                        float sd = max(sn * ubo.params.z - ubo.tf.x, 0.0);
+                        tau += sd * extinction * ubo.shadow.w * sStep;
+                        if (tau > 8.0) break;   // effectively fully shadowed
+                        st += sStep;
+                    }
+                    shadowF = exp(-tau);
+                }
+                color *= ubo.shade.x + ubo.shade.y * ndl * shadowF;   // ambient + shadowed diffuse
             }
 
             // Beer-Lambert opacity for this step.
