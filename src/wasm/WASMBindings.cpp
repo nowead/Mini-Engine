@@ -25,6 +25,7 @@ static void js_setVolumeWinCenter(float v)   { if (g_app) g_app->wasm_setVolumeW
 static void js_setVolumeWinWidth(float v)    { if (g_app) g_app->wasm_setVolumeWinWidth(v); }
 static void js_setVolumeShading(bool on)     { if (g_app) g_app->wasm_setVolumeShading(on); }
 static void js_setVolumeShadow(bool on)      { if (g_app) g_app->wasm_setVolumeShadow(on); }
+static void js_setVolumeOccupancy(bool on)   { if (g_app) g_app->wasm_setVolumeOccupancy(on); }
 static void js_setVolumePreset(int p)        { if (g_app) g_app->wasm_setVolumePreset(p); }
 static void js_setVolumeLowColor(int rgb)  { if (g_app) g_app->wasm_setVolumeLowColor(rgb); }
 static void js_setVolumeHighColor(int rgb) { if (g_app) g_app->wasm_setVolumeHighColor(rgb); }
@@ -60,6 +61,7 @@ EMSCRIPTEN_BINDINGS(mini_engine) {
     emscripten::function("setVolumeWinWidth",  &wasm::js_setVolumeWinWidth);
     emscripten::function("setVolumeShading",   &wasm::js_setVolumeShading);
     emscripten::function("setVolumeShadow",    &wasm::js_setVolumeShadow);
+    emscripten::function("setVolumeOccupancy", &wasm::js_setVolumeOccupancy);
     emscripten::function("setVolumePreset",    &wasm::js_setVolumePreset);
     emscripten::function("setVolumeLowColor",  &wasm::js_setVolumeLowColor);
     emscripten::function("setVolumeHighColor", &wasm::js_setVolumeHighColor);

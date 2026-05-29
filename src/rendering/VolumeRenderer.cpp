@@ -282,6 +282,12 @@ bool VolumeRenderer::initialize(uint32_t resolution) {
         if (!m_uniformBuffers[i]) { LOG_ERROR("VolumeRenderer") << "UBO create failed"; return false; }
     }
 
+    // Empty-space-skipping resources (compute pipeline once + first grid build).
+    // Graceful: a missing shader leaves skipping off without breaking rendering.
+    if (!createOccupancyResources())
+        LOG_WARN("VolumeRenderer") << "occupancy compute unavailable -> empty-space skipping off";
+    buildOccupancy();
+
     m_initialized = true;
     LOG_INFO("VolumeRenderer") << "initialized: " << resolution << "^3 R16Float density volume";
     return true;
@@ -296,6 +302,7 @@ bool VolumeRenderer::loadFromData(const std::vector<uint8_t>& density,
                                   uint32_t w, uint32_t h, uint32_t d) {
     if (!m_device || !m_graphicsQueue || w == 0 || h == 0 || d == 0) return false;
     if (!uploadVolume(density, w, h, d)) return false;   // recreates m_volumeTexture + m_volumeView
+    buildOccupancy();                                    // rebuild skip grid for the new volume
     if (m_bindGroupLayout && m_depthView) {
         if (!createBindGroups(m_depthView)) return false; // rebind the new view
     }
@@ -329,11 +336,136 @@ bool VolumeRenderer::loadFromFloatData(const std::vector<float>& intensity,
     m_windowWidth  = (mx > mn) ? (mx - mn) : 1.0f;
 
     if (!uploadHalf(halfData, w, h, d)) return false;
+    buildOccupancy();                                      // rebuild skip grid for the new volume
     if (m_bindGroupLayout && m_depthView) {
         if (!createBindGroups(m_depthView)) return false;  // rebind the new view
     }
     LOG_INFO("VolumeRenderer") << "loaded float volume " << w << "x" << h << "x" << d
                                << " range [" << mn << "," << mx << "]";
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// M3: empty-space skipping -- compute-built min/max occupancy grid
+// ---------------------------------------------------------------------------
+
+bool VolumeRenderer::createOccupancyResources() {
+#ifdef __EMSCRIPTEN__
+    auto raw = FileUtils::readFile("shaders/volume_occupancy.comp.wgsl");
+    if (raw.empty()) { LOG_ERROR("VolumeRenderer") << "missing volume_occupancy.comp.wgsl"; return false; }
+    std::vector<uint8_t> code(raw.begin(), raw.end());
+    rhi::ShaderSource src(rhi::ShaderLanguage::WGSL, code, rhi::ShaderStage::Compute, "main");
+#else
+    auto raw = FileUtils::readFile("shaders/volume_occupancy.comp.spv");
+    if (raw.empty()) { LOG_ERROR("VolumeRenderer") << "missing volume_occupancy.comp.spv"; return false; }
+    std::vector<uint8_t> code(raw.begin(), raw.end());
+    rhi::ShaderSource src(rhi::ShaderLanguage::SPIRV, code, rhi::ShaderStage::Compute, "main");
+#endif
+    m_occShader = m_device->createShader(rhi::ShaderDesc(src, "VolumeOccupancy"));
+    if (!m_occShader) return false;
+
+    using S = rhi::ShaderStage;
+    using T = rhi::BindingType;
+    using D = rhi::TextureViewDimension;
+    rhi::BindGroupLayoutEntry volEntry(1, S::Compute, T::SampledTexture);
+    volEntry.textureViewDimension = D::View3D;
+
+    rhi::BindGroupLayoutDesc ld;
+#ifdef __EMSCRIPTEN__
+    ld.entries = {
+        rhi::BindGroupLayoutEntry(0, S::Compute, T::UniformBuffer),
+        volEntry,
+        rhi::BindGroupLayoutEntry(2, S::Compute, T::StorageBuffer),   // occupancy out (read_write)
+    };
+#else
+    ld.entries = {
+        rhi::BindGroupLayoutEntry(0, S::Compute, T::UniformBuffer),
+        volEntry,
+        rhi::BindGroupLayoutEntry(2, S::Compute, T::Sampler),         // texelFetch needs a combined sampler
+        rhi::BindGroupLayoutEntry(3, S::Compute, T::StorageBuffer),   // occupancy out (read_write)
+    };
+#endif
+    ld.label = "VolumeOccLayout";
+    m_occLayout = m_device->createBindGroupLayout(ld);
+    if (!m_occLayout) return false;
+
+    rhi::PipelineLayoutDesc pl;
+    pl.bindGroupLayouts.push_back(m_occLayout.get());
+    pl.label = "VolumeOccPipelineLayout";
+    m_occPipelineLayout = m_device->createPipelineLayout(pl);
+    if (!m_occPipelineLayout) return false;
+
+    rhi::ComputePipelineDesc cp(m_occShader.get(), m_occPipelineLayout.get());
+    cp.label = "VolumeOccPipeline";
+    m_occPipeline = m_device->createComputePipeline(cp);
+    return m_occPipeline != nullptr;
+}
+
+bool VolumeRenderer::buildOccupancy() {
+    m_occReady = false;
+    if (m_volW == 0) return true;
+
+    m_gridW = (m_volW + kCellSize - 1) / kCellSize;
+    m_gridH = (m_volH + kCellSize - 1) / kCellSize;
+    m_gridD = (m_volD + kCellSize - 1) / kCellSize;
+    const uint64_t cellCount = static_cast<uint64_t>(m_gridW) * m_gridH * m_gridD;
+    const uint64_t bufBytes  = cellCount * 2 * sizeof(float);
+
+    // (Re)create the grid buffer (always, so the march bind group is valid even if
+    // the compute resources are missing -- in that case occ stays disabled).
+    rhi::BufferDesc bd{};
+    bd.size  = bufBytes;
+    bd.usage = rhi::BufferUsage::Storage;
+    bd.label = "VolumeOccGrid";
+    m_occBuffer = m_device->createBuffer(bd);
+    if (!m_occBuffer) { LOG_ERROR("VolumeRenderer") << "occupancy buffer create failed"; return false; }
+
+    if (!m_occPipeline) return true;   // resources unavailable -> buffer exists, skipping off
+
+    if (!m_occUBO) {
+        rhi::BufferDesc ud{};
+        ud.size  = sizeof(uint32_t) * 8;
+        ud.usage = rhi::BufferUsage::Uniform | rhi::BufferUsage::MapWrite;
+        ud.label = "VolumeOccUBO";
+        m_occUBO = m_device->createBuffer(ud);
+        if (!m_occUBO) return false;
+    }
+    const uint32_t u[8] = { m_volW, m_volH, m_volD, kCellSize, m_gridW, m_gridH, m_gridD, 0 };
+    m_occUBO->write(u, sizeof(u));
+
+    rhi::BindGroupDesc bg;
+    bg.layout = m_occLayout.get();
+#ifdef __EMSCRIPTEN__
+    bg.entries = {
+        rhi::BindGroupEntry::Buffer(0, m_occUBO.get(), 0, sizeof(uint32_t) * 8),
+        rhi::BindGroupEntry::TextureView(1, m_volumeView.get()),
+        rhi::BindGroupEntry::Buffer(2, m_occBuffer.get(), 0, bufBytes),
+    };
+#else
+    bg.entries = {
+        rhi::BindGroupEntry::Buffer(0, m_occUBO.get(), 0, sizeof(uint32_t) * 8),
+        rhi::BindGroupEntry::TextureView(1, m_volumeView.get()),
+        rhi::BindGroupEntry::Sampler(2, m_sampler.get()),
+        rhi::BindGroupEntry::Buffer(3, m_occBuffer.get(), 0, bufBytes),
+    };
+#endif
+    bg.label = "VolumeOccBindGroup";
+    m_occBindGroup = m_device->createBindGroup(bg);
+    if (!m_occBindGroup) return false;
+
+    auto enc = m_device->createCommandEncoder();
+    auto pass = enc->beginComputePass("VolumeOccupancy");
+    pass->setPipeline(m_occPipeline.get());
+    pass->setBindGroup(0, m_occBindGroup.get());
+    pass->dispatch((m_gridW + 3) / 4, (m_gridH + 3) / 4, (m_gridD + 3) / 4);
+    pass->end();
+    auto cmd = enc->finish();
+    m_graphicsQueue->submit(cmd.get());
+    m_graphicsQueue->waitIdle();   // one-shot build; safe to stall
+
+    m_occReady = true;
+    LOG_INFO("VolumeRenderer") << "occupancy grid " << m_gridW << "x" << m_gridH << "x" << m_gridD
+                               << " (cell " << kCellSize << ")";
     return true;
 }
 
@@ -384,6 +516,7 @@ bool VolumeRenderer::createPipeline(rhi::RHITextureView* depthView, void* native
         entry(2, S::Fragment, T::SampledTexture, D::View3D),  // volume density
         entry(3, S::Fragment, T::Sampler),                    // volume + LUT sampler (linear)
         entry(4, S::Fragment, T::SampledTexture, D::View2D),  // transfer-function LUT (256x1)
+        rhi::BindGroupLayoutEntry(5, S::Fragment, T::ReadOnlyStorageBuffer),  // occupancy grid
     };
 #else
     // Vulkan: GLSL texelFetch(sampler2D(depth, sampler)) needs a depth sampler.
@@ -394,6 +527,7 @@ bool VolumeRenderer::createPipeline(rhi::RHITextureView* depthView, void* native
         entry(3, S::Fragment, T::SampledTexture, D::View3D),  // volume density
         entry(4, S::Fragment, T::Sampler),                    // volume + LUT sampler (linear)
         entry(5, S::Fragment, T::SampledTexture, D::View2D),  // transfer-function LUT (256x1)
+        rhi::BindGroupLayoutEntry(6, S::Fragment, T::ReadOnlyStorageBuffer),  // occupancy grid
     };
 #endif
     layoutDesc.label = "VolumeBGLayout";
@@ -439,11 +573,12 @@ bool VolumeRenderer::createPipeline(rhi::RHITextureView* depthView, void* native
 }
 
 bool VolumeRenderer::createBindGroups(rhi::RHITextureView* depthView) {
-    if (!m_bindGroupLayout || !depthView || !m_volumeView) return false;
+    if (!m_bindGroupLayout || !depthView || !m_volumeView || !m_occBuffer) return false;
     m_depthView = depthView;   // remembered so loadFromData() can rebind after a reload
     for (uint32_t i = 0; i < kFramesInFlight; ++i) {
         rhi::BindGroupDesc desc;
         desc.layout = m_bindGroupLayout.get();
+        const uint64_t occBytes = static_cast<uint64_t>(m_gridW) * m_gridH * m_gridD * 2 * sizeof(float);
 #ifdef __EMSCRIPTEN__
         desc.entries = {
             rhi::BindGroupEntry::Buffer(0, m_uniformBuffers[i].get(), 0, sizeof(VolumeUBO)),
@@ -451,6 +586,7 @@ bool VolumeRenderer::createBindGroups(rhi::RHITextureView* depthView) {
             rhi::BindGroupEntry::TextureView(2, m_volumeView.get()),
             rhi::BindGroupEntry::Sampler(3, m_sampler.get()),
             rhi::BindGroupEntry::TextureView(4, m_lutView.get()),
+            rhi::BindGroupEntry::Buffer(5, m_occBuffer.get(), 0, occBytes),
         };
 #else
         desc.entries = {
@@ -460,6 +596,7 @@ bool VolumeRenderer::createBindGroups(rhi::RHITextureView* depthView) {
             rhi::BindGroupEntry::TextureView(3, m_volumeView.get()),
             rhi::BindGroupEntry::Sampler(4, m_sampler.get()),
             rhi::BindGroupEntry::TextureView(5, m_lutView.get()),
+            rhi::BindGroupEntry::Buffer(6, m_occBuffer.get(), 0, occBytes),
         };
 #endif
         desc.label = "VolumeBindGroup";
@@ -628,6 +765,9 @@ void VolumeRenderer::updateUBO(uint32_t frameIndex, const glm::mat4& invView,
     ubo.shade = glm::vec4(m_ambient, m_diffuse, gradEps, 0.0f);
     ubo.shadow = glm::vec4(m_shadowEnabled ? 1.0f : 0.0f, m_shadowStep,
                            m_shadowMaxSteps, m_shadowStrength);
+    const float occEnable = (m_occEnabled && m_occReady) ? 1.0f : 0.0f;
+    ubo.occ = glm::vec4(static_cast<float>(m_gridW), static_cast<float>(m_gridH),
+                        static_cast<float>(m_gridD), occEnable);
 
     m_uniformBuffers[fi]->write(&ubo, sizeof(VolumeUBO));
 }

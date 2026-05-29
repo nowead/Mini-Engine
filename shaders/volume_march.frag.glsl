@@ -25,6 +25,7 @@ layout(set = 0, binding = 0) uniform VolumeUBO {
     vec4 light;       // xyz = light dir (world), w = shadingEnable (0/1)
     vec4 shade;       // x = ambient, y = diffuse, z = gradEps (texture-space step), w spare
     vec4 shadow;      // x = enable (0/1), y = stepSize (world), z = maxSteps, w = strength
+    vec4 occ;         // xyz = occupancy grid dims (cells), w = skipEnable (0/1)
 } ubo;
 
 layout(set = 0, binding = 1) uniform texture2D depthTex;
@@ -32,6 +33,9 @@ layout(set = 0, binding = 2) uniform sampler   depthSampler;
 layout(set = 0, binding = 3) uniform texture3D volumeTex;
 layout(set = 0, binding = 4) uniform sampler   volumeSampler;
 layout(set = 0, binding = 5) uniform texture2D tfLUT;   // 256x1 density -> (rgb, opacity)
+layout(std430, set = 0, binding = 6) readonly buffer OccGrid {
+    vec2 occCells[];   // per macrocell: (min, max) intensity, for empty-space skipping
+};
 
 // Ray-AABB slab test. Returns (tNear, tFar); tNear > tFar means miss.
 vec2 intersectAABB(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax) {
@@ -92,6 +96,27 @@ void main() {
 
         vec3 wp  = ro + rd * t;
         vec3 uvw = (wp - ubo.aabbMin.xyz) / boxSize;   // [0,1]^3
+
+        // Empty-space skipping: if this macrocell's max windowed density is zero
+        // (air), jump straight to the cell exit instead of stepping through it.
+        if (ubo.occ.w > 0.5) {
+            vec3  gd    = ubo.occ.xyz;
+            vec3  cellf = floor(clamp(uvw, vec3(0.0), vec3(0.999999)) * gd);
+            int   ci    = (int(cellf.z) * int(gd.y) + int(cellf.y)) * int(gd.x) + int(cellf.x);
+            float cmax  = occCells[ci].y;
+            float wn    = clamp((cmax - (ubo.window.x - ubo.window.y * 0.5)) / max(ubo.window.y, 1e-6), 0.0, 1.0);
+            if (max(wn * ubo.params.z - ubo.tf.x, 0.0) <= 0.0) {
+                vec3 cellMin = ubo.aabbMin.xyz + (cellf / gd) * boxSize;
+                vec3 cellMax = ubo.aabbMin.xyz + ((cellf + 1.0) / gd) * boxSize;
+                vec3 te0 = (cellMin - ro) / rd;
+                vec3 te1 = (cellMax - ro) / rd;
+                vec3 tem = max(te0, te1);
+                float tExit = min(min(tem.x, tem.y), tem.z);
+                t = tExit + stepSize * 0.5;   // step just past the empty cell
+                continue;
+            }
+        }
+
         float raw = texture(sampler3D(volumeTex, volumeSampler), uvw).r;
         // Window/level: map [center - width/2, center + width/2] -> [0,1] (contrast).
         float n = clamp((raw - (ubo.window.x - ubo.window.y * 0.5)) / max(ubo.window.y, 1e-6), 0.0, 1.0);

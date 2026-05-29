@@ -74,6 +74,7 @@ private:
     float m_shAmbient = 0.4f, m_shDiffuse = 0.8f;
     bool  m_shadow    = true;                       // volumetric self-shadowing
     float m_shadowStrength = 1.0f;
+    bool  m_occSkip   = true;                        // empty-space skipping (M3)
     float m_low[3]    = { 0.35f, 0.45f, 0.75f };
     float m_high[3]   = { 1.00f, 0.95f, 0.88f };
 
@@ -152,7 +153,7 @@ private:
     void initRHI() {
         m_bridge = std::make_unique<rendering::RendererBridge>(m_window);
         m_device = m_bridge->getDevice();
-        m_bridge->createSwapchain(1280, 720, true);
+        m_bridge->createSwapchain(1280, 720, /*vsync*/false);  // uncapped, so the skip FPS delta shows
         m_swapchain = m_bridge->getSwapchain();
 
         m_camera.setTarget(glm::vec3(0.0f));
@@ -296,6 +297,12 @@ private:
         ImGui::EndDisabled();
         ImGui::EndDisabled();
 
+        ImGui::SeparatorText("Performance");
+        ImGui::Checkbox("Empty-space skip", &m_occSkip);
+        const ImGuiIO& io = ImGui::GetIO();
+        ImGui::Text("%.1f FPS  (%.2f ms/frame)", io.Framerate,
+                    io.Framerate > 0.0f ? 1000.0f / io.Framerate : 0.0f);
+
         const bool customTF = (m_preset == 0);
         ImGui::BeginDisabled(!customTF);
         ImGui::SliderFloat("Color mix", &m_colorMix, 0.0f, 5.0f, "%.2f");
@@ -323,6 +330,7 @@ private:
         m_volume->setShadeDiffuse(m_shDiffuse);
         m_volume->setShadowEnabled(m_shadow);
         m_volume->setShadowStrength(m_shadowStrength);
+        m_volume->setOccupancyEnabled(m_occSkip);
         m_volume->setColors(glm::vec3(m_low[0], m_low[1], m_low[2]),
                             glm::vec3(m_high[0], m_high[1], m_high[2]));
     }

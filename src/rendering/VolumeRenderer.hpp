@@ -56,6 +56,7 @@ public:
         glm::vec4 light;       // xyz = light dir (world), w = shadingEnable (0/1)
         glm::vec4 shade;       // x=ambient, y=diffuse, z=gradEps (texture-space step), w spare
         glm::vec4 shadow;      // x=enable(0/1), y=stepSize(world), z=maxSteps, w=strength
+        glm::vec4 occ;         // xyz = occupancy grid dims (cells), w = skipEnable (0/1)
     };
 
     // Create the 3D texture + sampler and upload a procedural density volume.
@@ -152,6 +153,12 @@ public:
         m_shadowStep = stepWorld; m_shadowMaxSteps = maxSteps; m_shadowStrength = strength;
     }
     void setShadowStrength(float s) { m_shadowStrength = s; }
+
+    // Empty-space skipping (M3): a compute pass builds a min/max occupancy grid; the
+    // march jumps over cells whose windowed density is zero (air). Toggle for the A/B
+    // performance comparison.
+    void setOccupancyEnabled(bool e) { m_occEnabled = e; }
+    bool isOccupancyEnabled() const  { return m_occEnabled; }
     // Granular setters (WebGPU/JS bindings, one per HTML control).
     void setDensityScale(float v) { m_densityScale = v; }
     void setExtinction(float v)   { m_extinction   = v; }
@@ -199,6 +206,11 @@ private:
     // Core upload shared by both data paths: pre-packed R16Float half data -> 3D texture.
     bool uploadHalf(const std::vector<uint16_t>& halfData, uint32_t w, uint32_t h, uint32_t d);
 
+    // M3 empty-space skipping. createOccupancyResources builds the compute pipeline
+    // once; buildOccupancy (re)creates the grid buffer and dispatches it per volume.
+    bool createOccupancyResources();
+    bool buildOccupancy();
+
     rhi::RHIDevice* m_device        = nullptr;
     rhi::RHIQueue*  m_graphicsQueue = nullptr;
     bool            m_initialized   = false;
@@ -213,6 +225,19 @@ private:
     uint32_t m_volW = 0, m_volH = 0, m_volD = 0;          // current volume dimensions
     std::unique_ptr<rhi::RHITexture>     m_lutTexture;     // 256x1 RGBA8, preset density->color/alpha
     std::unique_ptr<rhi::RHITextureView> m_lutView;
+
+    // M3 empty-space skipping: compute-built min/max occupancy grid (vec2 per cell).
+    static constexpr uint32_t kCellSize = 8;
+    std::unique_ptr<rhi::RHIShader>          m_occShader;
+    std::unique_ptr<rhi::RHIBindGroupLayout> m_occLayout;
+    std::unique_ptr<rhi::RHIPipelineLayout>  m_occPipelineLayout;
+    std::unique_ptr<rhi::RHIComputePipeline> m_occPipeline;
+    std::unique_ptr<rhi::RHIBuffer>          m_occBuffer;    // (min,max) per cell, storage
+    std::unique_ptr<rhi::RHIBuffer>          m_occUBO;       // compute dims uniform
+    std::unique_ptr<rhi::RHIBindGroup>       m_occBindGroup;
+    uint32_t m_gridW = 0, m_gridH = 0, m_gridD = 0;
+    bool     m_occEnabled = true;   // user toggle (A/B)
+    bool     m_occReady   = false;  // grid actually built (resources present + dispatched)
 
     // Phase 7-3: ray-march pipeline + per-frame UBO/bind groups.
     std::unique_ptr<rhi::RHIShader>          m_vertexShader;

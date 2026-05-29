@@ -21,6 +21,7 @@ struct VolumeUBO {
     light:     vec4<f32>,   // xyz = light dir (world), w = shadingEnable (0/1)
     shade:     vec4<f32>,   // x=ambient, y=diffuse, z=gradEps (texture-space step), w spare
     shadow:    vec4<f32>,   // x=enable (0/1), y=stepSize (world), z=maxSteps, w=strength
+    occ:       vec4<f32>,   // xyz = occupancy grid dims (cells), w = skipEnable (0/1)
 };
 
 @group(0) @binding(0) var<uniform> ubo: VolumeUBO;
@@ -28,6 +29,7 @@ struct VolumeUBO {
 @group(0) @binding(2) var volumeTex:     texture_3d<f32>;
 @group(0) @binding(3) var volumeSampler: sampler;
 @group(0) @binding(4) var tfLUT:         texture_2d<f32>;   // 256x1 density -> (rgb, opacity)
+@group(0) @binding(5) var<storage, read> occCells: array<vec2<f32>>;  // per cell (min,max) for skipping
 
 struct VSOut {
     @builtin(position) position: vec4<f32>,
@@ -102,6 +104,26 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
         }
         let wp  = ro + rd * t;
         let uvw = (wp - ubo.aabbMin.xyz) / boxSize;     // [0,1]^3
+
+        // Empty-space skipping: jump past macrocells whose max windowed density is 0.
+        if (ubo.occ.w > 0.5) {
+            let gd    = ubo.occ.xyz;
+            let cellf = floor(clamp(uvw, vec3<f32>(0.0), vec3<f32>(0.999999)) * gd);
+            let ci    = (i32(cellf.z) * i32(gd.y) + i32(cellf.y)) * i32(gd.x) + i32(cellf.x);
+            let cmax  = occCells[ci].y;
+            let wn    = clamp((cmax - (ubo.window.x - ubo.window.y * 0.5)) / max(ubo.window.y, 1e-6), 0.0, 1.0);
+            if (max(wn * ubo.params.z - ubo.tf.x, 0.0) <= 0.0) {
+                let cellMin = ubo.aabbMin.xyz + (cellf / gd) * boxSize;
+                let cellMax = ubo.aabbMin.xyz + ((cellf + 1.0) / gd) * boxSize;
+                let te0 = (cellMin - ro) / rd;
+                let te1 = (cellMax - ro) / rd;
+                let tem = max(te0, te1);
+                let tExit = min(min(tem.x, tem.y), tem.z);
+                t = tExit + stepSize * 0.5;
+                continue;
+            }
+        }
+
         // textureSampleLevel: valid in the non-uniform loop (no derivatives).
         let raw = textureSampleLevel(volumeTex, volumeSampler, uvw, 0.0).r;
         // Window/level: map [center - width/2, center + width/2] -> [0,1] (contrast).
