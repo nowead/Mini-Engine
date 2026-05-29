@@ -13,12 +13,15 @@ WebGPU 기반 차세대 클라이언트 사이드 **의료 볼륨 렌더러**로
 | --- | --- |
 | [MEDICAL_VOLUME_ROADMAP.md](medical-volume/MEDICAL_VOLUME_ROADMAP.md) | 전략 결정(방향 1) + 격차 진단 + 마일스톤 M1~M4 + 첫 작업(M1-1 R16Float 승격) |
 
-**진입 작업**: **M1-1 — 3D 텍스처 R8Unorm → R16Float 승격**(무회귀 토대).
-이후 M1-2(window/level) → M1-3(NIfTI/DICOM 실파일 로더). 사용자 확정 대기:
-실파일 포맷 우선순위(NIfTI 우선 권장).
+**M1 (실데이터 기반) 완료** (2026-05-29): R16Float 16비트 · window/level ·
+NIfTI 로더 + float 강도 경로 + 임상 윈도우 프리셋. 합성 .nii로 검증.
+잔여 후속: 브라우저 실 CT preload, DICOM 로더(별도).
+
+**다음 후보**: **M2 — 시네마틱 품질**(gradient 셰이딩 → 볼류메트릭 소프트
+섀도우). 또는 M1 후속(WASM .nii preload / DICOM).
 
 **선행 완료**: 볼륨 렌더링 기초(3D 텍스처 + 레이마칭, Vulkan + WebGPU) ·
-TF 프리셋 · 브라우저 컨트롤 · 독립 실행 뷰어(`volume_viewer`, CT raw 로드).
+TF 프리셋 · 브라우저 컨트롤 · 독립 뷰어(`volume_viewer`, raw/NIfTI 로드).
 
 ---
 
