@@ -215,6 +215,40 @@ bool VolumeRenderer::initialize(uint32_t resolution) {
     m_depthSampler = m_device->createSampler(depthSamplerDesc);
     if (!m_depthSampler) { LOG_ERROR("VolumeRenderer") << "depth sampler create failed"; return false; }
 
+    // Transfer-function LUT (256x1 RGBA8). Always bound; sampled only when useLUT=1
+    // (non-Custom preset). Default contents are uninitialized -- applyPendingTFUpdate
+    // refills on the first preset switch. Custom preset bypasses it.
+    {
+        rhi::TextureDesc lutDesc{};
+        lutDesc.size          = rhi::Extent3D{256, 1, 1};
+        lutDesc.dimension     = rhi::TextureDimension::Texture2D;
+        lutDesc.format        = rhi::TextureFormat::RGBA8Unorm;
+        lutDesc.mipLevelCount = 1;
+        lutDesc.sampleCount   = 1;
+        lutDesc.usage         = rhi::TextureUsage::CopyDst | rhi::TextureUsage::Sampled;
+        lutDesc.label         = "VolumeTFLUT";
+        m_lutTexture = m_device->createTexture(lutDesc);
+        if (!m_lutTexture) { LOG_ERROR("VolumeRenderer") << "LUT texture create failed"; return false; }
+
+        rhi::TextureViewDesc lvd{};
+        lvd.format          = rhi::TextureFormat::RGBA8Unorm;
+        lvd.dimension       = rhi::TextureViewDimension::View2D;
+        lvd.baseMipLevel    = 0; lvd.mipLevelCount   = 1;
+        lvd.baseArrayLayer  = 0; lvd.arrayLayerCount = 1;
+        m_lutView = m_lutTexture->createView(lvd);
+        if (!m_lutView) { LOG_ERROR("VolumeRenderer") << "LUT view create failed"; return false; }
+
+        // Initial layout transition so the shader can sample it before any preset
+        // upload runs (Custom preset is the default and never triggers an upload).
+        auto enc = m_device->createCommandEncoder();
+        enc->transitionTextureLayout(m_lutTexture.get(),
+                                     rhi::TextureLayout::Undefined,
+                                     rhi::TextureLayout::ShaderReadOnly);
+        auto cmd = enc->finish();
+        m_graphicsQueue->submit(cmd.get());
+        m_graphicsQueue->waitIdle();
+    }
+
     // Per-frame uniform buffers.
     for (uint32_t i = 0; i < kFramesInFlight; ++i) {
         rhi::BufferDesc uboDesc{};
@@ -274,7 +308,8 @@ bool VolumeRenderer::createPipeline(rhi::RHITextureView* depthView, void* native
         entry(0, S::Fragment, T::UniformBuffer),
         entry(1, S::Fragment, T::DepthTexture,   D::View2D),  // scene depth (textureLoad)
         entry(2, S::Fragment, T::SampledTexture, D::View3D),  // volume density
-        entry(3, S::Fragment, T::Sampler),                    // volume sampler (linear)
+        entry(3, S::Fragment, T::Sampler),                    // volume + LUT sampler (linear)
+        entry(4, S::Fragment, T::SampledTexture, D::View2D),  // transfer-function LUT (256x1)
     };
 #else
     // Vulkan: GLSL texelFetch(sampler2D(depth, sampler)) needs a depth sampler.
@@ -283,7 +318,8 @@ bool VolumeRenderer::createPipeline(rhi::RHITextureView* depthView, void* native
         entry(1, S::Fragment, T::SampledTexture, D::View2D),  // scene depth
         entry(2, S::Fragment, T::Sampler),                    // depth sampler (nearest)
         entry(3, S::Fragment, T::SampledTexture, D::View3D),  // volume density
-        entry(4, S::Fragment, T::Sampler),                    // volume sampler (linear)
+        entry(4, S::Fragment, T::Sampler),                    // volume + LUT sampler (linear)
+        entry(5, S::Fragment, T::SampledTexture, D::View2D),  // transfer-function LUT (256x1)
     };
 #endif
     layoutDesc.label = "VolumeBGLayout";
@@ -337,6 +373,7 @@ bool VolumeRenderer::createBindGroups(rhi::RHITextureView* depthView) {
             rhi::BindGroupEntry::TextureView(1, depthView),
             rhi::BindGroupEntry::TextureView(2, m_volumeView.get()),
             rhi::BindGroupEntry::Sampler(3, m_sampler.get()),
+            rhi::BindGroupEntry::TextureView(4, m_lutView.get()),
         };
 #else
         desc.entries = {
@@ -345,6 +382,7 @@ bool VolumeRenderer::createBindGroups(rhi::RHITextureView* depthView) {
             rhi::BindGroupEntry::Sampler(2, m_depthSampler.get()),
             rhi::BindGroupEntry::TextureView(3, m_volumeView.get()),
             rhi::BindGroupEntry::Sampler(4, m_sampler.get()),
+            rhi::BindGroupEntry::TextureView(5, m_lutView.get()),
         };
 #endif
         desc.label = "VolumeBindGroup";
@@ -352,6 +390,138 @@ bool VolumeRenderer::createBindGroups(rhi::RHITextureView* depthView) {
         if (!m_bindGroups[i]) { LOG_ERROR("VolumeRenderer") << "bind group create failed"; return false; }
     }
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// Transfer-function LUT: presets, generation, upload
+// ---------------------------------------------------------------------------
+
+const char* VolumeRenderer::tfPresetName(int i) {
+    switch (static_cast<TFPreset>(i)) {
+        case TFPreset::Custom:       return "Custom";
+        case TFPreset::Cloud:        return "Cloud";
+        case TFPreset::Fire:         return "Fire";
+        case TFPreset::CTBone:       return "CT - Bone";
+        case TFPreset::CTSoftTissue: return "CT - Soft Tissue";
+        default: return "?";
+    }
+}
+
+namespace {
+struct TFKey { float t, r, g, b, a; };
+
+// Piecewise-linear fill of a 256-entry RGBA8 LUT from control points.
+void fillFromKeys(uint8_t* out256, const TFKey* keys, int n) {
+    auto toByte = [](float v) {
+        int x = static_cast<int>(v * 255.0f + 0.5f);
+        return static_cast<uint8_t>(x < 0 ? 0 : (x > 255 ? 255 : x));
+    };
+    for (int i = 0; i < 256; ++i) {
+        const float t = i / 255.0f;
+        int s = 0;
+        while (s + 1 < n - 1 && keys[s + 1].t < t) ++s;
+        const TFKey& a = keys[s];
+        const TFKey& b = keys[s + 1 < n ? s + 1 : s];
+        const float dt = b.t - a.t;
+        float u = dt > 1e-6f ? (t - a.t) / dt : 0.0f;
+        if (u < 0.0f) u = 0.0f; else if (u > 1.0f) u = 1.0f;
+        out256[i*4 + 0] = toByte(a.r + (b.r - a.r) * u);
+        out256[i*4 + 1] = toByte(a.g + (b.g - a.g) * u);
+        out256[i*4 + 2] = toByte(a.b + (b.b - a.b) * u);
+        out256[i*4 + 3] = toByte(a.a + (b.a - a.a) * u);
+    }
+}
+} // namespace
+
+void VolumeRenderer::applyPendingTFUpdate() {
+    if (!m_tfDirty || !m_lutTexture) return;
+    m_tfDirty = false;
+
+    std::vector<uint8_t> lut(256 * 4, 0);
+    switch (m_tfPreset) {
+        case TFPreset::Custom: {
+            // Shader uses uniform 2-color path (useLUT=0); LUT contents unused, but
+            // fill with the gradient for coherence.
+            const TFKey k[] = {
+                { 0.0f, m_lowColor.r,  m_lowColor.g,  m_lowColor.b,  0.0f },
+                { 1.0f, m_highColor.r, m_highColor.g, m_highColor.b, 1.0f },
+            };
+            fillFromKeys(lut.data(), k, 2);
+            break;
+        }
+        case TFPreset::Cloud: {
+            const TFKey k[] = {
+                { 0.00f, 0.85f, 0.88f, 0.95f, 0.00f },
+                { 0.30f, 0.92f, 0.94f, 0.98f, 0.15f },
+                { 1.00f, 1.00f, 1.00f, 1.00f, 1.00f },
+            };
+            fillFromKeys(lut.data(), k, 3);
+            break;
+        }
+        case TFPreset::Fire: {
+            const TFKey k[] = {
+                { 0.00f, 0.05f, 0.00f, 0.10f, 0.00f },
+                { 0.25f, 0.80f, 0.10f, 0.00f, 0.25f },
+                { 0.55f, 1.00f, 0.55f, 0.05f, 0.60f },
+                { 0.85f, 1.00f, 0.95f, 0.55f, 0.90f },
+                { 1.00f, 1.00f, 1.00f, 0.90f, 1.00f },
+            };
+            fillFromKeys(lut.data(), k, 5);
+            break;
+        }
+        case TFPreset::CTBone: {
+            const TFKey k[] = {
+                { 0.00f, 0.00f, 0.00f, 0.00f, 0.00f },
+                { 0.55f, 0.40f, 0.30f, 0.20f, 0.05f },
+                { 0.80f, 0.95f, 0.90f, 0.80f, 0.50f },
+                { 1.00f, 1.00f, 1.00f, 1.00f, 1.00f },
+            };
+            fillFromKeys(lut.data(), k, 4);
+            break;
+        }
+        case TFPreset::CTSoftTissue: {
+            const TFKey k[] = {
+                { 0.00f, 0.00f, 0.00f, 0.00f, 0.00f },
+                { 0.25f, 0.60f, 0.25f, 0.20f, 0.20f },
+                { 0.55f, 0.90f, 0.45f, 0.30f, 0.55f },
+                { 0.85f, 0.70f, 0.30f, 0.20f, 0.35f },
+                { 1.00f, 0.40f, 0.15f, 0.10f, 0.10f },
+            };
+            fillFromKeys(lut.data(), k, 5);
+            break;
+        }
+        default: break;
+    }
+
+    // Upload (256x1 RGBA8 = 1024 bytes/row, already 256-aligned so both backends
+    // accept the same bytesPerRow on WebGPU; Vulkan uses tightly-packed sentinel).
+    const uint64_t lutBytes = 256ull * 4ull;
+    rhi::BufferDesc sd{}; sd.size = lutBytes;
+    sd.usage = rhi::BufferUsage::CopySrc | rhi::BufferUsage::MapWrite;
+    auto staging = m_device->createBuffer(sd);
+    if (!staging) return;
+    { void* p = staging->map(); std::memcpy(p, lut.data(), lutBytes); staging->unmap(); }
+
+    auto enc = m_device->createCommandEncoder();
+    enc->transitionTextureLayout(m_lutTexture.get(),
+                                 rhi::TextureLayout::ShaderReadOnly,
+                                 rhi::TextureLayout::TransferDst);
+    rhi::BufferTextureCopyInfo bc{};
+    bc.buffer = staging.get(); bc.offset = 0;
+#ifdef __EMSCRIPTEN__
+    bc.bytesPerRow  = 1024; bc.rowsPerImage = 1;
+#else
+    bc.bytesPerRow  = 0;    bc.rowsPerImage = 0;
+#endif
+    rhi::TextureCopyInfo tc{};
+    tc.texture = m_lutTexture.get(); tc.mipLevel = 0; tc.origin = {0, 0, 0}; tc.aspect = 0;
+    enc->copyBufferToTexture(bc, tc, rhi::Extent3D{256, 1, 1});
+    enc->transitionTextureLayout(m_lutTexture.get(),
+                                 rhi::TextureLayout::TransferDst,
+                                 rhi::TextureLayout::ShaderReadOnly);
+    auto cmd = enc->finish();
+    m_graphicsQueue->submit(cmd.get());
+    m_graphicsQueue->waitIdle();  // one-shot LUT update; only on preset switch
 }
 
 void VolumeRenderer::updateUBO(uint32_t frameIndex, const glm::mat4& invView,
@@ -366,7 +536,8 @@ void VolumeRenderer::updateUBO(uint32_t frameIndex, const glm::mat4& invView,
     ubo.aabbMin   = glm::vec4(m_aabbMin, 0.0f);
     ubo.aabbMax   = glm::vec4(m_aabbMax, 0.0f);
     ubo.params    = glm::vec4(m_stepSize, m_extinction, m_densityScale, m_maxSteps);
-    ubo.tf        = glm::vec4(m_tfThreshold, m_tfColorMix, 0.0f, 0.0f);
+    const float useLUT = (m_tfPreset == TFPreset::Custom) ? 0.0f : 1.0f;
+    ubo.tf        = glm::vec4(m_tfThreshold, m_tfColorMix, useLUT, 0.0f);
     ubo.lowColor  = glm::vec4(m_lowColor, 1.0f);
     ubo.highColor = glm::vec4(m_highColor, 1.0f);
 

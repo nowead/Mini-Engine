@@ -420,6 +420,7 @@ void Application::mainLoopFrame() {
             {
                 const auto& vs = imgui->getVolumeSettings();
                 renderer->setVolumeEnabled(vs.enabled);
+                renderer->setVolumePreset(vs.preset);
                 renderer->setVolumeParams(vs.densityScale, vs.extinction, vs.stepSize,
                                           vs.threshold, vs.colorMix);
                 renderer->setVolumeColors(

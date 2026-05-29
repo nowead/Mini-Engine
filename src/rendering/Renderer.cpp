@@ -3650,6 +3650,11 @@ void Renderer::drawFrame() {
     // Step 3: Update uniform buffer with RHI (includes shadow matrix)
     updateRHIUniformBuffer(frameIndex);
 
+    // Volume transfer-function LUT: regenerate + upload if the preset changed. Done
+    // here (before the frame's command encoder exists) since it uses its own
+    // one-shot submit; no-op when nothing changed.
+    if (volumeRenderer) volumeRenderer->applyPendingTFUpdate();
+
     // Step 4: Create command encoder
     auto encoder = rhiBridge->createCommandEncoder();
     if (!encoder) {

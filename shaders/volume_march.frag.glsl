@@ -18,15 +18,16 @@ layout(set = 0, binding = 0) uniform VolumeUBO {
     vec4 aabbMin;     // xyz world-space volume bounds
     vec4 aabbMax;     // xyz
     vec4 params;      // x = stepSize (world units), y = extinction, z = densityScale, w = maxSteps
-    vec4 tf;          // transfer function: x = densityThreshold, y = colorMix, z/w spare (7-4)
-    vec4 lowColor;    // rgb = color at low density (7-4, user-picked)
-    vec4 highColor;   // rgb = color at high density
+    vec4 tf;          // x = densityThreshold, y = colorMix, z = useLUT (0/1), w spare
+    vec4 lowColor;    // rgb = color at low density (Custom preset)
+    vec4 highColor;   // rgb = color at high density (Custom preset)
 } ubo;
 
 layout(set = 0, binding = 1) uniform texture2D depthTex;
 layout(set = 0, binding = 2) uniform sampler   depthSampler;
 layout(set = 0, binding = 3) uniform texture3D volumeTex;
 layout(set = 0, binding = 4) uniform sampler   volumeSampler;
+layout(set = 0, binding = 5) uniform texture2D tfLUT;   // 256x1 density -> (rgb, opacity)
 
 // Ray-AABB slab test. Returns (tNear, tFar); tNear > tFar means miss.
 vec2 intersectAABB(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax) {
@@ -87,12 +88,21 @@ void main() {
         density = max(density - ubo.tf.x, 0.0);
 
         if (density > 0.0) {
+            // Transfer function: LUT preset (useLUT) or the Custom 2-color gradient.
+            vec3  color;
+            float opacityWeight;
+            if (ubo.tf.z > 0.5) {
+                vec4 lut = texture(sampler2D(tfLUT, volumeSampler),
+                                   vec2(clamp(density, 0.0, 1.0), 0.5));
+                color         = lut.rgb;
+                opacityWeight = lut.a;
+            } else {
+                color         = mix(ubo.lowColor.rgb, ubo.highColor.rgb,
+                                    clamp(density * ubo.tf.y, 0.0, 1.0));
+                opacityWeight = density;
+            }
             // Beer-Lambert opacity for this step.
-            float alpha = 1.0 - exp(-density * extinction * stepSize);
-            // Transfer function: user-picked low/high density colors, blended by
-            // density (colorMix controls how fast it reaches highColor).
-            vec3 color = mix(ubo.lowColor.rgb, ubo.highColor.rgb,
-                             clamp(density * ubo.tf.y, 0.0, 1.0));
+            float alpha = 1.0 - exp(-opacityWeight * extinction * stepSize);
             accum.rgb += (1.0 - accum.a) * color * alpha;   // premultiplied
             accum.a   += (1.0 - accum.a) * alpha;
         }

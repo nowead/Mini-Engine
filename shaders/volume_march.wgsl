@@ -14,7 +14,7 @@ struct VolumeUBO {
     aabbMin:   vec4<f32>,
     aabbMax:   vec4<f32>,
     params:    vec4<f32>,   // x=stepSize, y=extinction, z=densityScale, w=maxSteps
-    tf:        vec4<f32>,   // x=densityThreshold, y=colorMix
+    tf:        vec4<f32>,   // x=densityThreshold, y=colorMix, z=useLUT (0/1)
     lowColor:  vec4<f32>,
     highColor: vec4<f32>,
 };
@@ -23,6 +23,7 @@ struct VolumeUBO {
 @group(0) @binding(1) var depthTex:      texture_depth_2d;
 @group(0) @binding(2) var volumeTex:     texture_3d<f32>;
 @group(0) @binding(3) var volumeSampler: sampler;
+@group(0) @binding(4) var tfLUT:         texture_2d<f32>;   // 256x1 density -> (rgb, opacity)
 
 struct VSOut {
     @builtin(position) position: vec4<f32>,
@@ -99,9 +100,19 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
         density = max(density - ubo.tf.x, 0.0);
 
         if (density > 0.0) {
-            let alpha = 1.0 - exp(-density * extinction * stepSize);
-            let color = mix(ubo.lowColor.rgb, ubo.highColor.rgb,
+            var color: vec3<f32>;
+            var opacityWeight: f32;
+            if (ubo.tf.z > 0.5) {
+                let lut = textureSampleLevel(tfLUT, volumeSampler,
+                                             vec2<f32>(clamp(density, 0.0, 1.0), 0.5), 0.0);
+                color = lut.rgb;
+                opacityWeight = lut.a;
+            } else {
+                color = mix(ubo.lowColor.rgb, ubo.highColor.rgb,
                             clamp(density * ubo.tf.y, 0.0, 1.0));
+                opacityWeight = density;
+            }
+            let alpha = 1.0 - exp(-opacityWeight * extinction * stepSize);
             accum = vec4<f32>(accum.rgb + (1.0 - accum.a) * color * alpha,
                               accum.a   + (1.0 - accum.a) * alpha);
         }

@@ -37,6 +37,10 @@ public:
 
     static constexpr uint32_t kFramesInFlight = 2;
 
+    // Transfer-function presets. Custom uses the low/high color gradient (no LUT);
+    // the others bake a density->(color,opacity) curve into a 256x1 LUT texture.
+    enum class TFPreset { Custom = 0, Cloud, Fire, CTBone, CTSoftTissue, Count };
+
     // GPU-side UBO layout (must match volume_march.frag.glsl's VolumeUBO).
     struct VolumeUBO {
         glm::mat4 invView;
@@ -45,9 +49,9 @@ public:
         glm::vec4 aabbMin;     // xyz world-space bounds
         glm::vec4 aabbMax;     // xyz
         glm::vec4 params;      // x=stepSize, y=extinction, z=densityScale, w=maxSteps
-        glm::vec4 tf;          // x=densityThreshold, y=colorMix, z/w spare
-        glm::vec4 lowColor;    // rgb = low-density color
-        glm::vec4 highColor;   // rgb = high-density color
+        glm::vec4 tf;          // x=densityThreshold, y=colorMix, z=useLUT(0/1), w spare
+        glm::vec4 lowColor;    // rgb = low-density color (Custom preset)
+        glm::vec4 highColor;   // rgb = high-density color (Custom preset)
     };
 
     // Create the 3D texture + sampler and upload a procedural density volume.
@@ -90,6 +94,24 @@ public:
     void setColorMix(float v)     { m_tfColorMix   = v; }
     void setLowColor(const glm::vec3& c)  { m_lowColor  = c; }
     void setHighColor(const glm::vec3& c) { m_highColor = c; }
+
+    // Transfer-function preset selection. Custom = old 2-color gradient (uniforms,
+    // no LUT sample). Others bake a curve into the LUT; switch triggers a one-shot
+    // re-upload on the next applyPendingTFUpdate() (called by Renderer pre-frame).
+    void setTFPreset(TFPreset p) {
+        if (p != m_tfPreset) { m_tfPreset = p; m_tfDirty = true; }
+    }
+    void setTFPreset(int i) {
+        if (i < 0) i = 0;
+        if (i >= static_cast<int>(TFPreset::Count)) i = static_cast<int>(TFPreset::Count) - 1;
+        setTFPreset(static_cast<TFPreset>(i));
+    }
+    int getTFPreset() const { return static_cast<int>(m_tfPreset); }
+    static const char* tfPresetName(int i);
+
+    // Apply any pending LUT regeneration + upload (called pre-frame). Idempotent
+    // when nothing changed.
+    void applyPendingTFUpdate();
     // Defaults so the UI can initialize its sliders to the live values.
     float defDensityScale() const { return m_densityScale; }
     float defExtinction()   const { return m_extinction; }
@@ -118,8 +140,10 @@ private:
 
     std::unique_ptr<rhi::RHITexture>     m_volumeTexture;  // 3D, R8Unorm density
     std::unique_ptr<rhi::RHITextureView> m_volumeView;     // View3D
-    std::unique_ptr<rhi::RHISampler>     m_sampler;        // linear, clamp (volume)
+    std::unique_ptr<rhi::RHISampler>     m_sampler;        // linear, clamp (volume + LUT)
     std::unique_ptr<rhi::RHISampler>     m_depthSampler;   // nearest, clamp (depth)
+    std::unique_ptr<rhi::RHITexture>     m_lutTexture;     // 256x1 RGBA8, preset density->color/alpha
+    std::unique_ptr<rhi::RHITextureView> m_lutView;
 
     // Phase 7-3: ray-march pipeline + per-frame UBO/bind groups.
     std::unique_ptr<rhi::RHIShader>          m_vertexShader;
@@ -142,6 +166,10 @@ private:
     float m_tfColorMix   = 2.0f;
     glm::vec3 m_lowColor { 0.35f, 0.45f, 0.75f };  // low-density (bluish) default
     glm::vec3 m_highColor{ 1.00f, 0.95f, 0.88f };  // high-density (warm white) default
+
+    // Transfer-function preset state. Custom = no LUT (uniform 2-color path).
+    TFPreset m_tfPreset = TFPreset::Custom;
+    bool     m_tfDirty  = false;   // request LUT rebuild on next applyPendingTFUpdate
 };
 
 } // namespace rendering

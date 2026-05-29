@@ -582,3 +582,47 @@ TAA 리졸브·velocity 타깃은 WebGPU에 구현돼 있었으나, **활성화 
 | `tests/wasm_shell.html` | "Volume" 섹션 — enable + 슬라이더 4 + 컬러 픽커 2, packed-color 큐잉 |
 
 검증: WASM 빌드 통과, 네이티브 무회귀, 브라우저에서 슬라이더/색 실시간 반영(사용자 확인).
+
+---
+
+## 변경 이력 (9부) — 볼륨 Transfer Function 1D LUT + 프리셋
+
+> 볼륨의 밀도→색/불투명도 매핑이 "2색 선형 보간"뿐이라 의료 CT 같은 비단조 매핑을
+> 표현 못 했다. 256×1 LUT 기반 전이 함수로 확장(의료/디지털 트윈 도메인 어필).
+
+### 34. 설계 — useLUT 플래그로 드래그 중 재업로드 회피
+
+- 밀도→(RGB, opacity)를 **256×1 RGBA8 LUT 텍스처**로. 셰이더가 `density`로 LUT를
+  샘플해 색·불투명도를 얻고 Beer-Lambert로 스텝 alpha 계산.
+- **핵심 결정 — `useLUT`(UBO `tf.z`)**: `Custom` 프리셋은 기존 2색 그라데이션
+  (uniform low/high, LUT 미샘플) 경로, 나머지는 LUT 경로. 이로써 Low/High color·
+  ColorMix 슬라이더를 드래그해도 **LUT 재업로드가 필요 없다**(Custom은 uniform).
+  LUT는 **프리셋이 바뀔 때만** 재생성·업로드(`applyPendingTFUpdate`, 프레임 인코더
+  생성 전 1회성 submit). → 드래그 중 per-frame waitIdle 스톨 없음.
+- 프리셋 5종: `Custom`(2색) · `Cloud`(흰 구름) · `Fire`(적→황백) · `CT-Bone`(고밀도만
+  불투명 흰색) · `CT-SoftTissue`(중밀도 붉은 반투명). 각각 control point를
+  piecewise-linear 보간해 256엔트리 채움.
+
+### 35. 구현 (양 백엔드)
+
+- `VolumeRenderer`: LUT 텍스처(256×1 RGBA8), `TFPreset` enum, `setTFPreset`(dirty),
+  `applyPendingTFUpdate`(채우기+업로드). LUT 업로드는 1024B/row(256 정렬 자동
+  충족)이라 백엔드 분기 최소.
+- 셰이더(`.frag.glsl` + `.wgsl`): LUT 바인딩 추가(Vulkan b5 / WebGPU b4, 볼륨
+  샘플러 공유) + `useLUT` 분기. WGSL은 `textureSampleLevel`(동적 루프 비균일 안전).
+- UI: 네이티브 ImGui "TF preset" 콤보 + Custom 전용 색 컨트롤 `BeginDisabled` 게이팅.
+  WASM HTML `<select>` + `setVolumePreset` 바인딩 + 비-Custom 시 색 컨트롤 disable.
+
+### 36. 수정 파일 요약 (9부)
+
+| 파일 | 변경 |
+| --- | --- |
+| `src/rendering/VolumeRenderer.{hpp,cpp}` | LUT 텍스처/뷰; `TFPreset` + 5 프리셋 control points; `applyPendingTFUpdate`(채우기+업로드); UBO `useLUT`; 바인드그룹/레이아웃에 LUT 추가 |
+| `shaders/volume_march.frag.glsl` / `.wgsl` | LUT 바인딩 + `useLUT` 분기(LUT 샘플 vs 2색) |
+| `src/rendering/Renderer.{hpp,cpp}` | `setVolumePreset` 포워더; drawFrame 프레임 전 `applyPendingTFUpdate` |
+| `src/ui/ImGuiManager.{hpp,cpp}` | `VolumeSettings.preset`; "TF preset" 콤보 + Custom 전용 색 게이팅 |
+| `src/Application.{hpp,cpp}` + `src/wasm/WASMBindings.cpp` | `setVolumePreset` 적용/바인딩 |
+| `tests/wasm_shell.html` | "TF preset" select + 비-Custom 시 색 컨트롤 disable |
+
+검증: 양 백엔드 빌드 통과, 네이티브에서 프리셋 전환 시 색/불투명도 곡선 변화 + 끊김/
+에러 없음(사용자 확인), 브라우저 select 동작. 의료 CT 룩(뼈/연조직) 표현 가능.

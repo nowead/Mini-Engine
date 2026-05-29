@@ -132,13 +132,14 @@ public:
     // each frame and forwards to the Renderer.
     struct VolumeSettings {
         bool  enabled      = true;
+        int   preset       = 0;      // 0=Custom,1=Cloud,2=Fire,3=CT-Bone,4=CT-Soft
         float densityScale = 1.0f;   // overall thickness / visibility
         float extinction   = 1.5f;   // Beer-Lambert absorption strength
         float stepSize     = 0.6f;   // march step (smaller = denser sampling, slower)
         float threshold    = 0.02f;  // clip low density (carves wispy edges)
-        float colorMix     = 2.0f;   // transfer-function color blend
-        float lowColor[3]  = { 0.35f, 0.45f, 0.75f };  // low-density color
-        float highColor[3] = { 1.00f, 0.95f, 0.88f };  // high-density color
+        float colorMix     = 2.0f;   // transfer-function color blend (Custom)
+        float lowColor[3]  = { 0.35f, 0.45f, 0.75f };  // low-density color (Custom)
+        float highColor[3] = { 1.00f, 0.95f, 0.88f };  // high-density color (Custom)
     };
     const VolumeSettings& getVolumeSettings() const { return m_volumeSettings; }
 

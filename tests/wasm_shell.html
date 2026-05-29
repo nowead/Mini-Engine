@@ -467,6 +467,16 @@
             <div class="section-label">Volume</div>
             <label class="toggle"><input type="checkbox" id="volumeEnabled" checked> Volume cloud</label>
             <div class="slider-row">
+                <span>TF preset</span>
+                <select id="volPreset" aria-label="Volume Transfer Function Preset">
+                    <option value="0">Custom</option>
+                    <option value="1">Cloud</option>
+                    <option value="2">Fire</option>
+                    <option value="3">CT - Bone</option>
+                    <option value="4">CT - Soft Tissue</option>
+                </select>
+            </div>
+            <div class="slider-row">
                 <span>Density</span>
                 <input type="range" id="volDensity" aria-label="Volume Density" min="0" max="5" step="0.05" value="1.0">
                 <span class="val" id="volDensityVal">1.00</span>
@@ -631,6 +641,15 @@
             // ── Volume controls ──────────────────────────────────────────────
             document.getElementById('volumeEnabled').addEventListener('change', function() {
                 _queue('setVolumeEnabled', this.checked);
+            });
+            document.getElementById('volPreset').addEventListener('change', function() {
+                var p = parseInt(this.value, 10);
+                _queue('setVolumePreset', p);
+                // Color mix + low/high color only apply to the Custom preset.
+                var customTF = (p === 0);
+                document.getElementById('volColorMix').disabled  = !customTF;
+                document.getElementById('volLowColor').disabled  = !customTF;
+                document.getElementById('volHighColor').disabled = !customTF;
             });
             bindSlider('volDensity',    'volDensityVal',    2, 'setVolumeDensity');
             bindSlider('volExtinction', 'volExtinctionVal', 1, 'setVolumeExtinction');

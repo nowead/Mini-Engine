@@ -59,6 +59,7 @@ public:
     void wasm_setVolumeExtinction(float v){ if (renderer) renderer->setVolumeExtinction(v); }
     void wasm_setVolumeThreshold(float v) { if (renderer) renderer->setVolumeThreshold(v); }
     void wasm_setVolumeColorMix(float v)  { if (renderer) renderer->setVolumeColorMix(v); }
+    void wasm_setVolumePreset(int p)      { if (renderer) renderer->setVolumePreset(p); }
     void wasm_setVolumeLowColor(int rgb)  { if (renderer) renderer->setVolumeLowColor(rgb); }
     void wasm_setVolumeHighColor(int rgb) { if (renderer) renderer->setVolumeHighColor(rgb); }
     void wasm_setSunIntensity(float i)    { if (renderer) renderer->setSunIntensity(i); }
