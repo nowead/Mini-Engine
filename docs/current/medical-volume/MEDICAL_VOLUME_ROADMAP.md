@@ -227,11 +227,34 @@ CAREER_ROADMAP의 "수치화가 전부다" 원칙 계승. 마일스톤별 정량
 
 ---
 
-## 5. 사용자 확정이 필요한 결정
+## 5. 진행 상태 · 결정 기록 · 다음 진입점
 
-- **M1-3 실파일 포맷 우선순위**: NIfTI 우선(빠르게 실데이터 진입) → DICOM 후속
-  을 권장. 임상 표준 DICOM을 먼저 갈지, 단순한 NIfTI로 파이프라인부터 세울지.
-- **M3-3(bricking) 진행 여부**: M3-1/2(skipping + 측정)까지 닫은 뒤 재판단.
+**완료 (2026-05-29, 한 세션)**:
+
+- M1 (R16Float 16비트 · window/level · NIfTI 로더 + float 강도 + 임상 윈도우 프리셋)
+- M2 (gradient 셰이딩 + 볼류메트릭 소프트 섀도우)
+- M3-1 (컴퓨트 occupancy 그리드 + 마칭 empty-space skipping)
+- 독립 WASM 볼륨 뷰어(`volume_viewer_wasm`) — 브라우저에서 볼륨만 풀스크린.
+  네이티브 `volume_viewer`와 한 쌍. 랜딩 인덱스에서 클릭 진입.
+
+**결정 기록**:
+
+- *실파일 포맷*: **NIfTI 우선으로 결정·완료**(`d4f9659`). DICOM은 후속 후보.
+- *WASM 데모 분리*: **별도 실행파일로 결정·완료**(`7089d84`). 쇼케이스에 묻히던
+  볼륨 가시성 문제 해소. (디버깅: ASYNCIFY 재진입 가드 + DOM 핸들러의 직접 wasm
+  호출 제거 — 데이터 범위를 `Module._dataMin/Max`로 push.)
+
+**남은 결정 / 다음 후보** (우선순위는 다음 세션에 재판단):
+
+- **M3-2 측정 심화** — 대용량 볼륨(512³급 또는 실 CT)으로 skip on/off 60fps
+  실증. 현재 합성 96³는 너무 가벼워 occupancy의 진짜 가치가 안 드러남.
+- **DICOM 로더** (M1 후속) — 멀티슬라이스 시리즈 → HU. 실제 병원 데이터 수용.
+- **M4 path-traced 산란** — 진짜 시네마틱 VRT, 가장 강한 차별화이자 스트레치.
+- **M3-3 bricking** — VRAM 초과 볼륨 페이징("1GB+" 주장의 본체), 작업량 큼.
+
+**다음 세션 진입점**: 이 문서 §2(마일스톤 M3-2/M4 상세) + 위 후보 목록. 코드
+진입은 `src/rendering/VolumeRenderer.{hpp,cpp}`(엔진 코어), `tests/volume_viewer.cpp`
+(네이티브 뷰어), `tests/volume_viewer_wasm.cpp`(브라우저 뷰어).
 
 ---
 
