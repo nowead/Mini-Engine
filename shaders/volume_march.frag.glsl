@@ -18,9 +18,10 @@ layout(set = 0, binding = 0) uniform VolumeUBO {
     vec4 aabbMin;     // xyz world-space volume bounds
     vec4 aabbMax;     // xyz
     vec4 params;      // x = stepSize (world units), y = extinction, z = densityScale, w = maxSteps
-    vec4 tf;          // x = densityThreshold, y = colorMix, z = useLUT (0/1), w spare
+    vec4 tf;          // x = densityThreshold, y = colorMix, z = useLUT (0/1), w = useDepth
     vec4 lowColor;    // rgb = color at low density (Custom preset)
     vec4 highColor;   // rgb = color at high density (Custom preset)
+    vec4 window;      // x = windowCenter, y = windowWidth (intensity -> [0,1]); zw spare
 } ubo;
 
 layout(set = 0, binding = 1) uniform texture2D depthTex;
@@ -54,14 +55,18 @@ void main() {
     vec3 ro = ubo.cameraPos.xyz;
     vec3 rd = normalize(worldFar - ro);
 
-    // Scene occlusion distance from the depth buffer (point sampled, matches deferred).
-    float depth = texelFetch(sampler2D(depthTex, depthSampler), fragCoord, 0).r;
+    // Scene occlusion distance from the depth buffer (point sampled, matches
+    // deferred). tf.w = useDepth: 0 disables occlusion (standalone viewer with no
+    // geometry / dummy depth) -- march the full box.
     float sceneDist = 1e30;
-    if (depth < 1.0) {
-        vec4 vS = ubo.invProj * vec4(ndcXY, depth, 1.0);
-        vS /= vS.w;
-        vec3 worldS = vec3(ubo.invView * vS);
-        sceneDist = length(worldS - ro);
+    if (ubo.tf.w > 0.5) {
+        float depth = texelFetch(sampler2D(depthTex, depthSampler), fragCoord, 0).r;
+        if (depth < 1.0) {
+            vec4 vS = ubo.invProj * vec4(ndcXY, depth, 1.0);
+            vS /= vS.w;
+            vec3 worldS = vec3(ubo.invView * vS);
+            sceneDist = length(worldS - ro);
+        }
     }
 
     vec2  hit   = intersectAABB(ro, rd, ubo.aabbMin.xyz, ubo.aabbMax.xyz);
@@ -84,7 +89,10 @@ void main() {
 
         vec3 wp  = ro + rd * t;
         vec3 uvw = (wp - ubo.aabbMin.xyz) / boxSize;   // [0,1]^3
-        float density = texture(sampler3D(volumeTex, volumeSampler), uvw).r * ubo.params.z;
+        float raw = texture(sampler3D(volumeTex, volumeSampler), uvw).r;
+        // Window/level: map [center - width/2, center + width/2] -> [0,1] (contrast).
+        float n = clamp((raw - (ubo.window.x - ubo.window.y * 0.5)) / max(ubo.window.y, 1e-6), 0.0, 1.0);
+        float density = n * ubo.params.z;
         density = max(density - ubo.tf.x, 0.0);
 
         if (density > 0.0) {

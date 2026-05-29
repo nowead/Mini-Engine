@@ -49,9 +49,10 @@ public:
         glm::vec4 aabbMin;     // xyz world-space bounds
         glm::vec4 aabbMax;     // xyz
         glm::vec4 params;      // x=stepSize, y=extinction, z=densityScale, w=maxSteps
-        glm::vec4 tf;          // x=densityThreshold, y=colorMix, z=useLUT(0/1), w spare
+        glm::vec4 tf;          // x=densityThreshold, y=colorMix, z=useLUT(0/1), w=useDepth
         glm::vec4 lowColor;    // rgb = low-density color (Custom preset)
         glm::vec4 highColor;   // rgb = high-density color (Custom preset)
+        glm::vec4 window;      // x=windowCenter, y=windowWidth (intensity -> [0,1]); zw spare
     };
 
     // Create the 3D texture + sampler and upload a procedural density volume.
@@ -70,8 +71,17 @@ public:
     // `depthView` is the scene depth (sampled for occlusion); `nativeRenderPass`
     // is the Vulkan HDR (Load) render pass on Linux, null on dynamic-rendering
     // platforms. Call createBindGroups again after a resize (depth view changes).
-    bool createPipeline(rhi::RHITextureView* depthView, void* nativeRenderPass);
+    bool createPipeline(rhi::RHITextureView* depthView, void* nativeRenderPass,
+                        rhi::TextureFormat colorFormat = rhi::TextureFormat::RGBA16Float);
     bool createBindGroups(rhi::RHITextureView* depthView);
+
+    // World-space placement of the volume box (the ray-AABB bounds). Default is a
+    // cloud above the showcase city; a standalone viewer centers it at the origin.
+    void setAABB(const glm::vec3& mn, const glm::vec3& mx) { m_aabbMin = mn; m_aabbMax = mx; }
+
+    // Depth-based occlusion: on for the deferred scene (default), off for a
+    // standalone viewer with no geometry (binds a dummy depth, never sampled).
+    void setUseDepthOcclusion(bool b) { m_useDepthOcclusion = b; }
 
     // Per-frame UBO update from camera state. AABB / march params come from members.
     void updateUBO(uint32_t frameIndex, const glm::mat4& invView,
@@ -95,6 +105,19 @@ public:
         m_lowColor  = low;
         m_highColor = high;
     }
+    // March budget. Defaults suit the large showcase cloud; a small standalone
+    // box needs a finer step + more steps to cross its full extent.
+    void setMaxSteps(float n) { m_maxSteps = n; }
+
+    // Window/level: normalizes the sampled intensity to [0,1] before the transfer
+    // function (the classic medical-imaging contrast control). Units match the
+    // stored intensity domain ([0,1] for the synthetic volume; HU once a real CT
+    // is loaded in M1-3). Default (center 0.5, width 1.0) is a no-op on [0,1] data.
+    void setWindow(float center, float width) { m_windowCenter = center; m_windowWidth = width; }
+    void setWindowCenter(float c) { m_windowCenter = c; }
+    void setWindowWidth(float w)  { m_windowWidth = w; }
+    float defWindowCenter() const { return m_windowCenter; }
+    float defWindowWidth()  const { return m_windowWidth; }
     // Granular setters (WebGPU/JS bindings, one per HTML control).
     void setDensityScale(float v) { m_densityScale = v; }
     void setExtinction(float v)   { m_extinction   = v; }
@@ -146,7 +169,7 @@ private:
     bool            m_enabled       = true;
     uint32_t        m_resolution    = 0;
 
-    std::unique_ptr<rhi::RHITexture>     m_volumeTexture;  // 3D, R8Unorm density
+    std::unique_ptr<rhi::RHITexture>     m_volumeTexture;  // 3D, R16Float density
     std::unique_ptr<rhi::RHITextureView> m_volumeView;     // View3D
     std::unique_ptr<rhi::RHISampler>     m_sampler;        // linear, clamp (volume + LUT)
     std::unique_ptr<rhi::RHISampler>     m_depthSampler;   // nearest, clamp (depth)
@@ -174,12 +197,15 @@ private:
     float m_maxSteps     = 128.0f;
     float m_tfThreshold  = 0.02f;
     float m_tfColorMix   = 2.0f;
+    float m_windowCenter = 0.5f;   // intensity-window center (normalized [0,1] domain)
+    float m_windowWidth  = 1.0f;   // intensity-window width; 1.0 = full range (no-op)
     glm::vec3 m_lowColor { 0.35f, 0.45f, 0.75f };  // low-density (bluish) default
     glm::vec3 m_highColor{ 1.00f, 0.95f, 0.88f };  // high-density (warm white) default
 
     // Transfer-function preset state. Custom = no LUT (uniform 2-color path).
     TFPreset m_tfPreset = TFPreset::Custom;
     bool     m_tfDirty  = false;   // request LUT rebuild on next applyPendingTFUpdate
+    bool     m_useDepthOcclusion = true;  // off for standalone viewer (no geometry)
 };
 
 } // namespace rendering

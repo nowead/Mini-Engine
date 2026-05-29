@@ -14,9 +14,10 @@ struct VolumeUBO {
     aabbMin:   vec4<f32>,
     aabbMax:   vec4<f32>,
     params:    vec4<f32>,   // x=stepSize, y=extinction, z=densityScale, w=maxSteps
-    tf:        vec4<f32>,   // x=densityThreshold, y=colorMix, z=useLUT (0/1)
+    tf:        vec4<f32>,   // x=densityThreshold, y=colorMix, z=useLUT (0/1), w=useDepth
     lowColor:  vec4<f32>,
     highColor: vec4<f32>,
+    window:    vec4<f32>,   // x=windowCenter, y=windowWidth (intensity -> [0,1]); zw spare
 };
 
 @group(0) @binding(0) var<uniform> ubo: VolumeUBO;
@@ -65,14 +66,17 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
     let ro = ubo.cameraPos.xyz;
     let rd = normalize(worldFar - ro);
 
-    // Scene occlusion distance from the depth buffer.
-    let depth = textureLoad(depthTex, fragCoord, 0);
+    // Scene occlusion distance from the depth buffer. tf.w = useDepth: 0 disables
+    // occlusion (standalone viewer, no geometry / dummy depth) -> march full box.
     var sceneDist = 1e30;
-    if (depth < 1.0) {
-        var vS = ubo.invProj * vec4<f32>(ndcXY, depth, 1.0);
-        vS = vS / vS.w;
-        let worldS = (ubo.invView * vS).xyz;
-        sceneDist = length(worldS - ro);
+    if (ubo.tf.w > 0.5) {
+        let depth = textureLoad(depthTex, fragCoord, 0);
+        if (depth < 1.0) {
+            var vS = ubo.invProj * vec4<f32>(ndcXY, depth, 1.0);
+            vS = vS / vS.w;
+            let worldS = (ubo.invView * vS).xyz;
+            sceneDist = length(worldS - ro);
+        }
     }
 
     let hit   = intersectAABB(ro, rd, ubo.aabbMin.xyz, ubo.aabbMax.xyz);
@@ -96,7 +100,10 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
         let wp  = ro + rd * t;
         let uvw = (wp - ubo.aabbMin.xyz) / boxSize;     // [0,1]^3
         // textureSampleLevel: valid in the non-uniform loop (no derivatives).
-        var density = textureSampleLevel(volumeTex, volumeSampler, uvw, 0.0).r * ubo.params.z;
+        let raw = textureSampleLevel(volumeTex, volumeSampler, uvw, 0.0).r;
+        // Window/level: map [center - width/2, center + width/2] -> [0,1] (contrast).
+        let n = clamp((raw - (ubo.window.x - ubo.window.y * 0.5)) / max(ubo.window.y, 1e-6), 0.0, 1.0);
+        var density = n * ubo.params.z;
         density = max(density - ubo.tf.x, 0.0);
 
         if (density > 0.0) {

@@ -235,6 +235,8 @@ public:
     void setVolumeExtinction(float v) { if (volumeRenderer) volumeRenderer->setExtinction(v); }
     void setVolumeThreshold(float v)  { if (volumeRenderer) volumeRenderer->setThreshold(v); }
     void setVolumeColorMix(float v)   { if (volumeRenderer) volumeRenderer->setColorMix(v); }
+    void setVolumeWinCenter(float v)  { if (volumeRenderer) volumeRenderer->setWindowCenter(v); }
+    void setVolumeWinWidth(float v)   { if (volumeRenderer) volumeRenderer->setWindowWidth(v); }
     void setVolumePreset(int p)       { if (volumeRenderer) volumeRenderer->setTFPreset(p); }
     int  getVolumePreset() const      { return volumeRenderer ? volumeRenderer->getTFPreset() : 0; }
     // Colors come from JS as packed 0xRRGGBB ints (single-arg, queue-friendly).

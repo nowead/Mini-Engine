@@ -2,6 +2,8 @@
 #include "src/utils/Logger.hpp"
 #include "src/utils/FileUtils.hpp"
 
+#include <glm/gtc/packing.hpp>   // packHalf1x16 (R8 -> R16Float upload conversion)
+
 #include <cmath>
 #include <cstring>
 
@@ -100,10 +102,19 @@ bool VolumeRenderer::uploadVolume(const std::vector<uint8_t>& density,
     }
     m_volW = w; m_volH = h; m_volD = d;
 
-    // R8Unorm: 1 byte per voxel. WebGPU requires bytesPerRow to be a 256-byte
-    // multiple, so pad each row (and the staging buffer) on that backend; Vulkan
-    // packs tightly. (See CLAUDE.md: copyBufferToTexture bytesPerRow semantics.)
-    const uint32_t tightBytesPerRow = w;          // width * 1 byte
+    // Store density as R16Float (2 bytes/voxel). The source is R8 [0,255]; convert
+    // to normalized [0,1] half-floats. R16Float is the dual-backend choice -- core
+    // and filterable on both Vulkan and WebGPU (16-bit unorm is NOT WebGPU core).
+    // This is the format foundation for real 16-bit CT/MRI intensity (M1).
+    std::vector<uint16_t> halfData(static_cast<size_t>(w) * h * d);
+    for (size_t i = 0; i < halfData.size(); ++i)
+        halfData[i] = glm::packHalf1x16(density[i] / 255.0f);
+    const auto* halfBytes = reinterpret_cast<const uint8_t*>(halfData.data());
+
+    // WebGPU requires bytesPerRow to be a 256-byte multiple, so pad each row (and
+    // the staging buffer) on that backend; Vulkan packs tightly. (See CLAUDE.md:
+    // copyBufferToTexture bytesPerRow semantics.)
+    const uint32_t tightBytesPerRow = w * 2;      // width * 2 bytes (R16Float)
 #ifdef __EMSCRIPTEN__
     const uint32_t paddedBytesPerRow = (tightBytesPerRow + 255u) & ~255u;
 #else
@@ -125,12 +136,12 @@ bool VolumeRenderer::uploadVolume(const std::vector<uint8_t>& density,
             for (uint32_t y = 0; y < h; ++y) {
                 const uint64_t row = static_cast<uint64_t>(z) * h + y;
                 std::memcpy(mapped + row * paddedBytesPerRow,
-                            density.data() + row * tightBytesPerRow,
+                            halfBytes + row * tightBytesPerRow,
                             tightBytesPerRow);
             }
         }
 #else
-        std::memcpy(mapped, density.data(), stagingSize);
+        std::memcpy(mapped, halfBytes, stagingSize);
 #endif
         staging->unmap();
     }
@@ -138,7 +149,7 @@ bool VolumeRenderer::uploadVolume(const std::vector<uint8_t>& density,
     rhi::TextureDesc texDesc{};
     texDesc.size          = rhi::Extent3D{w, h, d};
     texDesc.dimension     = rhi::TextureDimension::Texture3D;
-    texDesc.format        = rhi::TextureFormat::R8Unorm;
+    texDesc.format        = rhi::TextureFormat::R16Float;
     texDesc.mipLevelCount = 1;
     texDesc.sampleCount   = 1;
     texDesc.usage         = rhi::TextureUsage::CopyDst | rhi::TextureUsage::Sampled;
@@ -180,7 +191,7 @@ bool VolumeRenderer::uploadVolume(const std::vector<uint8_t>& density,
 
     // 3D view.
     rhi::TextureViewDesc viewDesc{};
-    viewDesc.format          = rhi::TextureFormat::R8Unorm;
+    viewDesc.format          = rhi::TextureFormat::R16Float;
     viewDesc.dimension       = rhi::TextureViewDimension::View3D;
     viewDesc.baseMipLevel    = 0;
     viewDesc.mipLevelCount   = 1;
@@ -266,7 +277,7 @@ bool VolumeRenderer::initialize(uint32_t resolution) {
     }
 
     m_initialized = true;
-    LOG_INFO("VolumeRenderer") << "initialized: " << resolution << "^3 R8 density volume";
+    LOG_INFO("VolumeRenderer") << "initialized: " << resolution << "^3 R16Float density volume";
     return true;
 }
 
@@ -290,7 +301,8 @@ bool VolumeRenderer::loadFromData(const std::vector<uint8_t>& density,
 // Phase 7-3: ray-march pipeline + bind groups + UBO update
 // ---------------------------------------------------------------------------
 
-bool VolumeRenderer::createPipeline(rhi::RHITextureView* depthView, void* nativeRenderPass) {
+bool VolumeRenderer::createPipeline(rhi::RHITextureView* depthView, void* nativeRenderPass,
+                                    rhi::TextureFormat colorFormat) {
 #ifdef __EMSCRIPTEN__
     {
         auto raw = FileUtils::readFile("shaders/volume_march.wgsl");
@@ -363,9 +375,11 @@ bool VolumeRenderer::createPipeline(rhi::RHITextureView* depthView, void* native
     pipelineDesc.primitive.cullMode  = rhi::CullMode::None;
     pipelineDesc.primitive.frontFace = rhi::FrontFace::CounterClockwise;
 
-    // HDR target with PREMULTIPLIED-alpha over blending (shader outputs premult rgb).
+    // Target with PREMULTIPLIED-alpha over blending (shader outputs premult rgb).
+    // Format is caller-chosen: RGBA16Float when compositing into the main HDR
+    // scene, or the swapchain format for a standalone viewer rendering directly.
     rhi::ColorTargetState ct;
-    ct.format = rhi::TextureFormat::RGBA16Float;
+    ct.format = colorFormat;
     ct.blend.blendEnabled   = true;
     ct.blend.srcColorFactor = rhi::BlendFactor::One;
     ct.blend.dstColorFactor = rhi::BlendFactor::OneMinusSrcAlpha;
@@ -559,10 +573,12 @@ void VolumeRenderer::updateUBO(uint32_t frameIndex, const glm::mat4& invView,
     ubo.aabbMin   = glm::vec4(m_aabbMin, 0.0f);
     ubo.aabbMax   = glm::vec4(m_aabbMax, 0.0f);
     ubo.params    = glm::vec4(m_stepSize, m_extinction, m_densityScale, m_maxSteps);
-    const float useLUT = (m_tfPreset == TFPreset::Custom) ? 0.0f : 1.0f;
-    ubo.tf        = glm::vec4(m_tfThreshold, m_tfColorMix, useLUT, 0.0f);
+    const float useLUT   = (m_tfPreset == TFPreset::Custom) ? 0.0f : 1.0f;
+    const float useDepth = m_useDepthOcclusion ? 1.0f : 0.0f;
+    ubo.tf        = glm::vec4(m_tfThreshold, m_tfColorMix, useLUT, useDepth);
     ubo.lowColor  = glm::vec4(m_lowColor, 1.0f);
     ubo.highColor = glm::vec4(m_highColor, 1.0f);
+    ubo.window    = glm::vec4(m_windowCenter, m_windowWidth, 0.0f, 0.0f);
 
     m_uniformBuffers[fi]->write(&ubo, sizeof(VolumeUBO));
 }
