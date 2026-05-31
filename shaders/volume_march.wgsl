@@ -106,6 +106,9 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
         let uvw = (wp - ubo.aabbMin.xyz) / boxSize;     // [0,1]^3
 
         // Empty-space skipping: jump past macrocells whose max windowed density is 0.
+        // Note: this checks per sample (not per cell-entry). The per-cell-entry
+        // variant added warp divergence that outweighed the saved storage reads
+        // (which were cache-coherent anyway).
         if (ubo.occ.w > 0.5) {
             let gd    = ubo.occ.xyz;
             let cellf = floor(clamp(uvw, vec3<f32>(0.0), vec3<f32>(0.999999)) * gd);

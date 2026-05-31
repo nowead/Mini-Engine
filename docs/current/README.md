@@ -18,13 +18,16 @@ NIfTI 로더 + float 강도 경로 + 임상 윈도우 프리셋.
 **M2 (시네마틱 품질) 완료** (2026-05-29): gradient 셰이딩 + 볼류메트릭 소프트
 섀도우(양 백엔드, 토글).
 **M3-1 (empty-space skipping) 완료** (2026-05-29): 컴퓨트 min/max occupancy
-그리드 + 마칭 셀 스킵(양 백엔드). FPS 측정(네이티브 뷰어).
+그리드 + 마칭 셀 스킵(양 백엔드).
 **독립 WASM 볼륨 뷰어 완료** (2026-05-29): 브라우저에서 볼륨만 풀스크린 렌더하는
 별도 실행파일(`volume_viewer_wasm`) — M1/M2/M3 전부 + HTML 컨트롤. 랜딩 인덱스에서
-클릭 진입. M1의 "브라우저에서도 실 볼륨" 격차 해소.
+클릭 진입.
+**M3-2 측정 완료** (2026-05-31): sparse 256³ 합성에서 skip +3~5%. 정직히 modest —
+이 워크로드는 셰이딩 비용 우세. per-cell-entry GPU 최적화 시도는 warp divergence로
+회귀(되돌림). 부수 산출물: VMA staging pool oversize 픽스, 합성 생성기 구조 크기 인자.
 
-**다음 후보**: M3-2 측정 심화(대용량 볼륨 60fps) / M3-3 bricking ·
-M1 후속(DICOM 로더) · M4(path-traced 산란).
+**다음 후보**: **DICOM 로더**(실 CT 데이터로 진짜 sparse 패턴 + 큰 볼륨 측정의 의미를
+얻음) · M4(path-traced 산란) · M3-3(bricking).
 
 **선행 완료**: 볼륨 렌더링 기초(3D 텍스처 + 레이마칭, Vulkan + WebGPU) ·
 TF 프리셋 · 독립 뷰어(네이티브 `volume_viewer` + 브라우저 `volume_viewer_wasm`).

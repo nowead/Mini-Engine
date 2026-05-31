@@ -149,9 +149,25 @@ non-uniform control flow는 `textureSampleLevel`로(현 셰이더 관례 유지)
 **목표**: "브라우저에서 대용량 실데이터를 60fps로" 주장의 근거. WebGPU 컴퓨트가
 차별화를 만드는 핵심 마일스톤.
 
-**상태 (2026-05-29)**: ~~M3-1 컴퓨트 occupancy 그리드 + 마칭 스킵~~ ✅ (`b6fbaed`,
-양 백엔드, 셀 8³, storage buffer). M3-2는 네이티브 뷰어 FPS 표시로 부분 착수 —
-**대용량 볼륨(512³급) 60fps 측정은 미완**. M3-3(bricking)은 별도 결정.
+**상태 (2026-05-31)**: ~~M3-1 컴퓨트 occupancy 그리드 + 마칭 스킵~~ ✅ (`b6fbaed`,
+양 백엔드, 셀 8³, storage buffer). **M3-2 측정 결과**:
+
+- 합성 sparse CT 256³(99% 공기), 기본 줌(구조 작게): skip ON 600 / OFF 580 — +3%
+- 합성 sparse CT 256³, 줌인(구조 화면 채움): skip ON 112 / OFF 107 — +5%
+- 합성 dense 256³(60% 공기), 줌인: skip ON 107 / OFF 102 — +5%
+
+이 워크로드(Lambert+shadow 셰이딩 우세, 베이스라인 빠름)에서 occupancy의 절감
+여지는 본질적으로 좁음. 시도한 **per-cell-entry 최적화는 GPU에서 warp divergence로
+회귀**(CPU 직관과 반대) — 원래 per-sample 체크는 cache가 read를 무료화해 더 빠름.
+
+**부수 산출물(M3-2 작업 중 발견)**:
+
+- VMA staging pool oversize 픽스 (16MB 블록 한도 → 32MB 256³ 업로드 OOM 해소).
+- `make_synthetic_nii.py`에 구조 크기 인자 추가(sparse CT 시뮬레이션).
+
+**남은 헤드라인 ("1GB 60fps")**: 진짜 실 CT(DICOM) + 더 큰 볼륨에서 측정해야
+의미 — 현재 작은 합성에선 fixed overhead가 frame time의 대부분. **M1 후속 DICOM
+로더가 다음 단계로 자연스러움**. M3-3(bricking)은 그 뒤 재판단.
 
 **작업**:
 
@@ -229,26 +245,31 @@ CAREER_ROADMAP의 "수치화가 전부다" 원칙 계승. 마일스톤별 정량
 
 ## 5. 진행 상태 · 결정 기록 · 다음 진입점
 
-**완료 (2026-05-29, 한 세션)**:
+**완료**:
 
 - M1 (R16Float 16비트 · window/level · NIfTI 로더 + float 강도 + 임상 윈도우 프리셋)
 - M2 (gradient 셰이딩 + 볼류메트릭 소프트 섀도우)
 - M3-1 (컴퓨트 occupancy 그리드 + 마칭 empty-space skipping)
 - 독립 WASM 볼륨 뷰어(`volume_viewer_wasm`) — 브라우저에서 볼륨만 풀스크린.
   네이티브 `volume_viewer`와 한 쌍. 랜딩 인덱스에서 클릭 진입.
+- M3-2 측정 (합성 sparse 256³, skip +3~5%, 부수: VMA staging oversize 픽스 +
+  생성기 구조 인자)
 
 **결정 기록**:
 
-- *실파일 포맷*: **NIfTI 우선으로 결정·완료**(`d4f9659`). DICOM은 후속 후보.
+- *실파일 포맷*: **NIfTI 우선으로 결정·완료**(`d4f9659`). DICOM은 다음 단계로.
 - *WASM 데모 분리*: **별도 실행파일로 결정·완료**(`7089d84`). 쇼케이스에 묻히던
   볼륨 가시성 문제 해소. (디버깅: ASYNCIFY 재진입 가드 + DOM 핸들러의 직접 wasm
   호출 제거 — 데이터 범위를 `Module._dataMin/Max`로 push.)
+- *Skip 일반화 시도*: **per-cell-entry 변형은 GPU warp divergence로 회귀 → 되돌림**
+  (2026-05-31). CPU 직관과 반대 — 원본 per-sample 체크는 cache가 read를 무료화해
+  더 빠름. 셰이더 주석에 기록.
 
-**남은 결정 / 다음 후보** (우선순위는 다음 세션에 재판단):
+**다음 진입 작업**: **DICOM 로더** — 멀티슬라이스 시리즈 → HU, 실제 병원 데이터
+수용. M3-2의 "1GB 60fps" 류 헤드라인 측정이 진짜 의미를 갖는 워크로드를 제공.
 
-- **M3-2 측정 심화** — 대용량 볼륨(512³급 또는 실 CT)으로 skip on/off 60fps
-  실증. 현재 합성 96³는 너무 가벼워 occupancy의 진짜 가치가 안 드러남.
-- **DICOM 로더** (M1 후속) — 멀티슬라이스 시리즈 → HU. 실제 병원 데이터 수용.
+**남은 후보**:
+
 - **M4 path-traced 산란** — 진짜 시네마틱 VRT, 가장 강한 차별화이자 스트레치.
 - **M3-3 bricking** — VRAM 초과 볼륨 페이징("1GB+" 주장의 본체), 작업량 큼.
 

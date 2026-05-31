@@ -41,13 +41,17 @@ def main():
         w, h, d = int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
     else:
         w, h, d = 96, 96, 48
+    # Optional structure size: fraction of the smallest half-extent. Defaults match
+    # the original dense blob; smaller values produce a sparse CT-like volume (patient
+    # body in a mostly-empty scanner) where empty-space skipping has a real payoff.
+    tissue_frac = float(sys.argv[5]) if len(sys.argv) >= 6 else 0.85
+    bone_frac   = float(sys.argv[6]) if len(sys.argv) >= 7 else 0.35
     sx, sy, sz = 1.0, 1.0, 2.5   # anisotropic z to test the aspect-correct AABB
 
     cx, cy, cz = (w - 1) / 2.0, (h - 1) / 2.0, (d - 1) / 2.0
-    # Radii in normalized space (fraction of the smallest half-extent).
     half = min(cx, cy, cz)
-    r_tissue = 0.85 * half
-    r_bone = 0.35 * half
+    r_tissue = tissue_frac * half
+    r_bone   = bone_frac   * half
 
     voxels = bytearray(w * h * d * 2)
     i = 0

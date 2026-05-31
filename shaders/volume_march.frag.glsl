@@ -99,6 +99,9 @@ void main() {
 
         // Empty-space skipping: if this macrocell's max windowed density is zero
         // (air), jump straight to the cell exit instead of stepping through it.
+        // Note: this checks per sample (not per cell-entry). The per-cell-entry
+        // variant added warp divergence that outweighed the saved storage reads
+        // (which were cache-coherent anyway).
         if (ubo.occ.w > 0.5) {
             vec3  gd    = ubo.occ.xyz;
             vec3  cellf = floor(clamp(uvw, vec3(0.0), vec3(0.999999)) * gd);
