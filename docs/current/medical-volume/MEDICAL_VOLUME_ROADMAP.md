@@ -256,6 +256,10 @@ CAREER_ROADMAP의 "수치화가 전부다" 원칙 계승. 마일스톤별 정량
   생성기 구조 인자)
 - **DICOM 로더** (Explicit VR LE 단일 시리즈, int16 CT/MR; viewer 디렉토리 dispatch).
   `Volume3D` 공용 구조체로 NIfTI/DICOM 동일 엔진 경로. 합성 DICOM 생성기 추가.
+- **M4 v0 path-traced 산란** (Woodcock 자유경로 + Henyey-Greenstein 위상함수 +
+  single-light NEE + inline SPP 평균). 두 번째 fragment 파이프라인을 같은 bind group
+  layout으로 추가. **누적 버퍼는 v1로 보류** — 매 프레임 독립 샘플이라 노이즈 항상
+  보임, 정지 카메라 progressive convergence는 다음.
 
 **결정 기록**:
 
@@ -267,9 +271,10 @@ CAREER_ROADMAP의 "수치화가 전부다" 원칙 계승. 마일스톤별 정량
   (2026-05-31). CPU 직관과 반대 — 원본 per-sample 체크는 cache가 read를 무료화해
   더 빠름. 셰이더 주석에 기록.
 
-**다음 진입 작업**: **M4 path-traced 산란** — 컴퓨트 볼류메트릭 path tracing
-(delta/Woodcock), 카메라 정지 시 progressive 누적. 진짜 시네마틱 VRT(다중 산란).
-TAA 인프라(보유) 활용 가능. 차별화 명제의 정점.
+**다음 진입 작업**: **M4 v1 — 누적 버퍼로 progressive convergence**. 정지 카메라
+에서 매 프레임 샘플을 history 텍스처에 누적, 카메라/파라미터 변경 시 reset.
+TAA 인프라(이미 보유)와 같은 ping-pong 패턴. v0의 노이즈가 사라지고 진짜 시네마틱
+정지 이미지가 됨.
 
 **남은 후보**:
 

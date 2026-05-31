@@ -28,9 +28,12 @@ NIfTI 로더 + float 강도 경로 + 임상 윈도우 프리셋.
 **DICOM 로더 완료** (2026-05-31): Explicit VR LE 단일 시리즈(int16 CT/MR) 파서 +
 viewer 디렉토리 dispatch. `Volume3D` 공용 구조체로 NIfTI/DICOM 동일 경로. 합성
 DICOM 생성기로 NIfTI와 크로스 검증(동일 입력 → 동일 출력).
+**M4 v0 path-traced 산란 완료** (2026-05-31): Woodcock 자유경로 + Henyey-Greenstein
+위상함수 + single-light NEE + inline SPP 평균(누적 버퍼 없음, v1로 보류). 두 번째
+파이프라인을 march와 같은 bind group layout으로 추가 → 런타임 모드 스위치. 양 백엔드.
 
-**다음 후보**: **M4 path-traced 산란**(진짜 시네마틱 VRT, 가장 강한 차별화) ·
-M3-3(bricking) · 실 임상 CT 데이터로 측정 헤드라인.
+**다음 후보**: M4 v1(누적 버퍼로 progressive convergence) · M3-3(bricking) ·
+실 임상 CT(공개 데이터셋)로 측정 헤드라인.
 
 **선행 완료**: 볼륨 렌더링 기초(3D 텍스처 + 레이마칭, Vulkan + WebGPU) ·
 TF 프리셋 · 독립 뷰어(네이티브 `volume_viewer` + 브라우저 `volume_viewer_wasm`).
