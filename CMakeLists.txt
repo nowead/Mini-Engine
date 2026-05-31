@@ -565,6 +565,14 @@ if(NOT EMSCRIPTEN)
         DEPENDS ${BUILDING_SHADER_DIR}/volume_occupancy.comp.glsl
         COMMENT "Compiling volume_occupancy.comp.glsl -> SPIR-V"
     )
+    add_custom_command(
+        OUTPUT ${BUILDING_SHADER_DIR}/volume_pathtrace.frag.spv
+        COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=fragment
+                -o ${BUILDING_SHADER_DIR}/volume_pathtrace.frag.spv
+                ${BUILDING_SHADER_DIR}/volume_pathtrace.frag.glsl
+        DEPENDS ${BUILDING_SHADER_DIR}/volume_pathtrace.frag.glsl
+        COMMENT "Compiling volume_pathtrace.frag.glsl -> SPIR-V"
+    )
 
     add_custom_target(building_shaders DEPENDS
         ${BUILDING_SHADER_DIR}/building.vert.spv
@@ -591,6 +599,7 @@ if(NOT EMSCRIPTEN)
         ${BUILDING_SHADER_DIR}/volume_march.vert.spv
         ${BUILDING_SHADER_DIR}/volume_march.frag.spv
         ${BUILDING_SHADER_DIR}/volume_occupancy.comp.spv
+        ${BUILDING_SHADER_DIR}/volume_pathtrace.frag.spv
     )
 
     add_dependencies(MiniEngine building_shaders)
@@ -715,6 +724,7 @@ else()
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/taa_resolve.wgsl
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/volume_march.wgsl
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/volume_occupancy.comp.wgsl
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/volume_pathtrace.wgsl
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/postprocess.wgsl
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shadow.wgsl
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/skybox.wgsl
@@ -823,6 +833,7 @@ else()
     set(VV_WGSL_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/volume_march.wgsl
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/volume_occupancy.comp.wgsl
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/volume_pathtrace.wgsl
     )
     add_custom_command(TARGET volume_viewer_wasm PRE_LINK
         COMMAND ${CMAKE_COMMAND} -E make_directory ${VV_SHADER_DIR}

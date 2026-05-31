@@ -83,6 +83,24 @@
             <input type="range" id="shadowS" aria-label="Shadow strength" min="0" max="4" step="0.05" value="1">
             <span class="val" id="shadowSv">1.00</span></div>
 
+        <div class="sec">Render mode (M4)</div>
+        <div class="row">
+            <span class="lbl">Mode</span>
+            <select id="mode" aria-label="Render mode">
+                <option value="0" selected>Lambert + shadow</option>
+                <option value="1">Path-traced</option>
+            </select>
+        </div>
+        <div class="row"><span class="lbl">SPP</span>
+            <input type="range" id="spp" aria-label="Samples per pixel" min="1" max="32" step="1" value="8" disabled>
+            <span class="val" id="sppv">8</span></div>
+        <div class="row"><span class="lbl">Aniso g</span>
+            <input type="range" id="aniso" aria-label="Phase-function anisotropy" min="-0.9" max="0.9" step="0.05" value="0.4" disabled>
+            <span class="val" id="anisov">0.40</span></div>
+        <div class="row"><span class="lbl">Bounces</span>
+            <input type="range" id="bounces" aria-label="Max scattering bounces" min="0" max="4" step="1" value="2" disabled>
+            <span class="val" id="bouncesv">2</span></div>
+
         <div class="sec">Performance</div>
         <label class="tog"><input type="checkbox" id="skip" checked> Empty-space skip</label>
     </div>
@@ -132,6 +150,19 @@
             document.getElementById('shade').addEventListener('change',  function() { _queue('setShading', this.checked); });
             document.getElementById('shadow').addEventListener('change', function() { _queue('setShadow', this.checked); });
             document.getElementById('skip').addEventListener('change',   function() { _queue('setSkip', this.checked); });
+
+            // Render mode + path-trace controls (M4).
+            document.getElementById('mode').addEventListener('change', function() {
+                var m = parseInt(this.value, 10);
+                _queue('setRenderMode', m);
+                var pt = (m === 1);
+                document.getElementById('spp').disabled     = !pt;
+                document.getElementById('aniso').disabled   = !pt;
+                document.getElementById('bounces').disabled = !pt;
+            });
+            bindRange('spp',     'sppv',     0, 'setSpp');
+            bindRange('aniso',   'anisov',   2, 'setAniso');
+            bindRange('bounces', 'bouncesv', 0, 'setBounces');
 
             document.getElementById('wFull').addEventListener('click', function() {
                 // Use the cached data range (pushed from wasm at load) -- never call

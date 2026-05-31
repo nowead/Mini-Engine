@@ -57,7 +57,10 @@ public:
         glm::vec4 shade;       // x=ambient, y=diffuse, z=gradEps (texture-space step), w spare
         glm::vec4 shadow;      // x=enable(0/1), y=stepSize(world), z=maxSteps, w=strength
         glm::vec4 occ;         // xyz = occupancy grid dims (cells), w = skipEnable (0/1)
+        glm::vec4 pathtrace;   // x=spp, y=HG anisotropy g, z=frame seed (uint bits), w=max bounces
     };
+
+    enum class RenderMode { Lambert = 0, PathTrace = 1 };
 
     // Create the 3D texture + sampler and upload a procedural density volume.
     // Returns false on failure (logged).
@@ -159,6 +162,15 @@ public:
     // performance comparison.
     void setOccupancyEnabled(bool e) { m_occEnabled = e; }
     bool isOccupancyEnabled() const  { return m_occEnabled; }
+
+    // Path-traced volumetric rendering (M4 v0). A second pipeline runs alongside
+    // the absorption-only march; the caller picks via setRenderMode. The two
+    // pipelines share bind groups (same layout); only the fragment program differs.
+    void setRenderMode(RenderMode m) { m_renderMode = m; }
+    RenderMode getRenderMode() const { return m_renderMode; }
+    void setPathtraceSpp(int s)          { m_pathSpp = s; }
+    void setPathtraceAnisotropy(float g) { m_pathG = g; }
+    void setPathtraceBounces(int b)      { m_pathBounces = b; }
     // Granular setters (WebGPU/JS bindings, one per HTML control).
     void setDensityScale(float v) { m_densityScale = v; }
     void setExtinction(float v)   { m_extinction   = v; }
@@ -193,7 +205,10 @@ public:
 
     rhi::RHITextureView*    getVolumeView() const { return m_volumeView.get(); }
     rhi::RHISampler*        getVolumeSampler() const { return m_sampler.get(); }
-    rhi::RHIRenderPipeline* getPipeline() const { return m_pipeline.get(); }
+    rhi::RHIRenderPipeline* getPipeline() const {
+        return (m_renderMode == RenderMode::PathTrace && m_pathPipeline)
+            ? m_pathPipeline.get() : m_pipeline.get();
+    }
     rhi::RHIBindGroup*      getBindGroup(uint32_t frame) const { return m_bindGroups[frame % kFramesInFlight].get(); }
     uint32_t                getResolution() const { return m_resolution; }
 
@@ -242,9 +257,11 @@ private:
     // Phase 7-3: ray-march pipeline + per-frame UBO/bind groups.
     std::unique_ptr<rhi::RHIShader>          m_vertexShader;
     std::unique_ptr<rhi::RHIShader>          m_fragmentShader;
+    std::unique_ptr<rhi::RHIShader>          m_pathFragmentShader;   // M4: pathtracer fragment
     std::unique_ptr<rhi::RHIBindGroupLayout> m_bindGroupLayout;
     std::unique_ptr<rhi::RHIPipelineLayout>  m_pipelineLayout;
-    std::unique_ptr<rhi::RHIRenderPipeline>  m_pipeline;
+    std::unique_ptr<rhi::RHIRenderPipeline>  m_pipeline;             // Lambert + march
+    std::unique_ptr<rhi::RHIRenderPipeline>  m_pathPipeline;         // M4: volumetric path tracer
     std::array<std::unique_ptr<rhi::RHIBuffer>,    kFramesInFlight> m_uniformBuffers{};
     std::array<std::unique_ptr<rhi::RHIBindGroup>, kFramesInFlight> m_bindGroups{};
 
@@ -282,6 +299,13 @@ private:
     TFPreset m_tfPreset = TFPreset::Custom;
     bool     m_tfDirty  = false;   // request LUT rebuild on next applyPendingTFUpdate
     bool     m_useDepthOcclusion = true;  // off for standalone viewer (no geometry)
+
+    // M4 v0 path tracer state.
+    RenderMode m_renderMode    = RenderMode::Lambert;
+    int        m_pathSpp       = 8;       // samples per pixel per frame (inline avg)
+    float      m_pathG         = 0.4f;    // Henyey-Greenstein anisotropy (forward biological tissue)
+    int        m_pathBounces   = 2;       // max scattering bounces
+    uint32_t   m_frameSeed     = 0;       // bumped each frame so noise decorrelates
 };
 
 } // namespace rendering

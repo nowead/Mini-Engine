@@ -65,6 +65,12 @@ public:
     void setShadow(bool on)      { m_volume->setShadowEnabled(on); }
     void setShadowStrength(float v) { m_volume->setShadowStrength(v); }
     void setSkip(bool on)        { m_volume->setOccupancyEnabled(on); }
+    void setRenderMode(int m)    { m_volume->setRenderMode(
+        m == 1 ? rendering::VolumeRenderer::RenderMode::PathTrace
+               : rendering::VolumeRenderer::RenderMode::Lambert); }
+    void setSpp(int s)           { m_volume->setPathtraceSpp(s); }
+    void setAniso(float g)       { m_volume->setPathtraceAnisotropy(g); }
+    void setBounces(int b)       { m_volume->setPathtraceBounces(b); }
     float dataMin() const        { return m_volume->getDataMin(); }
     float dataMax() const        { return m_volume->getDataMax(); }
 
@@ -256,6 +262,10 @@ EMSCRIPTEN_BINDINGS(volume_viewer) {
     emscripten::function("setShadow",         +[](bool on)   { if (g_viewer) g_viewer->setShadow(on); });
     emscripten::function("setShadowStrength", +[](float v)   { if (g_viewer) g_viewer->setShadowStrength(v); });
     emscripten::function("setSkip",           +[](bool on)   { if (g_viewer) g_viewer->setSkip(on); });
+    emscripten::function("setRenderMode",     +[](int m)     { if (g_viewer) g_viewer->setRenderMode(m); });
+    emscripten::function("setSpp",            +[](int s)     { if (g_viewer) g_viewer->setSpp(s); });
+    emscripten::function("setAniso",          +[](float g)   { if (g_viewer) g_viewer->setAniso(g); });
+    emscripten::function("setBounces",        +[](int b)     { if (g_viewer) g_viewer->setBounces(b); });
     emscripten::function("dataMin",           +[]() -> float { return g_viewer ? g_viewer->dataMin() : 0.0f; });
     emscripten::function("dataMax",           +[]() -> float { return g_viewer ? g_viewer->dataMax() : 0.0f; });
 }

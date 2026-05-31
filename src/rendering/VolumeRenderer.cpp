@@ -569,6 +569,40 @@ bool VolumeRenderer::createPipeline(rhi::RHITextureView* depthView, void* native
     m_pipeline = m_device->createRenderPipeline(pipelineDesc);
     if (!m_pipeline) { LOG_ERROR("VolumeRenderer") << "pipeline create failed"; return false; }
 
+    // M4 v0: second pipeline -- volumetric path tracer. Shares everything with the
+    // march pipeline except the fragment shader, so we just reload that and build
+    // a sibling pipeline. Missing shader degrades gracefully (path-trace toggle
+    // simply falls back to the march pipeline via getPipeline()'s null check).
+#ifdef __EMSCRIPTEN__
+    {
+        auto raw = FileUtils::readFile("shaders/volume_pathtrace.wgsl");
+        if (!raw.empty()) {
+            std::vector<uint8_t> code(raw.begin(), raw.end());
+            rhi::ShaderSource fsPT(rhi::ShaderLanguage::WGSL, code, rhi::ShaderStage::Fragment, "fs_main");
+            m_pathFragmentShader = m_device->createShader(rhi::ShaderDesc(fsPT, "VolumePathtraceFS"));
+        }
+    }
+#else
+    {
+        auto raw = FileUtils::readFile("shaders/volume_pathtrace.frag.spv");
+        if (!raw.empty()) {
+            std::vector<uint8_t> code(raw.begin(), raw.end());
+            rhi::ShaderSource fsPT(rhi::ShaderLanguage::SPIRV, code, rhi::ShaderStage::Fragment, "main");
+            m_pathFragmentShader = m_device->createShader(rhi::ShaderDesc(fsPT, "VolumePathtraceFS"));
+        }
+    }
+#endif
+    if (m_pathFragmentShader) {
+        rhi::RenderPipelineDesc ptDesc = pipelineDesc;
+        ptDesc.label          = "VolumePathtracePipeline";
+        ptDesc.fragmentShader = m_pathFragmentShader.get();
+        m_pathPipeline = m_device->createRenderPipeline(ptDesc);
+        if (!m_pathPipeline)
+            LOG_WARN("VolumeRenderer") << "pathtrace pipeline create failed -- only Lambert mode available";
+    } else {
+        LOG_WARN("VolumeRenderer") << "pathtrace shader missing -- only Lambert mode available";
+    }
+
     return createBindGroups(depthView);
 }
 
@@ -768,6 +802,14 @@ void VolumeRenderer::updateUBO(uint32_t frameIndex, const glm::mat4& invView,
     const float occEnable = (m_occEnabled && m_occReady) ? 1.0f : 0.0f;
     ubo.occ = glm::vec4(static_cast<float>(m_gridW), static_cast<float>(m_gridH),
                         static_cast<float>(m_gridD), occEnable);
+
+    // M4: pack the path-tracer params + bump the frame seed so the PRNG decorrelates
+    // each frame (without an accumulation buffer this is what hides the noise).
+    ++m_frameSeed;
+    float seedAsFloat;
+    std::memcpy(&seedAsFloat, &m_frameSeed, sizeof(float));
+    ubo.pathtrace = glm::vec4(static_cast<float>(m_pathSpp), m_pathG,
+                              seedAsFloat, static_cast<float>(m_pathBounces));
 
     m_uniformBuffers[fi]->write(&ubo, sizeof(VolumeUBO));
 }

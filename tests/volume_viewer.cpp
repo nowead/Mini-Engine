@@ -78,6 +78,10 @@ private:
     bool  m_shadow    = true;                       // volumetric self-shadowing
     float m_shadowStrength = 1.0f;
     bool  m_occSkip   = true;                        // empty-space skipping (M3)
+    int   m_renderMode = 0;                          // 0 = Lambert, 1 = path-traced (M4)
+    int   m_pathSpp    = 8;
+    float m_pathG      = 0.4f;
+    int   m_pathBounces = 2;
     float m_low[3]    = { 0.35f, 0.45f, 0.75f };
     float m_high[3]   = { 1.00f, 0.95f, 0.88f };
 
@@ -275,7 +279,7 @@ private:
         ImGui::Combo("TF preset", &m_preset, kPresets, IM_ARRAYSIZE(kPresets));
 
         ImGui::SeparatorText("Window / Level");
-        if (m_isNifti) {
+        if (m_isNifti || m_isDicom) {
             // Clinical HU window presets (data is in Hounsfield Units). Each maps a
             // tissue band into the displayed [0,1] range so the TF can color it.
             // 2x2 grid so all four fit the panel width (a single SameLine row
@@ -306,6 +310,15 @@ private:
         ImGui::BeginDisabled(!m_shadow);
         ImGui::SliderFloat("Shadow",  &m_shadowStrength, 0.0f, 4.0f, "%.2f");
         ImGui::EndDisabled();
+        ImGui::EndDisabled();
+
+        ImGui::SeparatorText("Render mode (M4)");
+        static const char* kModes[] = { "Lambert + shadow", "Path-traced" };
+        ImGui::Combo("Mode", &m_renderMode, kModes, IM_ARRAYSIZE(kModes));
+        ImGui::BeginDisabled(m_renderMode != 1);
+        ImGui::SliderInt("SPP",        &m_pathSpp,     1, 32);
+        ImGui::SliderFloat("Aniso (g)", &m_pathG,    -0.9f, 0.9f, "%.2f");
+        ImGui::SliderInt("Bounces",    &m_pathBounces, 0, 4);
         ImGui::EndDisabled();
 
         ImGui::SeparatorText("Performance");
@@ -342,6 +355,12 @@ private:
         m_volume->setShadowEnabled(m_shadow);
         m_volume->setShadowStrength(m_shadowStrength);
         m_volume->setOccupancyEnabled(m_occSkip);
+        m_volume->setRenderMode(m_renderMode == 1
+            ? rendering::VolumeRenderer::RenderMode::PathTrace
+            : rendering::VolumeRenderer::RenderMode::Lambert);
+        m_volume->setPathtraceSpp(m_pathSpp);
+        m_volume->setPathtraceAnisotropy(m_pathG);
+        m_volume->setPathtraceBounces(m_pathBounces);
         m_volume->setColors(glm::vec3(m_low[0], m_low[1], m_low[2]),
                             glm::vec3(m_high[0], m_high[1], m_high[2]));
     }

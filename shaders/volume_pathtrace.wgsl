@@ -1,0 +1,221 @@
+// M4 v0 -- volumetric path tracing (WebGPU). Mirrors volume_pathtrace.frag.glsl:
+// Woodcock free-flight + Henyey-Greenstein phase + single-light NEE + inline spp
+// averaging. Shares the volume_march bind-group layout so VolumeRenderer can
+// flip pipelines at runtime without rebuilding bind groups.
+
+struct VolumeUBO {
+    invView:   mat4x4<f32>,
+    invProj:   mat4x4<f32>,
+    cameraPos: vec4<f32>,
+    aabbMin:   vec4<f32>,
+    aabbMax:   vec4<f32>,
+    params:    vec4<f32>,
+    tf:        vec4<f32>,
+    lowColor:  vec4<f32>,
+    highColor: vec4<f32>,
+    window:    vec4<f32>,
+    light:     vec4<f32>,
+    shade:     vec4<f32>,
+    shadow:    vec4<f32>,
+    occ:       vec4<f32>,
+    pathtrace: vec4<f32>,   // x=spp, y=HG g, z=frame seed, w=maxBounces
+};
+
+@group(0) @binding(0) var<uniform> ubo: VolumeUBO;
+@group(0) @binding(1) var depthTex:      texture_depth_2d;
+@group(0) @binding(2) var volumeTex:     texture_3d<f32>;
+@group(0) @binding(3) var volumeSampler: sampler;
+@group(0) @binding(4) var tfLUT:         texture_2d<f32>;
+@group(0) @binding(5) var<storage, read> occCells: array<vec2<f32>>;
+
+const PI: f32 = 3.14159265359;
+
+struct VSOut { @builtin(position) position: vec4<f32> };
+
+@vertex
+fn vs_main(@builtin(vertex_index) vertIdx: u32) -> VSOut {
+    let uv = vec2<f32>(f32((vertIdx << 1u) & 2u), f32(vertIdx & 2u));
+    var out: VSOut;
+    out.position = vec4<f32>(uv * 2.0 - 1.0, 0.0, 1.0);
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+// PRNG
+// ---------------------------------------------------------------------------
+fn pcg(v: u32) -> u32 {
+    let state = v * 747796405u + 2891336453u;
+    let word  = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+fn rnd(seed: ptr<function, u32>) -> f32 {
+    *seed = pcg(*seed);
+    return f32(*seed) / 4294967296.0;
+}
+
+// ---------------------------------------------------------------------------
+// Henyey-Greenstein
+// ---------------------------------------------------------------------------
+fn hgPhase(cosTheta: f32, g: f32) -> f32 {
+    let denom = 1.0 + g * g - 2.0 * g * cosTheta;
+    return (1.0 - g * g) / (4.0 * PI * pow(max(denom, 1e-6), 1.5));
+}
+fn sampleHG(wi: vec3<f32>, g: f32, seed: ptr<function, u32>) -> vec3<f32> {
+    let u1 = rnd(seed);
+    let u2 = rnd(seed);
+    var cosTheta: f32;
+    if (abs(g) < 1e-3) {
+        cosTheta = 1.0 - 2.0 * u1;
+    } else {
+        let sqr = (1.0 - g * g) / (1.0 - g + 2.0 * g * u1);
+        cosTheta = (1.0 + g * g - sqr * sqr) / (2.0 * g);
+    }
+    cosTheta = clamp(cosTheta, -1.0, 1.0);
+    let sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
+    let phi = 2.0 * PI * u2;
+    let w  = wi;
+    let ax = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(w.x) > 0.1);
+    let u  = normalize(cross(ax, w));
+    let v  = cross(w, u);
+    return normalize(u * sinTheta * cos(phi) + v * sinTheta * sin(phi) + w * cosTheta);
+}
+
+// ---------------------------------------------------------------------------
+// Volume / TF helpers
+// ---------------------------------------------------------------------------
+fn sampleDensity(uvw: vec3<f32>) -> f32 {
+    let raw = textureSampleLevel(volumeTex, volumeSampler, uvw, 0.0).r;
+    let n   = clamp((raw - (ubo.window.x - ubo.window.y * 0.5)) /
+                    max(ubo.window.y, 1e-6), 0.0, 1.0);
+    return max(n * ubo.params.z - ubo.tf.x, 0.0);
+}
+fn sampleTF(density: f32) -> vec4<f32> {
+    if (ubo.tf.z > 0.5) {
+        return textureSampleLevel(tfLUT, volumeSampler,
+                                  vec2<f32>(clamp(density, 0.0, 1.0), 0.5), 0.0);
+    }
+    let c = mix(ubo.lowColor.rgb, ubo.highColor.rgb,
+                clamp(density * ubo.tf.y, 0.0, 1.0));
+    return vec4<f32>(c, clamp(density, 0.0, 1.0));
+}
+fn intersectAABB(ro: vec3<f32>, rd: vec3<f32>,
+                 bmin: vec3<f32>, bmax: vec3<f32>) -> vec2<f32> {
+    let invD = 1.0 / rd;
+    let t0 = (bmin - ro) * invD;
+    let t1 = (bmax - ro) * invD;
+    let ts = min(t0, t1);
+    let tb = max(t0, t1);
+    return vec2<f32>(max(max(ts.x, ts.y), ts.z), min(min(tb.x, tb.y), tb.z));
+}
+
+fn transmittance(p: vec3<f32>, L: vec3<f32>,
+                 bmin: vec3<f32>, bmax: vec3<f32>, boxSize: vec3<f32>,
+                 sigmaMax: f32, seed: ptr<function, u32>) -> f32 {
+    let hit = intersectAABB(p, L, bmin, bmax);
+    let tFar = hit.y;
+    if (tFar <= 0.0) { return 1.0; }
+    var t: f32 = 0.0;
+    for (var i = 0; i < 64; i = i + 1) {
+        t = t + (-log(max(1.0 - rnd(seed), 1e-6)) / sigmaMax);
+        if (t >= tFar) { return 1.0; }
+        let q = p + L * t;
+        let uvw = (q - bmin) / boxSize;
+        let sigma_t = sampleDensity(uvw) * ubo.params.y;
+        if (rnd(seed) < sigma_t / sigmaMax) { return 0.0; }
+    }
+    return 1.0;
+}
+
+fn tracePath(ro_in: vec3<f32>, rd_in: vec3<f32>,
+             bmin: vec3<f32>, bmax: vec3<f32>,
+             sigmaMax: f32, seed: ptr<function, u32>) -> vec3<f32> {
+    var hit = intersectAABB(ro_in, rd_in, bmin, bmax);
+    let tNear = max(hit.x, 0.0);
+    let tFar  = hit.y;
+    if (tNear >= tFar) { return vec3<f32>(0.0); }
+
+    let boxSize = bmax - bmin;
+    var ro = ro_in + rd_in * tNear;
+    var rd = rd_in;
+    var remaining = tFar - tNear;
+
+    var result     = vec3<f32>(0.0);
+    var throughput = vec3<f32>(1.0);
+    let L          = normalize(ubo.light.xyz);
+    let lightI     = ubo.shade.y;
+    let ambient    = ubo.shade.x;
+    let g          = ubo.pathtrace.y;
+    let maxBounce  = max(0, i32(ubo.pathtrace.w));
+
+    for (var b = 0; b <= maxBounce; b = b + 1) {
+        var t: f32 = 0.0;
+        var exited = false;
+        for (var it = 0; it < 128; it = it + 1) {
+            t = t + (-log(max(1.0 - rnd(seed), 1e-6)) / sigmaMax);
+            if (t >= remaining) { exited = true; break; }
+            let q   = ro + rd * t;
+            let uvw = (q - bmin) / boxSize;
+            let sigma_t = sampleDensity(uvw) * ubo.params.y;
+            if (rnd(seed) < sigma_t / sigmaMax) { break; }
+        }
+        if (exited) { break; }
+
+        let p = ro + rd * t;
+        let uvw = (p - bmin) / boxSize;
+        let density = sampleDensity(uvw);
+        let albedo  = sampleTF(density).rgb;
+
+        let Tl    = transmittance(p, L, bmin, bmax, boxSize, sigmaMax, seed);
+        let phase = hgPhase(dot(-rd, L), g);
+        result = result + throughput * albedo * lightI * phase * Tl;
+        result = result + throughput * albedo * ambient;
+
+        if (b == maxBounce) { break; }
+        rd = sampleHG(rd, g, seed);
+        ro = p;
+        let hit2 = intersectAABB(ro, rd, bmin, bmax);
+        if (hit2.y <= 0.0) { break; }
+        remaining = hit2.y;
+        throughput = throughput * albedo;
+
+        let rrProb = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.1, 0.95);
+        if (rnd(seed) > rrProb) { break; }
+        throughput = throughput / rrProb;
+    }
+    return result;
+}
+
+@fragment
+fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
+    let screenSize = vec2<f32>(textureDimensions(depthTex));
+    let uv         = fragPos.xy / screenSize;
+    // WebGPU NDC: y=+1 is top, matching fragPos.y=0 at top.
+    let ndcXY      = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+
+    var vFar = ubo.invProj * vec4<f32>(ndcXY, 1.0, 1.0);
+    vFar = vFar / vFar.w;
+    let worldFar = (ubo.invView * vFar).xyz;
+    let ro = ubo.cameraPos.xyz;
+    let rd = normalize(worldFar - ro);
+
+    let bmin = ubo.aabbMin.xyz;
+    let bmax = ubo.aabbMax.xyz;
+
+    let fragCoord = vec2<i32>(fragPos.xy);
+    var seed: u32 = u32(fragCoord.x) * 1973u
+                  + u32(fragCoord.y) * 9277u
+                  + bitcast<u32>(ubo.pathtrace.z) * 26699u
+                  + 1u;
+
+    let sigmaMax = ubo.params.y * max(ubo.params.z, 1.0) + 1e-3;
+
+    let spp  = clamp(i32(ubo.pathtrace.x), 1, 32);
+    var accum = vec3<f32>(0.0);
+    for (var s = 0; s < spp; s = s + 1) {
+        accum = accum + tracePath(ro, rd, bmin, bmax, sigmaMax, &seed);
+    }
+    accum = accum / f32(spp);
+
+    accum = accum / (1.0 + accum);
+    return vec4<f32>(accum, 1.0);
+}
