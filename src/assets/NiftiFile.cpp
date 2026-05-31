@@ -16,7 +16,7 @@ T rd(const uint8_t* p, size_t off) {
 }
 }  // namespace
 
-bool loadNifti(const std::string& path, NiftiVolume& out) {
+bool loadNifti(const std::string& path, Volume3D& out) {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
     if (!f.is_open()) return false;  // missing -> caller falls back to its default
     const std::streamsize fileSize = f.tellg();

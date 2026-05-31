@@ -25,9 +25,12 @@ NIfTI 로더 + float 강도 경로 + 임상 윈도우 프리셋.
 **M3-2 측정 완료** (2026-05-31): sparse 256³ 합성에서 skip +3~5%. 정직히 modest —
 이 워크로드는 셰이딩 비용 우세. per-cell-entry GPU 최적화 시도는 warp divergence로
 회귀(되돌림). 부수 산출물: VMA staging pool oversize 픽스, 합성 생성기 구조 크기 인자.
+**DICOM 로더 완료** (2026-05-31): Explicit VR LE 단일 시리즈(int16 CT/MR) 파서 +
+viewer 디렉토리 dispatch. `Volume3D` 공용 구조체로 NIfTI/DICOM 동일 경로. 합성
+DICOM 생성기로 NIfTI와 크로스 검증(동일 입력 → 동일 출력).
 
-**다음 후보**: **DICOM 로더**(실 CT 데이터로 진짜 sparse 패턴 + 큰 볼륨 측정의 의미를
-얻음) · M4(path-traced 산란) · M3-3(bricking).
+**다음 후보**: **M4 path-traced 산란**(진짜 시네마틱 VRT, 가장 강한 차별화) ·
+M3-3(bricking) · 실 임상 CT 데이터로 측정 헤드라인.
 
 **선행 완료**: 볼륨 렌더링 기초(3D 텍스처 + 레이마칭, Vulkan + WebGPU) ·
 TF 프리셋 · 독립 뷰어(네이티브 `volume_viewer` + 브라우저 `volume_viewer_wasm`).

@@ -1220,6 +1220,8 @@ if(BUILD_TESTS)
         src/assets/VolumeFile.hpp
         src/assets/NiftiFile.cpp
         src/assets/NiftiFile.hpp
+        src/assets/DicomFile.cpp
+        src/assets/DicomFile.hpp
         src/scene/Camera.cpp
         src/scene/Camera.hpp
         src/ui/ImGuiBackend.hpp

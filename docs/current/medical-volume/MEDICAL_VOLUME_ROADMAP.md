@@ -254,6 +254,8 @@ CAREER_ROADMAP의 "수치화가 전부다" 원칙 계승. 마일스톤별 정량
   네이티브 `volume_viewer`와 한 쌍. 랜딩 인덱스에서 클릭 진입.
 - M3-2 측정 (합성 sparse 256³, skip +3~5%, 부수: VMA staging oversize 픽스 +
   생성기 구조 인자)
+- **DICOM 로더** (Explicit VR LE 단일 시리즈, int16 CT/MR; viewer 디렉토리 dispatch).
+  `Volume3D` 공용 구조체로 NIfTI/DICOM 동일 엔진 경로. 합성 DICOM 생성기 추가.
 
 **결정 기록**:
 
@@ -265,13 +267,15 @@ CAREER_ROADMAP의 "수치화가 전부다" 원칙 계승. 마일스톤별 정량
   (2026-05-31). CPU 직관과 반대 — 원본 per-sample 체크는 cache가 read를 무료화해
   더 빠름. 셰이더 주석에 기록.
 
-**다음 진입 작업**: **DICOM 로더** — 멀티슬라이스 시리즈 → HU, 실제 병원 데이터
-수용. M3-2의 "1GB 60fps" 류 헤드라인 측정이 진짜 의미를 갖는 워크로드를 제공.
+**다음 진입 작업**: **M4 path-traced 산란** — 컴퓨트 볼류메트릭 path tracing
+(delta/Woodcock), 카메라 정지 시 progressive 누적. 진짜 시네마틱 VRT(다중 산란).
+TAA 인프라(보유) 활용 가능. 차별화 명제의 정점.
 
 **남은 후보**:
 
-- **M4 path-traced 산란** — 진짜 시네마틱 VRT, 가장 강한 차별화이자 스트레치.
 - **M3-3 bricking** — VRAM 초과 볼륨 페이징("1GB+" 주장의 본체), 작업량 큼.
+- 실 임상 CT(공개 데이터셋) 로드 + M3-2 헤드라인 재측정.
+- DICOM 후속(멀티프레임, 압축 transfer syntax) — 임상 데이터셋이 요구할 때.
 
 **다음 세션 진입점**: 이 문서 §2(마일스톤 M3-2/M4 상세) + 위 후보 목록. 코드
 진입은 `src/rendering/VolumeRenderer.{hpp,cpp}`(엔진 코어), `tests/volume_viewer.cpp`

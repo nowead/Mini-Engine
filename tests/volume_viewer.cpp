@@ -18,6 +18,7 @@
 #include "src/rendering/VolumeRenderer.hpp"
 #include "src/assets/VolumeFile.hpp"
 #include "src/assets/NiftiFile.hpp"
+#include "src/assets/DicomFile.hpp"
 #include "src/scene/Camera.hpp"
 #include "src/ui/ImGuiVulkanBackend.hpp"
 #include <rhi/vulkan/VulkanRHICommandEncoder.hpp>
@@ -30,6 +31,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -62,6 +64,7 @@ private:
     // CT spec from the command line.
     std::string m_volPath;
     bool     m_isNifti = false;     // .nii path -> dims/spacing/intensity from header
+    bool     m_isDicom = false;     // directory  -> DICOM series, dims from headers
     uint32_t m_vw = 0, m_vh = 0, m_vd = 0, m_vbpv = 1;
     float    m_winLo = 0.0f, m_winHi = 1.0f;   // window-slider bounds (data units)
 
@@ -92,6 +95,10 @@ private:
             // NIfTI carries dims/spacing/intensity in its header -- no extra args.
             m_volPath = argv[1];
             m_isNifti = true;
+        } else if (argc >= 2 && std::filesystem::is_directory(argv[1])) {
+            // A directory is treated as a DICOM series (one .dcm per slice).
+            m_volPath = argv[1];
+            m_isDicom = true;
         } else if (argc >= 5) {
             m_volPath = argv[1];
             m_vw = std::strtoul(argv[2], nullptr, 10);
@@ -101,6 +108,7 @@ private:
         } else {
             std::cout << "[VolumeViewer] no volume given -> procedural. Usage:\n"
                          "  volume_viewer <file.nii>\n"
+                         "  volume_viewer <dicom_dir>\n"
                          "  volume_viewer <raw> <W> <H> <D> [bytesPerVoxel]\n";
         }
     }
@@ -168,9 +176,12 @@ private:
 
         glm::vec3 halfExtent(1.0f);   // unit box default (procedural / raw)
 
-        if (m_isNifti) {
-            assets::NiftiVolume vol;
-            if (assets::loadNifti(m_volPath, vol)) {
+        if (m_isNifti || m_isDicom) {
+            assets::Volume3D vol;
+            const bool loaded = m_isNifti
+                ? assets::loadNifti(m_volPath, vol)
+                : assets::loadDicomSeries(m_volPath, vol);
+            if (loaded) {
                 m_volume->loadFromFloatData(vol.intensity, vol.w, vol.h, vol.d);
                 m_vw = vol.w; m_vh = vol.h; m_vd = vol.d;
                 // Aspect-correct box: the largest PHYSICAL extent spans [-1,1] so an

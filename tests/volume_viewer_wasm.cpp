@@ -157,7 +157,7 @@ private:
         if (!m_volume->initialize(128)) { std::cerr << "volume init failed\n"; return; }
 
         glm::vec3 halfExtent(1.0f);
-        assets::NiftiVolume vol;
+        assets::Volume3D vol;
         if (assets::loadNifti("/synthetic_ct.nii", vol)) {
             m_volume->loadFromFloatData(vol.intensity, vol.w, vol.h, vol.d);
             glm::vec3 ext(vol.w * vol.spacingX, vol.h * vol.spacingY, vol.d * vol.spacingZ);

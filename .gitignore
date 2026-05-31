@@ -2,6 +2,7 @@
 *.raw
 *.nii
 *.nii.gz
+*.dcm
 
 # Visual Studio
 .vs/

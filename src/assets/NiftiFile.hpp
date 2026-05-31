@@ -19,7 +19,9 @@
 
 namespace assets {
 
-struct NiftiVolume {
+// Generic float-intensity volume: the lingua-franca between any app-layer loader
+// (NIfTI, DICOM, ...) and the engine's loadFromFloatData seam.
+struct Volume3D {
     uint32_t w = 0, h = 0, d = 0;
     float spacingX = 1.0f, spacingY = 1.0f, spacingZ = 1.0f;   // mm per voxel
     float dataMin = 0.0f, dataMax = 0.0f;                      // intensity range (scl-applied)
@@ -30,6 +32,6 @@ struct NiftiVolume {
 // missing (caller falls back), or logs and returns false on an unsupported/
 // malformed file. Supported datatypes: uint8/int8, int16/uint16, int32/uint32,
 // float32. Big-endian and the .hdr/.img pair ("ni1") are not supported yet.
-bool loadNifti(const std::string& path, NiftiVolume& out);
+bool loadNifti(const std::string& path, Volume3D& out);
 
 } // namespace assets
