@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.28)
 project(MiniEngine CXX)
 
+find_package(Python3 REQUIRED)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
@@ -827,7 +828,7 @@ else()
         COMMAND ${CMAKE_COMMAND} -E make_directory ${VV_SHADER_DIR}
         COMMAND ${CMAKE_COMMAND} -E copy_if_different ${VV_WGSL_SOURCES} ${VV_SHADER_DIR}/
         COMMAND ${CMAKE_COMMAND} -E make_directory ${VV_ASSET_DIR}
-        COMMAND python ${CMAKE_CURRENT_SOURCE_DIR}/scripts/make_synthetic_nii.py
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/make_synthetic_nii.py
                 ${VV_ASSET_DIR}/synthetic_ct.nii 96 96 48
         COMMENT "Staging WGSL + synthetic CT for volume_viewer_wasm"
     )
