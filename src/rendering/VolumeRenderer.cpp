@@ -369,14 +369,14 @@ bool VolumeRenderer::buildOccupancy() {
     const uint64_t pageBytes = m_brick.pageTableSize();
 #ifdef __EMSCRIPTEN__
     bg.entries = {
-        rhi::BindGroupEntry::Buffer(0, m_occUBO.get(), 0, sizeof(uint32_t) * 8),
+        rhi::BindGroupEntry::Buffer(0, m_occUBO.get(), 0, sizeof(uint32_t) * 16),
         rhi::BindGroupEntry::TextureView(1, m_brick.atlasView()),
         rhi::BindGroupEntry::Buffer(2, m_occBuffer.get(), 0, bufBytes),
         rhi::BindGroupEntry::Buffer(3, m_brick.pageTable(), 0, pageBytes),
     };
 #else
     bg.entries = {
-        rhi::BindGroupEntry::Buffer(0, m_occUBO.get(), 0, sizeof(uint32_t) * 8),
+        rhi::BindGroupEntry::Buffer(0, m_occUBO.get(), 0, sizeof(uint32_t) * 16),
         rhi::BindGroupEntry::TextureView(1, m_brick.atlasView()),
         rhi::BindGroupEntry::Sampler(2, m_sampler.get()),
         rhi::BindGroupEntry::Buffer(3, m_occBuffer.get(), 0, bufBytes),

@@ -64,6 +64,13 @@ function Invoke-Emsdk([string]$CmdArgs) {
         # configure fail with "'emcmake' is not recognized".
         $emBin = Join-Path $EmsdkDir "upstream\emscripten"
         $lines.Add("set PATH=$emBin;%PATH%")
+        # emsdk_env.bat outputs bash-style `export` statements that cmd ignores,
+        # so EMSDK ends up unset. EmscriptenToolchain.cmake gates its Windows
+        # CMAKE_AR=emar.bat fix on `DEFINED ENV{EMSDK}`; without it CMAKE_AR
+        # falls back to bare `emar`, and CMake's CreateProcess at compiler-test
+        # time can't execute that (Windows needs the .bat extension explicit).
+        # Set EMSDK manually so the toolchain branch fires.
+        $lines.Add("set EMSDK=$EmsdkDir")
         if ($nmakeDir) {
             $lines.Add("set PATH=$nmakeDir;%PATH%")
         }
