@@ -300,14 +300,18 @@ M4 v1까지 완료. v1은 RAM 초과 볼륨, frustum 기반 가시성, on-disk �
 
 **남은 후보**:
 
-- **M3-3 bricking** — VRAM 초과 볼륨 페이징("1GB+" 주장의 본체), 작업량 큼.
+- **M3-3 v1 streaming** — 카메라 frustum 기반 brick 가시성 + LRU eviction +
+  on-disk 페이징. v0의 "고정 atlas, 단발 packing" 한계 제거. RAM 초과 볼륨까지
+  포함하는 진짜 "1GB+" 헤드라인 완성. 작업량 큼.
 - **DICOM Implicit VR LE 지원** — 임상 PACS의 기본 transfer syntax. 추가 시 실
-  병원 데이터 커버리지 크게 확장.
+  병원 데이터 커버리지 크게 확장. 엔진 변경 없이 파서만.
 - **DICOM 압축 transfer syntax**(JPEG/JPEG2000/RLE) — libjpeg 등 외부 의존 필요.
 
-**다음 세션 진입점**: 이 문서 §2(마일스톤 M3-2/M4 상세) + 위 후보 목록. 코드
-진입은 `src/rendering/VolumeRenderer.{hpp,cpp}`(엔진 코어), `tests/volume_viewer.cpp`
-(네이티브 뷰어), `tests/volume_viewer_wasm.cpp`(브라우저 뷰어).
+**다음 세션 진입점**: 이 문서 §2 마일스톤 상세 + 위 후보 목록. 사용자
+인터페이스 / 빌드 / 조작은 [VIEWERS.md](VIEWERS.md) 참조. 코드 진입은
+`src/rendering/VolumeRenderer.{hpp,cpp}` + `src/rendering/BrickedVolume.{hpp,cpp}`
+(엔진 코어), `tests/volume_viewer.cpp` (네이티브 뷰어), `tests/volume_viewer_wasm.cpp`
+(브라우저 뷰어).
 
 ---
 
@@ -317,6 +321,6 @@ M4 v1까지 완료. v1은 RAM 초과 볼륨, frustum 기반 가시성, on-disk �
   (Volume Rendering, 기초 구현 완료)을 **사업·차별화 방향으로 심화**한 트랙이다.
   CAREER_ROADMAP의 Cluster B(큐픽스/루닛/뷰노)·디지털 트윈 진입과 직접 맞물린다.
 - [`ENGINE_ROADMAP.md`](../engine-roadmap/ENGINE_ROADMAP.md)(엔진 성숙도 트랙,
-  A~E 완료)와 별개 트랙으로 공존. 본 트랙이 현재 활성 방향.
+  A~D 완료; E 미진입)와 별개 트랙으로 공존. 본 트랙이 현재 활성 방향.
 - 비고정 용어 규칙(CLAUDE.md §8): 본 문서는 "phase" 대신 "마일스톤(M1~M4)/
   단계/스텝"을 쓴다.

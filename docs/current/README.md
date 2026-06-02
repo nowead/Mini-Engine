@@ -11,7 +11,8 @@ WebGPU 기반 차세대 클라이언트 사이드 **의료 볼륨 렌더러**로
 
 | 문서 | 설명 |
 | --- | --- |
-| [MEDICAL_VOLUME_ROADMAP.md](medical-volume/MEDICAL_VOLUME_ROADMAP.md) | 전략 결정(방향 1) + 격차 진단 + 마일스톤 M1~M4 + 첫 작업(M1-1 R16Float 승격) |
+| [MEDICAL_VOLUME_ROADMAP.md](medical-volume/MEDICAL_VOLUME_ROADMAP.md) | 전략 결정(방향 1) + 격차 진단 + 마일스톤 M1~M4 + 결정·진행 기록 |
+| [VIEWERS.md](medical-volume/VIEWERS.md) | 사용자 가이드 — `volume_viewer` (네이티브) + `volume_viewer_wasm` (브라우저) 빌드·조작·기능·기술 스택 |
 
 **M1 (실데이터 기반) 완료** (2026-05-29): R16Float 16비트 · window/level ·
 NIfTI 로더 + float 강도 경로 + 임상 윈도우 프리셋.
