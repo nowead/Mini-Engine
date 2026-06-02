@@ -54,8 +54,72 @@ std::vector<double> parseDsList(const uint8_t* data, size_t len) {
 template <typename T>
 T rd(const uint8_t* p) { T v; std::memcpy(&v, p, sizeof(T)); return v; }
 
+// ---------------------------------------------------------------------------
+// Undefined-length sequence/item skipping (Explicit VR LE).
+//
+// A sequence (SQ) with length 0xFFFFFFFF terminates at (FFFE,E0DD). It contains
+// items; each item starts with (FFFE,E000) and has its own length. An item with
+// length 0xFFFFFFFF terminates at (FFFE,E00D) and contains nested data elements
+// that may themselves be undefined-length sequences. A naive scan for (FFFE,E0DD)
+// trips over inner sequences' delimitations -- we have to walk items properly.
+// ---------------------------------------------------------------------------
+size_t skipUndefSeq(const uint8_t* buf, size_t size, size_t off);
+
+size_t walkItemUntilEnd(const uint8_t* buf, size_t size, size_t off) {
+    while (off + 8 <= size) {
+        const uint16_t g = rd<uint16_t>(buf + off + 0);
+        const uint16_t e = rd<uint16_t>(buf + off + 2);
+        if (g == 0xFFFEu && e == 0xE00Du) return off + 8;   // Item Delimitation Item
+        // Otherwise a regular Explicit VR LE element inside the item.
+        if (off + 8 > size) return size;
+        const char* vr = reinterpret_cast<const char*>(buf + off + 4);
+        size_t   valueOff;
+        uint32_t valueLen;
+        if (isLongVR(vr)) {
+            if (off + 12 > size) return size;
+            valueLen = rd<uint32_t>(buf + off + 8);
+            valueOff = off + 12;
+        } else {
+            valueLen = rd<uint16_t>(buf + off + 6);
+            valueOff = off + 8;
+        }
+        if (valueLen == 0xFFFFFFFFu) {
+            off = skipUndefSeq(buf, size, valueOff);
+            if (off >= size) return size;
+        } else {
+            if (valueOff + valueLen > size) return size;
+            off = valueOff + valueLen;
+        }
+    }
+    return size;
+}
+
+size_t skipUndefSeq(const uint8_t* buf, size_t size, size_t off) {
+    while (off + 8 <= size) {
+        const uint16_t g = rd<uint16_t>(buf + off + 0);
+        const uint16_t e = rd<uint16_t>(buf + off + 2);
+        if (g == 0xFFFEu && e == 0xE0DDu) return off + 8;   // Sequence Delimitation Item
+        if (g == 0xFFFEu && e == 0xE000u) {
+            const uint32_t itemLen = rd<uint32_t>(buf + off + 4);
+            off += 8;
+            if (itemLen == 0xFFFFFFFFu) {
+                off = walkItemUntilEnd(buf, size, off);
+                if (off >= size) return size;
+            } else {
+                if (off + itemLen > size) return size;
+                off += itemLen;
+            }
+        } else {
+            // Malformed -- bail.
+            return size;
+        }
+    }
+    return size;
+}
+
 struct Slice {
     uint32_t rows = 0, cols = 0;
+    uint32_t numberOfFrames = 1;   // multi-frame DICOM packs many frames into one file
     int      instanceNumber = 0;
     int      bitsAllocated = 16;
     bool     signedPixels = true;
@@ -102,8 +166,23 @@ bool parseSlice(const std::string& path, std::vector<uint8_t>& fileBuf, Slice& o
             valueOff = off + 8;
         }
         if (valueLen == 0xFFFFFFFFu) {
-            LOG_ERROR("Dicom") << path << ": undefined-length element -- compressed pixel data unsupported";
-            return false;
+            // Two cases share this encoding:
+            //   - Sequence (SQ) with undefined length: skip forward to the Sequence
+            //     Delimitation Item (FFFE,E0DD). Common in real-world DICOM written
+            //     by tools like GDCM / dcmtk.
+            //   - Encapsulated (compressed) pixel data on (7FE0,0010): we genuinely
+            //     don't decompress and must fail.
+            if (group == 0x7FE0 && element == 0x0010) {
+                LOG_ERROR("Dicom") << path << ": encapsulated (compressed) pixel data not supported";
+                return false;
+            }
+            const size_t skipped = skipUndefSeq(fileBuf.data(), size, valueOff);
+            if (skipped >= size) {
+                LOG_ERROR("Dicom") << path << ": malformed undefined-length sequence";
+                return false;
+            }
+            off = skipped;
+            continue;   // resume top-of-loop walk past the SQ
         }
         if (valueOff + valueLen > size) {
             LOG_ERROR("Dicom") << path << ": element truncated";
@@ -122,6 +201,8 @@ bool parseSlice(const std::string& path, std::vector<uint8_t>& fileBuf, Slice& o
         } else if (group == 0x0020 && element == 0x0032) {
             auto xyz = parseDsList(v, valueLen);
             if (xyz.size() >= 3) out.imagePosZ = xyz[2];
+        } else if (group == 0x0028 && element == 0x0008) {
+            try { out.numberOfFrames = std::max(1, std::stoi(trimDicomString(v, valueLen))); } catch (...) {}
         } else if (group == 0x0028 && element == 0x0010) {
             out.rows = rd<uint16_t>(v);
         } else if (group == 0x0028 && element == 0x0011) {
@@ -157,9 +238,10 @@ bool parseSlice(const std::string& path, std::vector<uint8_t>& fileBuf, Slice& o
         return false;
     }
     if (out.rows == 0 || out.cols == 0) { LOG_ERROR("Dicom") << path << ": missing rows/cols"; return false; }
-    const size_t expected = static_cast<size_t>(out.rows) * out.cols * 2;
+    const size_t expected = static_cast<size_t>(out.rows) * out.cols * 2 * out.numberOfFrames;
     if (out.pixelBytes < expected) {
-        LOG_ERROR("Dicom") << path << ": pixel data " << out.pixelBytes << "B < expected " << expected << "B";
+        LOG_ERROR("Dicom") << path << ": pixel data " << out.pixelBytes << "B < expected " << expected
+                           << "B (" << out.rows << "x" << out.cols << " x " << out.numberOfFrames << " frames)";
         return false;
     }
     return true;
@@ -200,22 +282,35 @@ bool loadDicomSeries(const std::string& dirPath, Volume3D& out) {
         }
     }
 
-    // Sort by ImagePositionPatient.z (primary), InstanceNumber (fallback).
-    std::vector<size_t> order(slices.size());
-    for (size_t i = 0; i < order.size(); ++i) order[i] = i;
-    std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
-        if (slices[a].imagePosZ != slices[b].imagePosZ)
-            return slices[a].imagePosZ < slices[b].imagePosZ;
-        return slices[a].instanceNumber < slices[b].instanceNumber;
+    // Flatten frames: each output z is one (file, frame) pair. For a normal series
+    // each file has 1 frame; for multi-frame DICOM (NumberOfFrames > 1) a single
+    // file contributes that many consecutive z slices. Sort by z position then
+    // frame index then instance number.
+    struct Entry { size_t fileIdx; uint32_t frameIdx; double zPos; int instanceNumber; };
+    std::vector<Entry> order;
+    for (size_t i = 0; i < slices.size(); ++i) {
+        const auto& s = slices[i];
+        for (uint32_t f = 0; f < s.numberOfFrames; ++f) {
+            // Multi-frame files don't carry per-frame ImagePositionPatient in this
+            // first cut, so we space frames along z by SliceThickness from the
+            // file's base position.
+            const double zp = s.imagePosZ + static_cast<double>(f) * s.sliceThickness;
+            order.push_back({ i, f, zp, s.instanceNumber });
+        }
+    }
+    std::sort(order.begin(), order.end(), [](const Entry& a, const Entry& b) {
+        if (a.zPos != b.zPos) return a.zPos < b.zPos;
+        if (a.instanceNumber != b.instanceNumber) return a.instanceNumber < b.instanceNumber;
+        return a.frameIdx < b.frameIdx;
     });
 
     const uint32_t w = ref.cols;
     const uint32_t h = ref.rows;
-    const uint32_t d = static_cast<uint32_t>(slices.size());
+    const uint32_t d = static_cast<uint32_t>(order.size());
 
     double zSpacing = ref.sliceThickness;
     if (d >= 2) {
-        const double dz = slices[order[1]].imagePosZ - slices[order[0]].imagePosZ;
+        const double dz = order[1].zPos - order[0].zPos;
         if (std::abs(dz) > 1e-6) zSpacing = std::abs(dz);
     }
 
@@ -225,11 +320,12 @@ bool loadDicomSeries(const std::string& dirPath, Volume3D& out) {
     out.spacingZ = static_cast<float>(zSpacing);
     out.intensity.assign(static_cast<size_t>(w) * h * d, 0.0f);
 
+    const size_t frameBytes = static_cast<size_t>(w) * h * 2;
     float mn = std::numeric_limits<float>::max();
     float mx = std::numeric_limits<float>::lowest();
     for (uint32_t z = 0; z < d; ++z) {
-        const Slice& s = slices[order[z]];
-        const uint8_t* px = s.pixelData;
+        const Slice& s = slices[order[z].fileIdx];
+        const uint8_t* px = s.pixelData + static_cast<size_t>(order[z].frameIdx) * frameBytes;
         const float slope = static_cast<float>(s.rescaleSlope);
         const float inter = static_cast<float>(s.rescaleIntercept);
         for (uint32_t y = 0; y < h; ++y) {
@@ -252,7 +348,9 @@ bool loadDicomSeries(const std::string& dirPath, Volume3D& out) {
 
     LOG_INFO("Dicom") << "loaded " << dirPath << " (" << w << "x" << h << "x" << d
                       << ", spacing " << out.spacingX << "/" << out.spacingY << "/" << out.spacingZ
-                      << "mm, range [" << mn << "," << mx << "], " << paths.size() << " slices)";
+                      << "mm, range [" << mn << "," << mx << "], "
+                      << paths.size() << (paths.size() == 1 ? " file" : " files")
+                      << ", " << d << (d == 1 ? " frame" : " frames") << ")";
     return true;
 }
 
