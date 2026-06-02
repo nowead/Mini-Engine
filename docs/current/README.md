@@ -43,9 +43,17 @@ tonemap만 담당. 카메라/윈도우/프리셋/SPP/anisotropy/bounces/모드/�
 N=0 reset(N=0이면 history×0이라 텍스처 clear 불필요). path-trace는 자체 bind-group
 layout — depth/occupancy 제거, history 추가. WebGPU `textureLoad`는 sampler 미사용,
 GLSL `texelFetch`는 sampler 필요 → display 바인딩이 백엔드별로 갈림.
+**M3-3 v0 bricked storage 완료** (2026-06-02): 단일 dense 3D 텍스처 → brick atlas
+(64³ interior + 1-voxel halo = 66³ stored) + page table(storage buffer of uint32
+slot indices, 0xFFFFFFFF = "air") 간접 참조로 교체. 모든 density read가 셰이더
+helper `sampleVolume(uvw)` 거쳐 page-lookup → linear atlas 샘플로 진행 (3 셰이더
+세트: march · pathtrace · occupancy — 양 백엔드). 빈 brick(interior 전체 = 최솟값)은
+atlas에 안 올라가 → 1024³ × 10% 점유 시 2GB → ~200MB의 가치. v0는 로드 타임 단발
+packing(streaming/LRU는 v1로 연기). 부수: GLSL march UBO에 누락돼 있던 `pathtrace`
+필드 발견·정렬(march 코드가 그 슬롯을 read하지 않아 노출되지 않은 latent skew).
 
-**다음 후보**: M3-3(bricking) · DICOM 후속(Implicit VR LE 지원 시 임상 PACS 데이터
-커버리지 ↑).
+**다음 후보**: M3-3 v1(streaming + LRU + on-disk paging) · DICOM 후속(Implicit VR LE
+지원 시 임상 PACS 데이터 커버리지 ↑).
 
 **선행 완료**: 볼륨 렌더링 기초(3D 텍스처 + 레이마칭, Vulkan + WebGPU) ·
 TF 프리셋 · 독립 뷰어(네이티브 `volume_viewer` + 브라우저 `volume_viewer_wasm`).

@@ -26,17 +26,45 @@ layout(set = 0, binding = 0) uniform VolumeUBO {
     vec4 shade;       // x = ambient, y = diffuse, z = gradEps (texture-space step), w spare
     vec4 shadow;      // x = enable (0/1), y = stepSize (world), z = maxSteps, w = strength
     vec4 occ;         // xyz = occupancy grid dims (cells), w = skipEnable (0/1)
+    vec4 pathtrace;   // unused by march (path-trace pipeline)
     vec4 accum;       // unused by march (used by path-trace accumulation)
+    vec4 volSize;     // M3-3 xyz = source volume voxel dims (for brick indexing)
+    vec4 atlasGrid;   // M3-3 xyz = atlas capacity in bricks (slot unpack)
 } ubo;
 
 layout(set = 0, binding = 1) uniform texture2D depthTex;
 layout(set = 0, binding = 2) uniform sampler   depthSampler;
-layout(set = 0, binding = 3) uniform texture3D volumeTex;
+layout(set = 0, binding = 3) uniform texture3D volumeTex;     // M3-3 brick atlas (R16Float)
 layout(set = 0, binding = 4) uniform sampler   volumeSampler;
-layout(set = 0, binding = 5) uniform texture2D tfLUT;   // 256x1 density -> (rgb, opacity)
+layout(set = 0, binding = 5) uniform texture2D tfLUT;         // 256x1 density -> (rgb, opacity)
 layout(std430, set = 0, binding = 6) readonly buffer OccGrid {
     vec2 occCells[];   // per macrocell: (min, max) intensity, for empty-space skipping
 };
+layout(std430, set = 0, binding = 7) readonly buffer PageTable {
+    uint pageSlots[];  // M3-3 page table: per virtual brick, atlas slot index or 0xFFFFFFFF
+};
+
+// M3-3 brick sampling: page-table indirection from [0,1]^3 volume UV to a
+// linearly-filtered density sample in the brick atlas. Empty bricks return 0.
+// kBrickSize = 64 (interior), kBrickStored = 66 (1-voxel halo each side).
+float sampleVolume(vec3 uvw) {
+    vec3 vp = clamp(uvw, vec3(0.0), vec3(0.999999)) * ubo.volSize.xyz;
+    ivec3 brickIdx = ivec3(vp) / 64;
+    vec3  localF   = vp - vec3(brickIdx * 64);   // [0, 64) inside the brick
+    ivec3 pageGrid = ivec3((ubo.volSize.xyz + 63.0) / 64.0);
+    int pageIdx = (brickIdx.z * pageGrid.y + brickIdx.y) * pageGrid.x + brickIdx.x;
+    uint slot = pageSlots[pageIdx];
+    if (slot == 0xFFFFFFFFu) return 0.0;
+
+    ivec3 atlasG = ivec3(ubo.atlasGrid.xyz);
+    int sx = int(slot) % atlasG.x;
+    int sy = (int(slot) / atlasG.x) % atlasG.y;
+    int sz = int(slot) / (atlasG.x * atlasG.y);
+    // Interior of the brick starts at slot*66 + 1 (offset past the -1 halo).
+    vec3 atlasVox = vec3(float(sx * 66 + 1), float(sy * 66 + 1), float(sz * 66 + 1)) + localF;
+    vec3 atlasUvw = (atlasVox + 0.5) / vec3(atlasG * 66);
+    return texture(sampler3D(volumeTex, volumeSampler), atlasUvw).r;
+}
 
 // Ray-AABB slab test. Returns (tNear, tFar); tNear > tFar means miss.
 vec2 intersectAABB(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax) {
@@ -121,7 +149,7 @@ void main() {
             }
         }
 
-        float raw = texture(sampler3D(volumeTex, volumeSampler), uvw).r;
+        float raw = sampleVolume(uvw);
         // Window/level: map [center - width/2, center + width/2] -> [0,1] (contrast).
         float n = clamp((raw - (ubo.window.x - ubo.window.y * 0.5)) / max(ubo.window.y, 1e-6), 0.0, 1.0);
         float density = n * ubo.params.z;
@@ -146,12 +174,9 @@ void main() {
             if (ubo.light.w > 0.5) {
                 float e = ubo.shade.z;
                 vec3 g;
-                g.x = texture(sampler3D(volumeTex, volumeSampler), uvw + vec3(e, 0, 0)).r
-                    - texture(sampler3D(volumeTex, volumeSampler), uvw - vec3(e, 0, 0)).r;
-                g.y = texture(sampler3D(volumeTex, volumeSampler), uvw + vec3(0, e, 0)).r
-                    - texture(sampler3D(volumeTex, volumeSampler), uvw - vec3(0, e, 0)).r;
-                g.z = texture(sampler3D(volumeTex, volumeSampler), uvw + vec3(0, 0, e)).r
-                    - texture(sampler3D(volumeTex, volumeSampler), uvw - vec3(0, 0, e)).r;
+                g.x = sampleVolume(uvw + vec3(e, 0, 0)) - sampleVolume(uvw - vec3(e, 0, 0));
+                g.y = sampleVolume(uvw + vec3(0, e, 0)) - sampleVolume(uvw - vec3(0, e, 0));
+                g.z = sampleVolume(uvw + vec3(0, 0, e)) - sampleVolume(uvw - vec3(0, 0, e));
                 float glen = length(g);
                 // Normal points toward DECREASING density (outward from a dense body).
                 vec3  L   = normalize(ubo.light.xyz);
@@ -168,7 +193,7 @@ void main() {
                     for (int s = 0; s < sMax; ++s) {
                         vec3 suvw = (wp + L * st - ubo.aabbMin.xyz) / boxSize;
                         if (any(lessThan(suvw, vec3(0.0))) || any(greaterThan(suvw, vec3(1.0)))) break;
-                        float sr = texture(sampler3D(volumeTex, volumeSampler), suvw).r;
+                        float sr = sampleVolume(suvw);
                         float sn = clamp((sr - (ubo.window.x - ubo.window.y * 0.5)) / max(ubo.window.y, 1e-6), 0.0, 1.0);
                         float sd = max(sn * ubo.params.z - ubo.tf.x, 0.0);
                         tau += sd * extinction * ubo.shadow.w * sStep;

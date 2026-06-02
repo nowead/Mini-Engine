@@ -25,6 +25,8 @@
 #include <rhi/RHIPipeline.hpp>
 #include <rhi/RHIBindGroup.hpp>
 
+#include "BrickedVolume.hpp"
+
 namespace rendering {
 
 class VolumeRenderer {
@@ -59,6 +61,8 @@ public:
         glm::vec4 occ;         // xyz = occupancy grid dims (cells), w = skipEnable (0/1)
         glm::vec4 pathtrace;   // x=spp, y=HG anisotropy g, z=frame seed (uint bits), w=max bounces
         glm::vec4 accum;       // x = path-trace accumulated sample count (for the running average); yzw spare
+        glm::vec4 volSize;     // xyz = source volume voxel dims (for brick indexing); w spare
+        glm::vec4 atlasGrid;   // xyz = atlas capacity in bricks (slot unpack); w spare
     };
 
     enum class RenderMode { Lambert = 0, PathTrace = 1 };
@@ -204,7 +208,7 @@ public:
     float defThreshold()    const { return m_tfThreshold; }
     float defColorMix()     const { return m_tfColorMix; }
 
-    rhi::RHITextureView*    getVolumeView() const { return m_volumeView.get(); }
+    rhi::RHITextureView*    getVolumeView() const { return m_brick.atlasView(); }
     rhi::RHISampler*        getVolumeSampler() const { return m_sampler.get(); }
     rhi::RHIRenderPipeline* getPipeline() const { return m_pipeline.get(); }   // Lambert/march
     rhi::RHIBindGroup*      getBindGroup(uint32_t frame) const { return m_bindGroups[frame % kFramesInFlight].get(); }
@@ -249,8 +253,13 @@ private:
     void generateProceduralVolume(std::vector<uint8_t>& out, uint32_t resolution) const;
 
     bool uploadVolume(const std::vector<uint8_t>& density, uint32_t w, uint32_t h, uint32_t d);
-    // Core upload shared by both data paths: pre-packed R16Float half data -> 3D texture.
-    bool uploadHalf(const std::vector<uint16_t>& halfData, uint32_t w, uint32_t h, uint32_t d);
+    // Core upload shared by both data paths: pre-packed R16Float half data -> brick atlas.
+    // emptyValueHalf is the half-float bit pattern that counts as "air" (skipped during
+    // packing). For procedural uint8 density, that's +0.0 (0x0000); for clinical CT,
+    // it's the half encoding of the data minimum (e.g. -1000 HU).
+    bool uploadHalf(const std::vector<uint16_t>& halfData,
+                    uint32_t w, uint32_t h, uint32_t d,
+                    uint16_t emptyValueHalf);
 
     // M3 empty-space skipping. createOccupancyResources builds the compute pipeline
     // once; buildOccupancy (re)creates the grid buffer and dispatches it per volume.
@@ -263,9 +272,12 @@ private:
     bool            m_enabled       = true;
     uint32_t        m_resolution    = 0;
 
-    std::unique_ptr<rhi::RHITexture>     m_volumeTexture;  // 3D, R16Float density
-    std::unique_ptr<rhi::RHITextureView> m_volumeView;     // View3D
-    std::unique_ptr<rhi::RHISampler>     m_sampler;        // linear, clamp (volume + LUT)
+    // M3-3: brick atlas (R16Float 3D) + page table (storage buffer of uint32 slot
+    // indices, kEmptySlot for "air"). Replaces the previous single dense 3D
+    // texture. Every density read in the shaders goes through a page-table
+    // indirection (see sampleVolume helper in volume_march/volume_pathtrace).
+    BrickedVolume                        m_brick;
+    std::unique_ptr<rhi::RHISampler>     m_sampler;        // linear, clamp (atlas + LUT)
     std::unique_ptr<rhi::RHISampler>     m_depthSampler;   // nearest, clamp (depth)
     rhi::RHITextureView*                 m_depthView = nullptr;  // non-owning; for bind-group rebuild
     uint32_t m_volW = 0, m_volH = 0, m_volD = 0;          // current volume dimensions

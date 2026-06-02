@@ -251,6 +251,8 @@ if(NOT EMSCRIPTEN)
         # Phase 7: Volume Rendering (Vulkan-only)
         src/rendering/VolumeRenderer.cpp
         src/rendering/VolumeRenderer.hpp
+        src/rendering/BrickedVolume.cpp
+        src/rendering/BrickedVolume.hpp
         # App-layer raw volume file loader (native)
         src/assets/VolumeFile.cpp
         src/assets/VolumeFile.hpp
@@ -691,6 +693,8 @@ else()
         # Volume rendering (dual-backend)
         src/rendering/VolumeRenderer.cpp
         src/rendering/VolumeRenderer.hpp
+        src/rendering/BrickedVolume.cpp
+        src/rendering/BrickedVolume.hpp
         # WASM/JS bindings
         src/wasm/WASMBindings.hpp
         src/wasm/WASMBindings.cpp
@@ -824,6 +828,8 @@ else()
         src/rendering/RendererBridge.hpp
         src/rendering/VolumeRenderer.cpp
         src/rendering/VolumeRenderer.hpp
+        src/rendering/BrickedVolume.cpp
+        src/rendering/BrickedVolume.hpp
         src/assets/NiftiFile.cpp
         src/assets/NiftiFile.hpp
         src/scene/Camera.cpp
@@ -1238,6 +1244,8 @@ if(BUILD_TESTS)
         src/rendering/RendererBridge.hpp
         src/rendering/VolumeRenderer.cpp
         src/rendering/VolumeRenderer.hpp
+        src/rendering/BrickedVolume.cpp
+        src/rendering/BrickedVolume.hpp
         src/assets/VolumeFile.cpp
         src/assets/VolumeFile.hpp
         src/assets/NiftiFile.cpp

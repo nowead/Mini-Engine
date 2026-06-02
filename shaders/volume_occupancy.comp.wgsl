@@ -1,16 +1,39 @@
 // M3-1: build a min/max occupancy grid for empty-space skipping (WebGPU). One
-// invocation per macrocell: scan the cell's voxels in the R16Float volume and write
-// the cell's [min,max] intensity into a storage buffer. textureLoad needs no sampler
-// (so the bind layout omits it on this backend; the buffer is at binding 2).
+// invocation per macrocell: scan the cell's voxels in the brick atlas (M3-3) and
+// write the cell's [min,max] intensity into a storage buffer. textureLoad needs
+// no sampler (so the bind layout omits it on this backend; the buffer is at
+// binding 2, the page table at binding 3).
+//
+// M3-3 note: the volume is now stored as a brick atlas + page table indirection,
+// not a single dense 3D texture. Empty bricks return 0 here, matching the
+// fragment-side sampleVolume helper.
 
 struct OccUBO {
-    volDim:  vec4<u32>,   // xyz = volume dims (voxels), w = cellSize
-    gridDim: vec4<u32>,   // xyz = grid dims (cells), w unused
+    volDim:    vec4<u32>,   // xyz = volume dims (voxels), w = cellSize
+    gridDim:   vec4<u32>,   // xyz = grid dims (cells), w unused
+    pageGrid:  vec4<u32>,   // M3-3 xyz = brick grid dims, w unused
+    atlasGrid: vec4<u32>,   // M3-3 xyz = atlas capacity in bricks, w unused
 };
 
 @group(0) @binding(0) var<uniform> ubo: OccUBO;
 @group(0) @binding(1) var volumeTex: texture_3d<f32>;
 @group(0) @binding(2) var<storage, read_write> cells: array<vec2<f32>>;
+@group(0) @binding(3) var<storage, read>       pageSlots: array<u32>;
+
+fn fetchVoxel(v: vec3<u32>) -> f32 {
+    let brickIdx = v / 64u;
+    let local    = v - brickIdx * 64u;   // [0, 63]
+    let pageIdx = (brickIdx.z * ubo.pageGrid.y + brickIdx.y) * ubo.pageGrid.x + brickIdx.x;
+    let slot    = pageSlots[pageIdx];
+    if (slot == 0xFFFFFFFFu) { return 0.0; }
+    let sx = slot % ubo.atlasGrid.x;
+    let sy = (slot / ubo.atlasGrid.x) % ubo.atlasGrid.y;
+    let sz =  slot / (ubo.atlasGrid.x * ubo.atlasGrid.y);
+    let atlasCoord = vec3<i32>(i32(sx * 66u + 1u + local.x),
+                               i32(sy * 66u + 1u + local.y),
+                               i32(sz * 66u + 1u + local.z));
+    return textureLoad(volumeTex, atlasCoord, 0).r;
+}
 
 @compute @workgroup_size(4, 4, 4)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -28,7 +51,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 if (v.x >= ubo.volDim.x || v.y >= ubo.volDim.y || v.z >= ubo.volDim.z) {
                     continue;
                 }
-                let val = textureLoad(volumeTex, vec3<i32>(v), 0).r;
+                let val = fetchVoxel(v);
                 mn = min(mn, val);
                 mx = max(mx, val);
             }

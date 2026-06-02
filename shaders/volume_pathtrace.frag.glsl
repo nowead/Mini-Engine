@@ -33,12 +33,37 @@ layout(set = 0, binding = 0) uniform VolumeUBO {
     vec4 occ;        // unused here
     vec4 pathtrace;  // x = spp, y = HG anisotropy g, z = frame seed, w = max bounces
     vec4 accum;      // x = previous accumulated sample count N (host-incremented)
+    vec4 volSize;    // M3-3 xyz = source volume voxel dims (for brick indexing)
+    vec4 atlasGrid;  // M3-3 xyz = atlas capacity in bricks (slot unpack)
 } ubo;
 
-layout(set = 0, binding = 1) uniform texture3D volumeTex;
+layout(set = 0, binding = 1) uniform texture3D volumeTex;     // M3-3 brick atlas (R16Float)
 layout(set = 0, binding = 2) uniform sampler   volumeSampler;
 layout(set = 0, binding = 3) uniform texture2D tfLUT;
 layout(set = 0, binding = 4) uniform texture2D historyTex;
+layout(std430, set = 0, binding = 5) readonly buffer PageTable {
+    uint pageSlots[];  // M3-3 page table: per virtual brick, atlas slot or 0xFFFFFFFF
+};
+
+// M3-3 brick sampling: page-table indirection -> linearly-filtered atlas sample.
+// Empty bricks return 0. kBrickSize=64 (interior), kBrickStored=66 (1-voxel halo).
+float sampleVolume(vec3 uvw) {
+    vec3 vp = clamp(uvw, vec3(0.0), vec3(0.999999)) * ubo.volSize.xyz;
+    ivec3 brickIdx = ivec3(vp) / 64;
+    vec3  localF   = vp - vec3(brickIdx * 64);
+    ivec3 pageGrid = ivec3((ubo.volSize.xyz + 63.0) / 64.0);
+    int   pageIdx  = (brickIdx.z * pageGrid.y + brickIdx.y) * pageGrid.x + brickIdx.x;
+    uint  slot     = pageSlots[pageIdx];
+    if (slot == 0xFFFFFFFFu) return 0.0;
+
+    ivec3 atlasG = ivec3(ubo.atlasGrid.xyz);
+    int sx = int(slot) % atlasG.x;
+    int sy = (int(slot) / atlasG.x) % atlasG.y;
+    int sz = int(slot) / (atlasG.x * atlasG.y);
+    vec3 atlasVox = vec3(float(sx * 66 + 1), float(sy * 66 + 1), float(sz * 66 + 1)) + localF;
+    vec3 atlasUvw = (atlasVox + 0.5) / vec3(atlasG * 66);
+    return texture(sampler3D(volumeTex, volumeSampler), atlasUvw).r;
+}
 
 const float PI = 3.14159265359;
 
@@ -85,7 +110,7 @@ vec3 sampleHG(vec3 wi, float g, inout uint seed) {
 // Volume / TF helpers
 // ---------------------------------------------------------------------------
 float sampleDensity(vec3 uvw) {
-    float raw = texture(sampler3D(volumeTex, volumeSampler), uvw).r;
+    float raw = sampleVolume(uvw);
     float n   = clamp((raw - (ubo.window.x - ubo.window.y * 0.5)) /
                       max(ubo.window.y, 1e-6), 0.0, 1.0);
     return max(n * ubo.params.z - ubo.tf.x, 0.0);

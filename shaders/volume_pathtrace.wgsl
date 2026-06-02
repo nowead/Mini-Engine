@@ -22,13 +22,36 @@ struct VolumeUBO {
     occ:       vec4<f32>,
     pathtrace: vec4<f32>,
     accum:     vec4<f32>,   // x = previous accumulated sample count N
+    volSize:   vec4<f32>,   // M3-3 xyz = source volume voxel dims (brick indexing)
+    atlasGrid: vec4<f32>,   // M3-3 xyz = atlas capacity in bricks (slot unpack)
 };
 
 @group(0) @binding(0) var<uniform> ubo: VolumeUBO;
-@group(0) @binding(1) var volumeTex:     texture_3d<f32>;
+@group(0) @binding(1) var volumeTex:     texture_3d<f32>;     // M3-3 brick atlas (R16Float)
 @group(0) @binding(2) var volumeSampler: sampler;
 @group(0) @binding(3) var tfLUT:         texture_2d<f32>;
 @group(0) @binding(4) var historyTex:    texture_2d<f32>;
+@group(0) @binding(5) var<storage, read> pageSlots: array<u32>;  // M3-3 page table: brick -> atlas slot or 0xFFFFFFFF
+
+// M3-3 brick sampling: page-table indirection -> linearly-filtered atlas sample.
+// Empty bricks return 0. kBrickSize=64 (interior), kBrickStored=66 (1-voxel halo).
+fn sampleVolume(uvw: vec3<f32>) -> f32 {
+    let vp = clamp(uvw, vec3<f32>(0.0), vec3<f32>(0.999999)) * ubo.volSize.xyz;
+    let brickIdx = vec3<i32>(vp) / 64;
+    let localF   = vp - vec3<f32>(brickIdx * 64);
+    let pageGrid = vec3<i32>((ubo.volSize.xyz + 63.0) / 64.0);
+    let pageIdx  = (brickIdx.z * pageGrid.y + brickIdx.y) * pageGrid.x + brickIdx.x;
+    let slot     = pageSlots[pageIdx];
+    if (slot == 0xFFFFFFFFu) { return 0.0; }
+    let atlasG = vec3<i32>(ubo.atlasGrid.xyz);
+    let sx = i32(slot) % atlasG.x;
+    let sy = (i32(slot) / atlasG.x) % atlasG.y;
+    let sz = i32(slot) / (atlasG.x * atlasG.y);
+    let slotOrigin = vec3<f32>(f32(sx * 66 + 1), f32(sy * 66 + 1), f32(sz * 66 + 1));
+    let atlasVox = slotOrigin + localF;
+    let atlasUvw = (atlasVox + vec3<f32>(0.5)) / vec3<f32>(atlasG * 66);
+    return textureSampleLevel(volumeTex, volumeSampler, atlasUvw, 0.0).r;
+}
 
 const PI: f32 = 3.14159265359;
 
@@ -77,7 +100,7 @@ fn sampleHG(wi: vec3<f32>, g: f32, seed: ptr<function, u32>) -> vec3<f32> {
 }
 
 fn sampleDensity(uvw: vec3<f32>) -> f32 {
-    let raw = textureSampleLevel(volumeTex, volumeSampler, uvw, 0.0).r;
+    let raw = sampleVolume(uvw);
     let n   = clamp((raw - (ubo.window.x - ubo.window.y * 0.5)) /
                     max(ubo.window.y, 1e-6), 0.0, 1.0);
     return max(n * ubo.params.z - ubo.tf.x, 0.0);

@@ -273,6 +273,16 @@ CAREER_ROADMAP의 "수치화가 전부다" 원칙 계승. 마일스톤별 정량
   GLSL `texelFetch`는 sampler 필요 → display 바인딩이 백엔드별로 갈림. 네이티브
   뷰어는 카메라+파라미터 비교로 reset, WASM 뷰어는 JS-bound setter마다 reset 호출
   + 카메라 매트릭스 비교(JS 훅 없음).
+- **M3-3 v0 bricked storage** (2026-06-02): 단일 dense 3D 텍스처 → brick atlas
+  (64³ interior + 1-voxel halo = 66³ stored) + page table(storage buffer of uint32
+  slot indices, 0xFFFFFFFF = "air") 간접 참조로 교체. 모든 density read가 셰이더
+  helper `sampleVolume(uvw)` 거쳐 page-lookup → linear atlas 샘플로 진행 (3 셰이더
+  세트: march · pathtrace · occupancy — 양 백엔드). 빈 brick(interior 전체 = 최솟값)은
+  atlas에 안 올라가 → 1024³ × 10% 점유 시 2GB → ~200MB. v0는 로드 타임 단발 packing,
+  streaming/LRU는 v1로 연기. atlas 초과 시 build() 실패 반환. 기본 atlas (4,4,4)
+  = 64 슬롯 (37MB 네이티브 / 53MB WebGPU). 부수로 GLSL march UBO에 누락돼 있던
+  `pathtrace` 필드 발견·정렬(이전엔 occ 뒤 바로 accum이라 read하면 silently 다른
+  값 읽힘 — march는 그 슬롯을 read하지 않아 노출 안 됨).
 
 **결정 기록**:
 
@@ -284,9 +294,9 @@ CAREER_ROADMAP의 "수치화가 전부다" 원칙 계승. 마일스톤별 정량
   (2026-05-31). CPU 직관과 반대 — 원본 per-sample 체크는 cache가 read를 무료화해
   더 빠름. 셰이더 주석에 기록.
 
-**다음 진입 작업**: **M3-3 bricking** 또는 **DICOM Implicit VR LE 지원** —
-M4 트랙은 v1까지 완료. 다음은 데이터 커버리지(Implicit VR) 또는 대용량
-페이징(bricking) 중 택일.
+**다음 진입 작업**: **M3-3 v1 streaming** (LRU + frustum-driven brick upload)
+또는 **DICOM Implicit VR LE 지원**. M3-3 v0(고정 atlas, 단발 packing)와
+M4 v1까지 완료. v1은 RAM 초과 볼륨, frustum 기반 가시성, on-disk 페이징 묶음.
 
 **남은 후보**:
 

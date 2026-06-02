@@ -1,21 +1,49 @@
 #version 450
 
 // M3-1: build a min/max occupancy grid for empty-space skipping. One invocation
-// per macrocell: scan the cell's voxels in the R16Float volume and write the cell's
-// [min,max] intensity. The ray-march pass later skips cells whose windowed density
-// is zero (air), which dominates medical volumes.
+// per macrocell: scan the cell's voxels in the brick atlas (M3-3) and write the
+// cell's [min,max] intensity. The ray-march pass later skips cells whose windowed
+// density is zero (air), which dominates medical volumes.
+//
+// M3-3 note: the volume is now stored as a brick atlas + page table indirection,
+// not a single dense 3D texture. Empty bricks return 0 here (matching the
+// fragment-side sampleVolume helper); cells fully inside an empty brick will
+// therefore correctly report cmax=0 and be skipped at march time.
 
 layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
 
 layout(set = 0, binding = 0) uniform OccUBO {
-    uvec4 volDim;    // xyz = volume dims (voxels), w = cellSize
-    uvec4 gridDim;   // xyz = grid dims (cells), w unused
+    uvec4 volDim;     // xyz = volume dims (voxels), w = cellSize
+    uvec4 gridDim;    // xyz = grid dims (cells), w unused
+    uvec4 pageGrid;   // M3-3 xyz = brick grid dims, w unused
+    uvec4 atlasGrid;  // M3-3 xyz = atlas capacity in bricks, w unused
 } ubo;
-layout(set = 0, binding = 1) uniform texture3D volumeTex;
-layout(set = 0, binding = 2) uniform sampler   volSampler;   // texelFetch needs a combined sampler
+layout(set = 0, binding = 1) uniform texture3D volumeTex;     // M3-3 brick atlas (R16Float)
+layout(set = 0, binding = 2) uniform sampler   volSampler;    // texelFetch needs a combined sampler
 layout(std430, set = 0, binding = 3) buffer OccBuf {
-    vec2 cells[];    // per cell: (min, max)
+    vec2 cells[];     // per cell: (min, max)
 };
+layout(std430, set = 0, binding = 4) readonly buffer PageTable {
+    uint pageSlots[]; // M3-3 page table: per virtual brick, atlas slot or 0xFFFFFFFF
+};
+
+// Integer-voxel sample through the brick atlas. Mirrors the fragment-side
+// sampleVolume helper but skips linear filtering / halo offsets -- we want the
+// canonical voxel value, not a filtered one.
+float fetchVoxel(uvec3 v) {
+    uvec3 brickIdx = v / 64u;
+    uvec3 local    = v - brickIdx * 64u;   // [0, 63]
+    uint pageIdx = (brickIdx.z * ubo.pageGrid.y + brickIdx.y) * ubo.pageGrid.x + brickIdx.x;
+    uint slot    = pageSlots[pageIdx];
+    if (slot == 0xFFFFFFFFu) return 0.0;
+    uint sx = slot % ubo.atlasGrid.x;
+    uint sy = (slot / ubo.atlasGrid.x) % ubo.atlasGrid.y;
+    uint sz =  slot / (ubo.atlasGrid.x * ubo.atlasGrid.y);
+    ivec3 atlasCoord = ivec3(sx * 66u + 1u + local.x,
+                             sy * 66u + 1u + local.y,
+                             sz * 66u + 1u + local.z);
+    return texelFetch(sampler3D(volumeTex, volSampler), atlasCoord, 0).r;
+}
 
 void main() {
     uvec3 cell = gl_GlobalInvocationID.xyz;
@@ -30,7 +58,7 @@ void main() {
     for (uint x = 0u; x < cs; ++x) {
         uvec3 v = base + uvec3(x, y, z);
         if (v.x >= ubo.volDim.x || v.y >= ubo.volDim.y || v.z >= ubo.volDim.z) continue;
-        float val = texelFetch(sampler3D(volumeTex, volSampler), ivec3(v), 0).r;
+        float val = fetchVoxel(v);
         mn = min(mn, val);
         mx = max(mx, val);
     }

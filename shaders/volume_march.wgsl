@@ -22,15 +22,41 @@ struct VolumeUBO {
     shade:     vec4<f32>,   // x=ambient, y=diffuse, z=gradEps (texture-space step), w spare
     shadow:    vec4<f32>,   // x=enable (0/1), y=stepSize (world), z=maxSteps, w=strength
     occ:       vec4<f32>,   // xyz = occupancy grid dims (cells), w = skipEnable (0/1)
+    pathtrace: vec4<f32>,   // unused by march (path-trace pipeline)
     accum:     vec4<f32>,   // unused by march (used by path-trace accumulation)
+    volSize:   vec4<f32>,   // M3-3 xyz = source volume voxel dims (brick indexing)
+    atlasGrid: vec4<f32>,   // M3-3 xyz = atlas capacity in bricks (slot unpack)
 };
 
 @group(0) @binding(0) var<uniform> ubo: VolumeUBO;
 @group(0) @binding(1) var depthTex:      texture_depth_2d;
-@group(0) @binding(2) var volumeTex:     texture_3d<f32>;
+@group(0) @binding(2) var volumeTex:     texture_3d<f32>;    // M3-3 brick atlas (R16Float)
 @group(0) @binding(3) var volumeSampler: sampler;
-@group(0) @binding(4) var tfLUT:         texture_2d<f32>;   // 256x1 density -> (rgb, opacity)
-@group(0) @binding(5) var<storage, read> occCells: array<vec2<f32>>;  // per cell (min,max) for skipping
+@group(0) @binding(4) var tfLUT:         texture_2d<f32>;    // 256x1 density -> (rgb, opacity)
+@group(0) @binding(5) var<storage, read> occCells:  array<vec2<f32>>;  // per cell (min,max) for skipping
+@group(0) @binding(6) var<storage, read> pageSlots: array<u32>;        // M3-3 page table: brick -> atlas slot or 0xFFFFFFFF
+
+// M3-3 brick sampling: page-table indirection from [0,1]^3 volume UV to a
+// linearly-filtered density sample in the brick atlas. Empty bricks return 0.
+// kBrickSize = 64 (interior), kBrickStored = 66 (1-voxel halo each side).
+fn sampleVolume(uvw: vec3<f32>) -> f32 {
+    let vp = clamp(uvw, vec3<f32>(0.0), vec3<f32>(0.999999)) * ubo.volSize.xyz;
+    let brickIdx = vec3<i32>(vp) / 64;
+    let localF   = vp - vec3<f32>(brickIdx * 64);   // [0, 64) inside brick
+    let pageGrid = vec3<i32>((ubo.volSize.xyz + 63.0) / 64.0);
+    let pageIdx  = (brickIdx.z * pageGrid.y + brickIdx.y) * pageGrid.x + brickIdx.x;
+    let slot     = pageSlots[pageIdx];
+    if (slot == 0xFFFFFFFFu) { return 0.0; }
+
+    let atlasG = vec3<i32>(ubo.atlasGrid.xyz);
+    let sx = i32(slot) % atlasG.x;
+    let sy = (i32(slot) / atlasG.x) % atlasG.y;
+    let sz = i32(slot) / (atlasG.x * atlasG.y);
+    let slotOrigin = vec3<f32>(f32(sx * 66 + 1), f32(sy * 66 + 1), f32(sz * 66 + 1));
+    let atlasVox = slotOrigin + localF;
+    let atlasUvw = (atlasVox + vec3<f32>(0.5)) / vec3<f32>(atlasG * 66);
+    return textureSampleLevel(volumeTex, volumeSampler, atlasUvw, 0.0).r;
+}
 
 struct VSOut {
     @builtin(position) position: vec4<f32>,
@@ -128,8 +154,8 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
             }
         }
 
-        // textureSampleLevel: valid in the non-uniform loop (no derivatives).
-        let raw = textureSampleLevel(volumeTex, volumeSampler, uvw, 0.0).r;
+        // sampleVolume: page-table indirection -> linear atlas sample (M3-3).
+        let raw = sampleVolume(uvw);
         // Window/level: map [center - width/2, center + width/2] -> [0,1] (contrast).
         let n = clamp((raw - (ubo.window.x - ubo.window.y * 0.5)) / max(ubo.window.y, 1e-6), 0.0, 1.0);
         var density = n * ubo.params.z;
@@ -152,12 +178,9 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
             // Gradient shading: density gradient = surface normal, lit with Lambert.
             if (ubo.light.w > 0.5) {
                 let e = ubo.shade.z;
-                let gx = textureSampleLevel(volumeTex, volumeSampler, uvw + vec3<f32>(e, 0.0, 0.0), 0.0).r
-                       - textureSampleLevel(volumeTex, volumeSampler, uvw - vec3<f32>(e, 0.0, 0.0), 0.0).r;
-                let gy = textureSampleLevel(volumeTex, volumeSampler, uvw + vec3<f32>(0.0, e, 0.0), 0.0).r
-                       - textureSampleLevel(volumeTex, volumeSampler, uvw - vec3<f32>(0.0, e, 0.0), 0.0).r;
-                let gz = textureSampleLevel(volumeTex, volumeSampler, uvw + vec3<f32>(0.0, 0.0, e), 0.0).r
-                       - textureSampleLevel(volumeTex, volumeSampler, uvw - vec3<f32>(0.0, 0.0, e), 0.0).r;
+                let gx = sampleVolume(uvw + vec3<f32>(e, 0.0, 0.0)) - sampleVolume(uvw - vec3<f32>(e, 0.0, 0.0));
+                let gy = sampleVolume(uvw + vec3<f32>(0.0, e, 0.0)) - sampleVolume(uvw - vec3<f32>(0.0, e, 0.0));
+                let gz = sampleVolume(uvw + vec3<f32>(0.0, 0.0, e)) - sampleVolume(uvw - vec3<f32>(0.0, 0.0, e));
                 let g = vec3<f32>(gx, gy, gz);
                 let glen = length(g);
                 // Normal points toward DECREASING density (outward from a dense body).
@@ -175,7 +198,7 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
                     for (var s = 0; s < sMax; s = s + 1) {
                         let suvw = (wp + L * st - ubo.aabbMin.xyz) / boxSize;
                         if (any(suvw < vec3<f32>(0.0)) || any(suvw > vec3<f32>(1.0))) { break; }
-                        let sr = textureSampleLevel(volumeTex, volumeSampler, suvw, 0.0).r;
+                        let sr = sampleVolume(suvw);
                         let sn = clamp((sr - (ubo.window.x - ubo.window.y * 0.5)) / max(ubo.window.y, 1e-6), 0.0, 1.0);
                         let sd = max(sn * ubo.params.z - ubo.tf.x, 0.0);
                         tau = tau + sd * extinction * ubo.shadow.w * sStep;

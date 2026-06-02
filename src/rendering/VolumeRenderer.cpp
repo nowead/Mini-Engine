@@ -106,106 +106,23 @@ bool VolumeRenderer::uploadVolume(const std::vector<uint8_t>& density,
     std::vector<uint16_t> halfData(static_cast<size_t>(w) * h * d);
     for (size_t i = 0; i < halfData.size(); ++i)
         halfData[i] = glm::packHalf1x16(density[i] / 255.0f);
-    return uploadHalf(halfData, w, h, d);
+    // Procedural density's "empty" is exact +0.0 (half-float 0x0000).
+    return uploadHalf(halfData, w, h, d, /*emptyValueHalf=*/0x0000);
 }
 
-// Core upload: pre-packed R16Float half data -> 3D texture + view. R16Float is the
-// dual-backend choice -- core and filterable on both Vulkan and WebGPU (16-bit
-// unorm is NOT WebGPU core). This is the format foundation for real 16-bit CT/MRI.
+// Core upload: pre-packed R16Float half data -> bricked atlas + page table.
+// Replaces the pre-M3-3 single dense 3D texture; every density read in the
+// shaders now goes through a page-table lookup (see sampleVolume helper).
+// emptyValueHalf is the half-float bit pattern that counts as "air" -- bricks
+// whose 64^3 interior is uniformly that value never reach the atlas.
 bool VolumeRenderer::uploadHalf(const std::vector<uint16_t>& halfData,
-                                uint32_t w, uint32_t h, uint32_t d) {
+                                uint32_t w, uint32_t h, uint32_t d,
+                                uint16_t emptyValueHalf) {
     m_volW = w; m_volH = h; m_volD = d;
-    const auto* halfBytes = reinterpret_cast<const uint8_t*>(halfData.data());
-
-    // WebGPU requires bytesPerRow to be a 256-byte multiple, so pad each row (and
-    // the staging buffer) on that backend; Vulkan packs tightly. (See CLAUDE.md:
-    // copyBufferToTexture bytesPerRow semantics.)
-    const uint32_t tightBytesPerRow = w * 2;      // width * 2 bytes (R16Float)
-#ifdef __EMSCRIPTEN__
-    const uint32_t paddedBytesPerRow = (tightBytesPerRow + 255u) & ~255u;
-#else
-    const uint32_t paddedBytesPerRow = tightBytesPerRow;
-#endif
-    const uint64_t stagingSize =
-        static_cast<uint64_t>(paddedBytesPerRow) * h * d;
-
-    rhi::BufferDesc stagingDesc{};
-    stagingDesc.size  = stagingSize;
-    stagingDesc.usage = rhi::BufferUsage::CopySrc | rhi::BufferUsage::MapWrite;
-    auto staging = m_device->createBuffer(stagingDesc);
-    if (!staging) { LOG_ERROR("VolumeRenderer") << "staging buffer create failed"; return false; }
-    {
-        uint8_t* mapped = static_cast<uint8_t*>(staging->map());
-#ifdef __EMSCRIPTEN__
-        // Per-row copy honoring the padded stride across every depth slice.
-        for (uint32_t z = 0; z < d; ++z) {
-            for (uint32_t y = 0; y < h; ++y) {
-                const uint64_t row = static_cast<uint64_t>(z) * h + y;
-                std::memcpy(mapped + row * paddedBytesPerRow,
-                            halfBytes + row * tightBytesPerRow,
-                            tightBytesPerRow);
-            }
-        }
-#else
-        std::memcpy(mapped, halfBytes, stagingSize);
-#endif
-        staging->unmap();
+    if (!m_brick.build(m_device, m_graphicsQueue, halfData, w, h, d, emptyValueHalf)) {
+        LOG_ERROR("VolumeRenderer") << "brick atlas build failed";
+        return false;
     }
-
-    rhi::TextureDesc texDesc{};
-    texDesc.size          = rhi::Extent3D{w, h, d};
-    texDesc.dimension     = rhi::TextureDimension::Texture3D;
-    texDesc.format        = rhi::TextureFormat::R16Float;
-    texDesc.mipLevelCount = 1;
-    texDesc.sampleCount   = 1;
-    texDesc.usage         = rhi::TextureUsage::CopyDst | rhi::TextureUsage::Sampled;
-    texDesc.label         = "VolumeDensity3D";
-    m_volumeTexture = m_device->createTexture(texDesc);
-    if (!m_volumeTexture) { LOG_ERROR("VolumeRenderer") << "3D texture create failed"; return false; }
-
-    auto encoder = m_device->createCommandEncoder();
-    encoder->transitionTextureLayout(m_volumeTexture.get(),
-                                     rhi::TextureLayout::Undefined,
-                                     rhi::TextureLayout::TransferDst);
-
-    rhi::BufferTextureCopyInfo bufferCopy{};
-    bufferCopy.buffer       = staging.get();
-    bufferCopy.offset       = 0;
-#ifdef __EMSCRIPTEN__
-    bufferCopy.bytesPerRow  = paddedBytesPerRow;  // bytes, 256-aligned (WebGPU)
-    bufferCopy.rowsPerImage = h;                   // rows per depth slice
-#else
-    bufferCopy.bytesPerRow  = 0;   // tightly packed (Vulkan reads this as texels; 0 = packed)
-    bufferCopy.rowsPerImage = 0;   // tightly packed slices
-#endif
-
-    rhi::TextureCopyInfo texCopy{};
-    texCopy.texture  = m_volumeTexture.get();
-    texCopy.mipLevel = 0;
-    texCopy.origin   = {0, 0, 0};
-    texCopy.aspect   = 0;
-
-    encoder->copyBufferToTexture(bufferCopy, texCopy, rhi::Extent3D{w, h, d});
-
-    encoder->transitionTextureLayout(m_volumeTexture.get(),
-                                     rhi::TextureLayout::TransferDst,
-                                     rhi::TextureLayout::ShaderReadOnly);
-
-    auto cmd = encoder->finish();
-    m_graphicsQueue->submit(cmd.get());
-    m_graphicsQueue->waitIdle();  // one-shot upload; safe to stall here
-
-    // 3D view.
-    rhi::TextureViewDesc viewDesc{};
-    viewDesc.format          = rhi::TextureFormat::R16Float;
-    viewDesc.dimension       = rhi::TextureViewDimension::View3D;
-    viewDesc.baseMipLevel    = 0;
-    viewDesc.mipLevelCount   = 1;
-    viewDesc.baseArrayLayer  = 0;
-    viewDesc.arrayLayerCount = 1;
-    m_volumeView = m_volumeTexture->createView(viewDesc);
-    if (!m_volumeView) { LOG_ERROR("VolumeRenderer") << "3D view create failed"; return false; }
-
     return true;
 }
 
@@ -301,7 +218,7 @@ bool VolumeRenderer::initialize(uint32_t resolution) {
 bool VolumeRenderer::loadFromData(const std::vector<uint8_t>& density,
                                   uint32_t w, uint32_t h, uint32_t d) {
     if (!m_device || !m_graphicsQueue || w == 0 || h == 0 || d == 0) return false;
-    if (!uploadVolume(density, w, h, d)) return false;   // recreates m_volumeTexture + m_volumeView
+    if (!uploadVolume(density, w, h, d)) return false;   // recreates brick atlas + page table
     buildOccupancy();                                    // rebuild skip grid for the new volume
     if (m_bindGroupLayout && m_depthView) {
         if (!createBindGroups(m_depthView)) return false; // rebind the new view
@@ -335,7 +252,11 @@ bool VolumeRenderer::loadFromFloatData(const std::vector<float>& intensity,
     m_windowCenter = 0.5f * (mn + mx);
     m_windowWidth  = (mx > mn) ? (mx - mn) : 1.0f;
 
-    if (!uploadHalf(halfData, w, h, d)) return false;
+    // "Empty" for clinical CT/MR data is exactly the per-volume minimum (air at
+    // -1000 HU for CT, background 0 for MR). Encode in half to match the atlas
+    // storage so the per-brick all-equal test is bit-exact.
+    const uint16_t emptyValueHalf = glm::packHalf1x16(mn);
+    if (!uploadHalf(halfData, w, h, d, emptyValueHalf)) return false;
     buildOccupancy();                                      // rebuild skip grid for the new volume
     if (m_bindGroupLayout && m_depthView) {
         if (!createBindGroups(m_depthView)) return false;  // rebind the new view
@@ -374,15 +295,17 @@ bool VolumeRenderer::createOccupancyResources() {
 #ifdef __EMSCRIPTEN__
     ld.entries = {
         rhi::BindGroupLayoutEntry(0, S::Compute, T::UniformBuffer),
-        volEntry,
-        rhi::BindGroupLayoutEntry(2, S::Compute, T::StorageBuffer),   // occupancy out (read_write)
+        volEntry,                                                       // brick atlas
+        rhi::BindGroupLayoutEntry(2, S::Compute, T::StorageBuffer),     // occupancy out (read_write)
+        rhi::BindGroupLayoutEntry(3, S::Compute, T::ReadOnlyStorageBuffer), // page table
     };
 #else
     ld.entries = {
         rhi::BindGroupLayoutEntry(0, S::Compute, T::UniformBuffer),
-        volEntry,
-        rhi::BindGroupLayoutEntry(2, S::Compute, T::Sampler),         // texelFetch needs a combined sampler
-        rhi::BindGroupLayoutEntry(3, S::Compute, T::StorageBuffer),   // occupancy out (read_write)
+        volEntry,                                                       // brick atlas
+        rhi::BindGroupLayoutEntry(2, S::Compute, T::Sampler),           // texelFetch needs a combined sampler
+        rhi::BindGroupLayoutEntry(3, S::Compute, T::StorageBuffer),     // occupancy out (read_write)
+        rhi::BindGroupLayoutEntry(4, S::Compute, T::ReadOnlyStorageBuffer), // page table
     };
 #endif
     ld.label = "VolumeOccLayout";
@@ -424,29 +347,40 @@ bool VolumeRenderer::buildOccupancy() {
 
     if (!m_occUBO) {
         rhi::BufferDesc ud{};
-        ud.size  = sizeof(uint32_t) * 8;
+        ud.size  = sizeof(uint32_t) * 16;
         ud.usage = rhi::BufferUsage::Uniform | rhi::BufferUsage::MapWrite;
         ud.label = "VolumeOccUBO";
         m_occUBO = m_device->createBuffer(ud);
         if (!m_occUBO) return false;
     }
-    const uint32_t u[8] = { m_volW, m_volH, m_volD, kCellSize, m_gridW, m_gridH, m_gridD, 0 };
+    // Layout matches the WGSL/GLSL volume_occupancy UBO declaration.
+    const glm::uvec3 pg = m_brick.pageGrid();
+    const glm::uvec3 ag = m_brick.atlasGrid();
+    const uint32_t u[16] = {
+        m_volW, m_volH, m_volD, kCellSize,
+        m_gridW, m_gridH, m_gridD, 0,
+        pg.x, pg.y, pg.z, 0,
+        ag.x, ag.y, ag.z, 0,
+    };
     m_occUBO->write(u, sizeof(u));
 
     rhi::BindGroupDesc bg;
     bg.layout = m_occLayout.get();
+    const uint64_t pageBytes = m_brick.pageTableSize();
 #ifdef __EMSCRIPTEN__
     bg.entries = {
         rhi::BindGroupEntry::Buffer(0, m_occUBO.get(), 0, sizeof(uint32_t) * 8),
-        rhi::BindGroupEntry::TextureView(1, m_volumeView.get()),
+        rhi::BindGroupEntry::TextureView(1, m_brick.atlasView()),
         rhi::BindGroupEntry::Buffer(2, m_occBuffer.get(), 0, bufBytes),
+        rhi::BindGroupEntry::Buffer(3, m_brick.pageTable(), 0, pageBytes),
     };
 #else
     bg.entries = {
         rhi::BindGroupEntry::Buffer(0, m_occUBO.get(), 0, sizeof(uint32_t) * 8),
-        rhi::BindGroupEntry::TextureView(1, m_volumeView.get()),
+        rhi::BindGroupEntry::TextureView(1, m_brick.atlasView()),
         rhi::BindGroupEntry::Sampler(2, m_sampler.get()),
         rhi::BindGroupEntry::Buffer(3, m_occBuffer.get(), 0, bufBytes),
+        rhi::BindGroupEntry::Buffer(4, m_brick.pageTable(), 0, pageBytes),
     };
 #endif
     bg.label = "VolumeOccBindGroup";
@@ -513,10 +447,11 @@ bool VolumeRenderer::createPipeline(rhi::RHITextureView* depthView, void* native
     layoutDesc.entries = {
         entry(0, S::Fragment, T::UniformBuffer),
         entry(1, S::Fragment, T::DepthTexture,   D::View2D),  // scene depth (textureLoad)
-        entry(2, S::Fragment, T::SampledTexture, D::View3D),  // volume density
-        entry(3, S::Fragment, T::Sampler),                    // volume + LUT sampler (linear)
+        entry(2, S::Fragment, T::SampledTexture, D::View3D),  // brick atlas
+        entry(3, S::Fragment, T::Sampler),                    // atlas + LUT sampler (linear)
         entry(4, S::Fragment, T::SampledTexture, D::View2D),  // transfer-function LUT (256x1)
         rhi::BindGroupLayoutEntry(5, S::Fragment, T::ReadOnlyStorageBuffer),  // occupancy grid
+        rhi::BindGroupLayoutEntry(6, S::Fragment, T::ReadOnlyStorageBuffer),  // brick page table
     };
 #else
     // Vulkan: GLSL texelFetch(sampler2D(depth, sampler)) needs a depth sampler.
@@ -524,10 +459,11 @@ bool VolumeRenderer::createPipeline(rhi::RHITextureView* depthView, void* native
         entry(0, S::Fragment, T::UniformBuffer),
         entry(1, S::Fragment, T::SampledTexture, D::View2D),  // scene depth
         entry(2, S::Fragment, T::Sampler),                    // depth sampler (nearest)
-        entry(3, S::Fragment, T::SampledTexture, D::View3D),  // volume density
-        entry(4, S::Fragment, T::Sampler),                    // volume + LUT sampler (linear)
+        entry(3, S::Fragment, T::SampledTexture, D::View3D),  // brick atlas
+        entry(4, S::Fragment, T::Sampler),                    // atlas + LUT sampler (linear)
         entry(5, S::Fragment, T::SampledTexture, D::View2D),  // transfer-function LUT (256x1)
         rhi::BindGroupLayoutEntry(6, S::Fragment, T::ReadOnlyStorageBuffer),  // occupancy grid
+        rhi::BindGroupLayoutEntry(7, S::Fragment, T::ReadOnlyStorageBuffer),  // brick page table
     };
 #endif
     layoutDesc.label = "VolumeBGLayout";
@@ -576,8 +512,9 @@ bool VolumeRenderer::createPipeline(rhi::RHITextureView* depthView, void* native
 }
 
 bool VolumeRenderer::createBindGroups(rhi::RHITextureView* depthView) {
-    if (!m_bindGroupLayout || !depthView || !m_volumeView || !m_occBuffer) return false;
+    if (!m_bindGroupLayout || !depthView || !m_brick.atlasView() || !m_occBuffer || !m_brick.pageTable()) return false;
     m_depthView = depthView;   // remembered so loadFromData() can rebind after a reload
+    const uint64_t pageBytes = m_brick.pageTableSize();
     for (uint32_t i = 0; i < kFramesInFlight; ++i) {
         rhi::BindGroupDesc desc;
         desc.layout = m_bindGroupLayout.get();
@@ -586,20 +523,22 @@ bool VolumeRenderer::createBindGroups(rhi::RHITextureView* depthView) {
         desc.entries = {
             rhi::BindGroupEntry::Buffer(0, m_uniformBuffers[i].get(), 0, sizeof(VolumeUBO)),
             rhi::BindGroupEntry::TextureView(1, depthView),
-            rhi::BindGroupEntry::TextureView(2, m_volumeView.get()),
+            rhi::BindGroupEntry::TextureView(2, m_brick.atlasView()),
             rhi::BindGroupEntry::Sampler(3, m_sampler.get()),
             rhi::BindGroupEntry::TextureView(4, m_lutView.get()),
             rhi::BindGroupEntry::Buffer(5, m_occBuffer.get(), 0, occBytes),
+            rhi::BindGroupEntry::Buffer(6, m_brick.pageTable(), 0, pageBytes),
         };
 #else
         desc.entries = {
             rhi::BindGroupEntry::Buffer(0, m_uniformBuffers[i].get(), 0, sizeof(VolumeUBO)),
             rhi::BindGroupEntry::TextureView(1, depthView),
             rhi::BindGroupEntry::Sampler(2, m_depthSampler.get()),
-            rhi::BindGroupEntry::TextureView(3, m_volumeView.get()),
+            rhi::BindGroupEntry::TextureView(3, m_brick.atlasView()),
             rhi::BindGroupEntry::Sampler(4, m_sampler.get()),
             rhi::BindGroupEntry::TextureView(5, m_lutView.get()),
             rhi::BindGroupEntry::Buffer(6, m_occBuffer.get(), 0, occBytes),
+            rhi::BindGroupEntry::Buffer(7, m_brick.pageTable(), 0, pageBytes),
         };
 #endif
         desc.label = "VolumeBindGroup";
@@ -697,10 +636,11 @@ bool VolumeRenderer::createAccumulationResources(uint32_t width, uint32_t height
         rhi::BindGroupLayoutDesc ld;
         ld.entries = {
             entry(0, S::Fragment, T::UniformBuffer),
-            entry(1, S::Fragment, T::SampledTexture, D::View3D),  // volume
-            entry(2, S::Fragment, T::Sampler),                    // volume + LUT sampler
+            entry(1, S::Fragment, T::SampledTexture, D::View3D),  // brick atlas
+            entry(2, S::Fragment, T::Sampler),                    // atlas + LUT sampler
             entry(3, S::Fragment, T::SampledTexture, D::View2D),  // TF LUT
             entry(4, S::Fragment, T::SampledTexture, D::View2D),  // history (prev accumulation)
+            rhi::BindGroupLayoutEntry(5, S::Fragment, T::ReadOnlyStorageBuffer), // brick page table
         };
         ld.label = "VolumePathBGLayout";
         m_pathBindGroupLayout = m_device->createBindGroupLayout(ld);
@@ -778,16 +718,18 @@ bool VolumeRenderer::createAccumulationResources(uint32_t width, uint32_t height
     }
 
     // 6. Bind groups (rebuild every resize because they reference the textures).
+    const uint64_t pathPageBytes = m_brick.pageTable() ? m_brick.pageTableSize() : 0;
     for (uint32_t fi = 0; fi < kFramesInFlight; ++fi) {
         for (uint32_t pp = 0; pp < 2; ++pp) {
             rhi::BindGroupDesc desc;
             desc.layout = m_pathBindGroupLayout.get();
             desc.entries = {
                 rhi::BindGroupEntry::Buffer(0, m_uniformBuffers[fi].get(), 0, sizeof(VolumeUBO)),
-                rhi::BindGroupEntry::TextureView(1, m_volumeView.get()),
+                rhi::BindGroupEntry::TextureView(1, m_brick.atlasView()),
                 rhi::BindGroupEntry::Sampler(2, m_sampler.get()),
                 rhi::BindGroupEntry::TextureView(3, m_lutView.get()),
                 rhi::BindGroupEntry::TextureView(4, m_accumViews[pp].get()),  // read from this ping-pong slot
+                rhi::BindGroupEntry::Buffer(5, m_brick.pageTable(), 0, pathPageBytes),
             };
             desc.label = "VolumePathBindGroup";
             m_pathBindGroups[fi][pp] = m_device->createBindGroup(desc);
@@ -990,6 +932,13 @@ void VolumeRenderer::updateUBO(uint32_t frameIndex, const glm::mat4& invView,
     ubo.pathtrace = glm::vec4(static_cast<float>(m_pathSpp), m_pathG,
                               seedAsFloat, static_cast<float>(m_pathBounces));
     ubo.accum     = glm::vec4(m_pathSampleCount, 0.0f, 0.0f, 0.0f);
+    // M3-3: brick descriptor for the shader's sampleVolume() indirection.
+    const glm::uvec3 vs = m_brick.volSize();
+    const glm::uvec3 ag = m_brick.atlasGrid();
+    ubo.volSize   = glm::vec4(static_cast<float>(vs.x), static_cast<float>(vs.y),
+                              static_cast<float>(vs.z), 0.0f);
+    ubo.atlasGrid = glm::vec4(static_cast<float>(ag.x), static_cast<float>(ag.y),
+                              static_cast<float>(ag.z), 0.0f);
 
     m_uniformBuffers[fi]->write(&ubo, sizeof(VolumeUBO));
 }
