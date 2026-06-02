@@ -31,9 +31,15 @@ DICOM 생성기로 NIfTI와 크로스 검증(동일 입력 → 동일 출력).
 **M4 v0 path-traced 산란 완료** (2026-05-31): Woodcock 자유경로 + Henyey-Greenstein
 위상함수 + single-light NEE + inline SPP 평균(누적 버퍼 없음, v1로 보류). 두 번째
 파이프라인을 march와 같은 bind group layout으로 추가 → 런타임 모드 스위치. 양 백엔드.
+**실 임상 DICOM 4종 로드 성공** (2026-06-01): `scripts/fetch_sample_ct.py`로 pydicom
+공개 코퍼스에서 4개 받아 검증. 발견·수정한 실세계 파서 갭: (1) **NumberOfFrames**
+지원(multi-frame DICOM의 N프레임을 z 슬라이스로 펴기), (2) **중첩 undefined-length
+SQ skip**(item-walk으로 정확히, 단순 byte scan은 inner delimitation에 걸려 픽셀
+데이터를 지나침). 실 데이터로 검증된 범위: HU CT(128²), 고해상도 MR(1024²),
+multi-frame MR(64²×10), enhanced CT(512²×2). 양 백엔드 엔진 무변경(파서 레벨만).
 
 **다음 후보**: M4 v1(누적 버퍼로 progressive convergence) · M3-3(bricking) ·
-실 임상 CT(공개 데이터셋)로 측정 헤드라인.
+DICOM 후속(Implicit VR LE 지원 시 임상 PACS 데이터 커버리지 ↑).
 
 **선행 완료**: 볼륨 렌더링 기초(3D 텍스처 + 레이마칭, Vulkan + WebGPU) ·
 TF 프리셋 · 독립 뷰어(네이티브 `volume_viewer` + 브라우저 `volume_viewer_wasm`).

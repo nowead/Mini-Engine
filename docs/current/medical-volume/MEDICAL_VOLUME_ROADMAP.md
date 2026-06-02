@@ -260,6 +260,11 @@ CAREER_ROADMAP의 "수치화가 전부다" 원칙 계승. 마일스톤별 정량
   single-light NEE + inline SPP 평균). 두 번째 fragment 파이프라인을 같은 bind group
   layout으로 추가. **누적 버퍼는 v1로 보류** — 매 프레임 독립 샘플이라 노이즈 항상
   보임, 정지 카메라 progressive convergence는 다음.
+- **실 임상 DICOM 검증** (2026-06-01): pydicom 공개 코퍼스 4종(HU CT, 고해상도 MR,
+  multi-frame MR, enhanced CT) 모두 로드. 발견·수정한 실세계 갭 2개 — NumberOfFrames
+  지원, 중첩 undefined-length sequence skip(item-walk). 로더 외 엔진 무변경.
+  M3-2 헤드라인은 미해결(공개 코퍼스에 큰 multi-slice CT 시리즈 부재; TCIA류 인증
+  필요한 데이터셋에서 재측정).
 
 **결정 기록**:
 
@@ -279,8 +284,9 @@ TAA 인프라(이미 보유)와 같은 ping-pong 패턴. v0의 노이즈가 사�
 **남은 후보**:
 
 - **M3-3 bricking** — VRAM 초과 볼륨 페이징("1GB+" 주장의 본체), 작업량 큼.
-- 실 임상 CT(공개 데이터셋) 로드 + M3-2 헤드라인 재측정.
-- DICOM 후속(멀티프레임, 압축 transfer syntax) — 임상 데이터셋이 요구할 때.
+- **DICOM Implicit VR LE 지원** — 임상 PACS의 기본 transfer syntax. 추가 시 실
+  병원 데이터 커버리지 크게 확장.
+- **DICOM 압축 transfer syntax**(JPEG/JPEG2000/RLE) — libjpeg 등 외부 의존 필요.
 
 **다음 세션 진입점**: 이 문서 §2(마일스톤 M3-2/M4 상세) + 위 후보 목록. 코드
 진입은 `src/rendering/VolumeRenderer.{hpp,cpp}`(엔진 코어), `tests/volume_viewer.cpp`
