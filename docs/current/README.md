@@ -89,7 +89,9 @@ C(TAA, Vulkan + WebGPU) → 그림자 품질(하드웨어 PCF). 상세는 archiv
 | [archive/refactoring/webgpu-showcase/](../archive/refactoring/webgpu-showcase/WEBGPU_SHOWCASE_PLAN.md) | WebGPU Showcase 격상 (2026-05-14 ~ 2026-05-20) |
 | [archive/refactoring/webgpu-deferred/](../archive/refactoring/webgpu-deferred/) | WebGPU Deferred Rendering 포팅 |
 
-최근 변경 이력: [CHANGELOG_2026-05-27](../archive/changelogs/CHANGELOG_2026-05-27.md)
+최근 변경 이력: [CHANGELOG_2026-06-02](../archive/changelogs/CHANGELOG_2026-06-02.md)
+(M3-3 v0 + M4 v1 양 백엔드 검증 · EMSDK env 전파 트랩 · OccUBO bind size 미동기화 트랩) ·
+[05-27](../archive/changelogs/CHANGELOG_2026-05-27.md)
 (D2 스레드 풀 · D3-0a/0b 장애물 해소 · D3-1/2 셰도우 캐스케이드 병렬 기록 · D4 측정·종결) ·
 [05-26](../archive/changelogs/CHANGELOG_2026-05-26.md)
 (TAA Vulkan+WebGPU · 그림자 하드웨어 PCF) · [05-25](../archive/changelogs/CHANGELOG_2026-05-25.md)
