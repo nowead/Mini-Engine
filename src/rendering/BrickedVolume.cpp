@@ -3,6 +3,7 @@
 #include "src/utils/Logger.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <vector>
 
@@ -56,17 +57,24 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
                           glm::uvec3 atlasGrid) {
     if (!device || !queue) return false;
     if (w == 0 || h == 0 || d == 0) return false;
-    if (atlasGrid.x == 0 || atlasGrid.y == 0 || atlasGrid.z == 0) return false;
     if (halfData.size() < static_cast<size_t>(w) * h * d) {
         LOG_ERROR("BrickedVolume") << "halfData too small for " << w << "x" << h << "x" << d;
         return false;
     }
 
     m_volSize   = glm::uvec3(w, h, d);
-    m_atlasGrid = atlasGrid;
     m_pageGrid  = glm::uvec3((w + kBrickSize - 1) / kBrickSize,
                              (h + kBrickSize - 1) / kBrickSize,
                              (d + kBrickSize - 1) / kBrickSize);
+    // Auto-size: cover the whole pageGrid up to the per-axis cap. Caller can
+    // override by passing a non-zero atlasGrid for known-large or known-dense
+    // workloads. Auto-size never exceeds (8,8,8) = 512 slots ~= 292 MB.
+    if (atlasGrid.x == 0 || atlasGrid.y == 0 || atlasGrid.z == 0) {
+        atlasGrid = glm::uvec3(std::min(m_pageGrid.x, kAutoAtlasAxisCap),
+                               std::min(m_pageGrid.y, kAutoAtlasAxisCap),
+                               std::min(m_pageGrid.z, kAutoAtlasAxisCap));
+    }
+    m_atlasGrid = atlasGrid;
 
     const uint32_t atlasVoxelsX = atlasGrid.x * kBrickStored;
     const uint32_t atlasVoxelsY = atlasGrid.y * kBrickStored;
@@ -112,11 +120,39 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
             for (uint32_t bx = 0; bx < m_pageGrid.x; ++bx) {
                 if (isInteriorEmpty(halfData, bx, by, bz, w, h, d, emptyValueHalf)) continue;
                 if (m_usedSlots >= totalSlots) {
-                    LOG_ERROR("BrickedVolume") << "atlas full at " << m_usedSlots
-                        << " slots (volume " << w << "x" << h << "x" << d
-                        << " needs more bricks than " << atlasGrid.x << "x"
-                        << atlasGrid.y << "x" << atlasGrid.z << " can hold; "
-                        << "pass a larger atlasGrid to build())";
+                    // Atlas exhausted. Finish the scan to count *all* non-empty
+                    // bricks so the user gets a concrete "you need >= N slots"
+                    // recommendation instead of just "more". Cube-root then ceil
+                    // gives a balanced atlasGrid suggestion (clamped by pageGrid
+                    // per axis -- never recommend more slots per axis than
+                    // virtual bricks).
+                    uint32_t totalNonEmpty = m_usedSlots + 1;  // include current
+                    for (uint32_t cz = bz; cz < m_pageGrid.z; ++cz) {
+                        const uint32_t cyStart = (cz == bz) ? by : 0u;
+                        for (uint32_t cy = cyStart; cy < m_pageGrid.y; ++cy) {
+                            const uint32_t cxStart = (cz == bz && cy == by) ? (bx + 1u) : 0u;
+                            for (uint32_t cx = cxStart; cx < m_pageGrid.x; ++cx) {
+                                if (!isInteriorEmpty(halfData, cx, cy, cz, w, h, d, emptyValueHalf))
+                                    ++totalNonEmpty;
+                            }
+                        }
+                    }
+                    const double cbrt = std::cbrt(static_cast<double>(totalNonEmpty));
+                    const uint32_t axisGuess = static_cast<uint32_t>(std::ceil(cbrt));
+                    const glm::uvec3 recommend(
+                        std::min(std::max(axisGuess, atlasGrid.x), m_pageGrid.x),
+                        std::min(std::max(axisGuess, atlasGrid.y), m_pageGrid.y),
+                        std::min(std::max(axisGuess, atlasGrid.z), m_pageGrid.z));
+                    LOG_ERROR("BrickedVolume") << "atlas full: volume "
+                        << w << "x" << h << "x" << d << " has " << totalNonEmpty
+                        << " non-empty bricks but atlas " << atlasGrid.x << "x"
+                        << atlasGrid.y << "x" << atlasGrid.z << " holds only "
+                        << totalSlots << " slots. Recommend atlasGrid ("
+                        << recommend.x << "," << recommend.y << "," << recommend.z
+                        << ") = " << (recommend.x * recommend.y * recommend.z)
+                        << " slots (~" << ((static_cast<uint64_t>(recommend.x) * recommend.y
+                                            * recommend.z * kBrickStored * kBrickStored
+                                            * kBrickStored * 2) >> 20) << " MB)";
                     return false;
                 }
 

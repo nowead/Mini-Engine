@@ -189,7 +189,12 @@ PT 모드 진입 시 자동으로 progressive 누적이 시작된다. **카메�
 ### Brick atlas 핵심 수치 (M3-3 v0)
 
 - Brick size: 64³ interior + 1-voxel halo 양면 = 66³ stored
-- 기본 atlas: 4×4×4 = 64 slots = ~37MB(Vulkan) / ~53MB(WebGPU, 256B row pad)
+- atlas 크기 자동 산정 (Step C): `min(pageGrid, (8,8,8))` per axis. 작은
+  볼륨은 페이지 그리드만큼만(메모리 최소), 큰 볼륨은 (8,8,8) = 512 slots
+  ~= 292MB로 cap. 호출자가 `loadFromFloatData(..., atlasGridOverride)`로
+  명시 가능
+- 자동 cap 초과 시 `build()`가 atlas-full 로그에 **권장 atlasGrid 값과
+  메모리 추정치**를 함께 출력 → 호출자가 즉시 오버라이드 조정
 - Page table: `u32` per virtual brick, `0xFFFFFFFF` = "air" (sentinel)
 - 압축률 예: 1024³ × 10% non-empty → 2GB → ~200MB
 

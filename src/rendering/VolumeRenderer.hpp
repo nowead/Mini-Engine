@@ -83,8 +83,13 @@ public:
     // Stores raw intensity in R16Float so window/level works in the data's own units;
     // records the data range and defaults the window to span it. Same runtime-safe
     // texture/bind-group recreation as loadFromData.
+    // atlasGridOverride = (0,0,0) means "auto" (BrickedVolume picks min(pageGrid,
+    // kAutoAtlasAxisCap) per axis). Pass an explicit value to lift the cap for
+    // known-large or known-dense workloads; build() logs a recommended atlasGrid
+    // if it runs out of slots.
     bool loadFromFloatData(const std::vector<float>& intensity,
-                           uint32_t w, uint32_t h, uint32_t d);
+                           uint32_t w, uint32_t h, uint32_t d,
+                           glm::uvec3 atlasGridOverride = glm::uvec3(0));
 
     // Intensity range of the loaded volume (data units, e.g. HU) -- lets the UI set
     // window-slider bounds and clinical presets sensibly.
@@ -259,7 +264,8 @@ private:
     // it's the half encoding of the data minimum (e.g. -1000 HU).
     bool uploadHalf(const std::vector<uint16_t>& halfData,
                     uint32_t w, uint32_t h, uint32_t d,
-                    uint16_t emptyValueHalf);
+                    uint16_t emptyValueHalf,
+                    glm::uvec3 atlasGridOverride = glm::uvec3(0));
 
     // M3 empty-space skipping. createOccupancyResources builds the compute pipeline
     // once; buildOccupancy (re)creates the grid buffer and dispatches it per volume.

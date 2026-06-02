@@ -40,6 +40,12 @@ public:
     static constexpr uint32_t kBrickStored = kBrickSize + 2; // 66, with 1-voxel halo
     static constexpr uint32_t kEmptySlot   = 0xFFFFFFFFu;   // page table sentinel
 
+    // Auto-size cap per axis. (8,8,8) = 512 slots * 66^3 * 2B ~= 292 MB, the
+    // upper bound we're willing to allocate from a load-time decision. Larger
+    // volumes either get truncated (caller passes a bigger override) or fail
+    // build() with a recommendation (see kAtlasFullRecommendBias below).
+    static constexpr uint32_t kAutoAtlasAxisCap = 8;
+
     BrickedVolume() = default;
     ~BrickedVolume() = default;
     BrickedVolume(const BrickedVolume&) = delete;
@@ -49,13 +55,15 @@ public:
     // halfData is row-major (x-fastest) of size w*h*d uint16 (R16Float bits).
     // emptyValueHalf is the half-float bit pattern that counts as "air" --
     // bricks whose 64^3 interior is uniformly this value are skipped.
-    // atlasGrid is the atlas capacity in bricks. Returns false on RHI failure
-    // or atlas-full (logged).
+    // atlasGrid = (0,0,0) means "auto" -- pick min(pageGrid, kAutoAtlasAxisCap)
+    // per axis. Pass an explicit value to override (e.g. for a known-dense
+    // benchmark where the auto-cap is too small). Returns false on RHI
+    // failure or atlas-full (logged with a recommended atlasGrid).
     bool build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
                const std::vector<uint16_t>& halfData,
                uint32_t w, uint32_t h, uint32_t d,
                uint16_t emptyValueHalf,
-               glm::uvec3 atlasGrid = glm::uvec3(4, 4, 4));
+               glm::uvec3 atlasGrid = glm::uvec3(0));
 
     rhi::RHITextureView* atlasView()    const { return m_atlasView.get(); }
     rhi::RHIBuffer*      pageTable()    const { return m_pageTable.get(); }

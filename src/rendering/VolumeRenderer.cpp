@@ -117,9 +117,11 @@ bool VolumeRenderer::uploadVolume(const std::vector<uint8_t>& density,
 // whose 64^3 interior is uniformly that value never reach the atlas.
 bool VolumeRenderer::uploadHalf(const std::vector<uint16_t>& halfData,
                                 uint32_t w, uint32_t h, uint32_t d,
-                                uint16_t emptyValueHalf) {
+                                uint16_t emptyValueHalf,
+                                glm::uvec3 atlasGridOverride) {
     m_volW = w; m_volH = h; m_volD = d;
-    if (!m_brick.build(m_device, m_graphicsQueue, halfData, w, h, d, emptyValueHalf)) {
+    if (!m_brick.build(m_device, m_graphicsQueue, halfData, w, h, d,
+                       emptyValueHalf, atlasGridOverride)) {
         LOG_ERROR("VolumeRenderer") << "brick atlas build failed";
         return false;
     }
@@ -231,7 +233,8 @@ bool VolumeRenderer::loadFromData(const std::vector<uint8_t>& density,
 // raw intensity directly in R16Float so window/level operates in the data's own
 // units; tracks the data range and defaults the window to span it (no clipping).
 bool VolumeRenderer::loadFromFloatData(const std::vector<float>& intensity,
-                                       uint32_t w, uint32_t h, uint32_t d) {
+                                       uint32_t w, uint32_t h, uint32_t d,
+                                       glm::uvec3 atlasGridOverride) {
     if (!m_device || !m_graphicsQueue || w == 0 || h == 0 || d == 0) return false;
     if (intensity.size() < static_cast<size_t>(w) * h * d) {
         LOG_ERROR("VolumeRenderer") << "intensity buffer too small for " << w << "x" << h << "x" << d;
@@ -256,7 +259,7 @@ bool VolumeRenderer::loadFromFloatData(const std::vector<float>& intensity,
     // -1000 HU for CT, background 0 for MR). Encode in half to match the atlas
     // storage so the per-brick all-equal test is bit-exact.
     const uint16_t emptyValueHalf = glm::packHalf1x16(mn);
-    if (!uploadHalf(halfData, w, h, d, emptyValueHalf)) return false;
+    if (!uploadHalf(halfData, w, h, d, emptyValueHalf, atlasGridOverride)) return false;
     buildOccupancy();                                      // rebuild skip grid for the new volume
     if (m_bindGroupLayout && m_depthView) {
         if (!createBindGroups(m_depthView)) return false;  // rebind the new view
