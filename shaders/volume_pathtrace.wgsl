@@ -1,7 +1,9 @@
-// M4 v0 -- volumetric path tracing (WebGPU). Mirrors volume_pathtrace.frag.glsl:
-// Woodcock free-flight + Henyey-Greenstein phase + single-light NEE + inline spp
-// averaging. Shares the volume_march bind-group layout so VolumeRenderer can
-// flip pipelines at runtime without rebuilding bind groups.
+// M4 v1 -- volumetric path tracing with progressive temporal accumulation (WebGPU).
+// Mirrors volume_pathtrace.frag.glsl: integrator is the v0 Woodcock + Henyey-
+// Greenstein + single-light NEE + inline-SPP loop, but the output writes linear
+// HDR into a ping-pong history texture instead of tonemapped sRGB; a separate
+// display shader handles the tonemap once the average is final. Tonemap must
+// run AFTER averaging because Reinhard is non-linear.
 
 struct VolumeUBO {
     invView:   mat4x4<f32>,
@@ -18,15 +20,15 @@ struct VolumeUBO {
     shade:     vec4<f32>,
     shadow:    vec4<f32>,
     occ:       vec4<f32>,
-    pathtrace: vec4<f32>,   // x=spp, y=HG g, z=frame seed, w=maxBounces
+    pathtrace: vec4<f32>,
+    accum:     vec4<f32>,   // x = previous accumulated sample count N
 };
 
 @group(0) @binding(0) var<uniform> ubo: VolumeUBO;
-@group(0) @binding(1) var depthTex:      texture_depth_2d;
-@group(0) @binding(2) var volumeTex:     texture_3d<f32>;
-@group(0) @binding(3) var volumeSampler: sampler;
-@group(0) @binding(4) var tfLUT:         texture_2d<f32>;
-@group(0) @binding(5) var<storage, read> occCells: array<vec2<f32>>;
+@group(0) @binding(1) var volumeTex:     texture_3d<f32>;
+@group(0) @binding(2) var volumeSampler: sampler;
+@group(0) @binding(3) var tfLUT:         texture_2d<f32>;
+@group(0) @binding(4) var historyTex:    texture_2d<f32>;
 
 const PI: f32 = 3.14159265359;
 
@@ -40,9 +42,6 @@ fn vs_main(@builtin(vertex_index) vertIdx: u32) -> VSOut {
     return out;
 }
 
-// ---------------------------------------------------------------------------
-// PRNG
-// ---------------------------------------------------------------------------
 fn pcg(v: u32) -> u32 {
     let state = v * 747796405u + 2891336453u;
     let word  = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
@@ -53,9 +52,6 @@ fn rnd(seed: ptr<function, u32>) -> f32 {
     return f32(*seed) / 4294967296.0;
 }
 
-// ---------------------------------------------------------------------------
-// Henyey-Greenstein
-// ---------------------------------------------------------------------------
 fn hgPhase(cosTheta: f32, g: f32) -> f32 {
     let denom = 1.0 + g * g - 2.0 * g * cosTheta;
     return (1.0 - g * g) / (4.0 * PI * pow(max(denom, 1e-6), 1.5));
@@ -80,9 +76,6 @@ fn sampleHG(wi: vec3<f32>, g: f32, seed: ptr<function, u32>) -> vec3<f32> {
     return normalize(u * sinTheta * cos(phi) + v * sinTheta * sin(phi) + w * cosTheta);
 }
 
-// ---------------------------------------------------------------------------
-// Volume / TF helpers
-// ---------------------------------------------------------------------------
 fn sampleDensity(uvw: vec3<f32>) -> f32 {
     let raw = textureSampleLevel(volumeTex, volumeSampler, uvw, 0.0).r;
     let n   = clamp((raw - (ubo.window.x - ubo.window.y * 0.5)) /
@@ -187,9 +180,8 @@ fn tracePath(ro_in: vec3<f32>, rd_in: vec3<f32>,
 
 @fragment
 fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
-    let screenSize = vec2<f32>(textureDimensions(depthTex));
+    let screenSize = vec2<f32>(textureDimensions(historyTex));
     let uv         = fragPos.xy / screenSize;
-    // WebGPU NDC: y=+1 is top, matching fragPos.y=0 at top.
     let ndcXY      = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
 
     var vFar = ubo.invProj * vec4<f32>(ndcXY, 1.0, 1.0);
@@ -209,13 +201,18 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
 
     let sigmaMax = ubo.params.y * max(ubo.params.z, 1.0) + 1e-3;
 
-    let spp  = clamp(i32(ubo.pathtrace.x), 1, 32);
-    var accum = vec3<f32>(0.0);
+    let spp = clamp(i32(ubo.pathtrace.x), 1, 32);
+    var current = vec3<f32>(0.0);
     for (var s = 0; s < spp; s = s + 1) {
-        accum = accum + tracePath(ro, rd, bmin, bmax, sigmaMax, &seed);
+        current = current + tracePath(ro, rd, bmin, bmax, sigmaMax, &seed);
     }
-    accum = accum / f32(spp);
+    current = current / f32(spp);
 
-    accum = accum / (1.0 + accum);
-    return vec4<f32>(accum, 1.0);
+    // Progressive temporal accumulation. N=0 collapses prev*N to zero so stale
+    // history content is ignored without needing to clear the texture on reset.
+    let prev    = textureLoad(historyTex, fragCoord, 0).rgb;
+    let N       = max(ubo.accum.x, 0.0);
+    let blended = (prev * N + current) / (N + 1.0);
+
+    return vec4<f32>(blended, 1.0);
 }

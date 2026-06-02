@@ -58,6 +58,7 @@ public:
         glm::vec4 shadow;      // x=enable(0/1), y=stepSize(world), z=maxSteps, w=strength
         glm::vec4 occ;         // xyz = occupancy grid dims (cells), w = skipEnable (0/1)
         glm::vec4 pathtrace;   // x=spp, y=HG anisotropy g, z=frame seed (uint bits), w=max bounces
+        glm::vec4 accum;       // x = path-trace accumulated sample count (for the running average); yzw spare
     };
 
     enum class RenderMode { Lambert = 0, PathTrace = 1 };
@@ -205,12 +206,42 @@ public:
 
     rhi::RHITextureView*    getVolumeView() const { return m_volumeView.get(); }
     rhi::RHISampler*        getVolumeSampler() const { return m_sampler.get(); }
-    rhi::RHIRenderPipeline* getPipeline() const {
-        return (m_renderMode == RenderMode::PathTrace && m_pathPipeline)
-            ? m_pathPipeline.get() : m_pipeline.get();
-    }
+    rhi::RHIRenderPipeline* getPipeline() const { return m_pipeline.get(); }   // Lambert/march
     rhi::RHIBindGroup*      getBindGroup(uint32_t frame) const { return m_bindGroups[frame % kFramesInFlight].get(); }
     uint32_t                getResolution() const { return m_resolution; }
+
+    // M4 v1 path-trace pass accessors (caller renders 2 passes in PT mode).
+    // Pass 1: getPathPipeline + getPathBindGroup(frame) -> getPathOutputView (RGBA16Float).
+    // Pass 2: getDisplayPipeline + getDisplayBindGroup() -> swapchain.
+    // After both passes, call advanceAccumulationFrame() to bump N and ping-pong.
+    bool isPathReady() const { return m_pathPipeline != nullptr && m_pathDisplayPipeline != nullptr; }
+    rhi::RHIRenderPipeline* getPathPipeline() const    { return m_pathPipeline.get(); }
+    rhi::RHIBindGroup* getPathBindGroup(uint32_t frame) const {
+        // Reads the PREVIOUS accumulation (the one we're about to overwrite is the OTHER).
+        return m_pathBindGroups[frame % kFramesInFlight][m_pathPingPong].get();
+    }
+    rhi::RHITextureView* getPathOutputView() const {
+        // We write to the texture NOT currently bound for reading.
+        return m_accumViews[1u - m_pathPingPong].get();
+    }
+    rhi::RHIRenderPipeline* getDisplayPipeline() const { return m_pathDisplayPipeline.get(); }
+    rhi::RHIBindGroup* getDisplayBindGroup() const {
+        // Display reads the JUST-WRITTEN accumulation (the texture we rendered to).
+        return m_pathDisplayBindGroups[1u - m_pathPingPong].get();
+    }
+    void advanceAccumulationFrame() {
+        m_pathSampleCount += 1.0f;
+        m_pathPingPong = 1u - m_pathPingPong;
+    }
+    void resetAccumulation() {
+        m_pathSampleCount = 0.0f;
+        m_pathPingPong    = 0u;
+    }
+
+    // Create / recreate the path-trace + display pipelines and their accumulation
+    // textures. Call once after createPipeline, and again on swapchain resize.
+    bool createAccumulationResources(uint32_t width, uint32_t height,
+                                     rhi::TextureFormat swapchainFormat);
 
 private:
     // Fill `out` (resolution^3 bytes, R8Unorm density) with a procedural field:
@@ -257,11 +288,29 @@ private:
     // Phase 7-3: ray-march pipeline + per-frame UBO/bind groups.
     std::unique_ptr<rhi::RHIShader>          m_vertexShader;
     std::unique_ptr<rhi::RHIShader>          m_fragmentShader;
-    std::unique_ptr<rhi::RHIShader>          m_pathFragmentShader;   // M4: pathtracer fragment
+    std::unique_ptr<rhi::RHIShader>          m_pathFragmentShader;        // M4: pathtracer fragment
+    std::unique_ptr<rhi::RHIShader>          m_pathDisplayFragmentShader; // M4 v1: tonemap+display
     std::unique_ptr<rhi::RHIBindGroupLayout> m_bindGroupLayout;
     std::unique_ptr<rhi::RHIPipelineLayout>  m_pipelineLayout;
-    std::unique_ptr<rhi::RHIRenderPipeline>  m_pipeline;             // Lambert + march
-    std::unique_ptr<rhi::RHIRenderPipeline>  m_pathPipeline;         // M4: volumetric path tracer
+    std::unique_ptr<rhi::RHIRenderPipeline>  m_pipeline;                  // Lambert + march
+
+    // M4 v1: path-trace pipeline targets an RGBA16Float accumulation texture (not
+    // the swapchain) so the running average stays linear. Its bind-group layout
+    // differs from the march one (no depth / occupancy; adds the prev-history
+    // sample texture), so it gets its own layout + pipeline-layout. The display
+    // pipeline tonemaps the accumulation to the swapchain.
+    std::unique_ptr<rhi::RHIBindGroupLayout> m_pathBindGroupLayout;
+    std::unique_ptr<rhi::RHIPipelineLayout>  m_pathPipelineLayout;
+    std::unique_ptr<rhi::RHIRenderPipeline>  m_pathPipeline;
+    std::unique_ptr<rhi::RHIBindGroupLayout> m_pathDisplayLayout;
+    std::unique_ptr<rhi::RHIPipelineLayout>  m_pathDisplayPipelineLayout;
+    std::unique_ptr<rhi::RHIRenderPipeline>  m_pathDisplayPipeline;
+    std::array<std::unique_ptr<rhi::RHITexture>,     2> m_accumTextures{};
+    std::array<std::unique_ptr<rhi::RHITextureView>, 2> m_accumViews{};
+    std::unique_ptr<rhi::RHISampler>                    m_accumSampler;
+    // bind groups: outer = frame-in-flight, inner = ping-pong direction
+    std::array<std::array<std::unique_ptr<rhi::RHIBindGroup>, 2>, kFramesInFlight> m_pathBindGroups{};
+    std::array<std::unique_ptr<rhi::RHIBindGroup>, 2> m_pathDisplayBindGroups{};
     std::array<std::unique_ptr<rhi::RHIBuffer>,    kFramesInFlight> m_uniformBuffers{};
     std::array<std::unique_ptr<rhi::RHIBindGroup>, kFramesInFlight> m_bindGroups{};
 
@@ -302,10 +351,14 @@ private:
 
     // M4 v0 path tracer state.
     RenderMode m_renderMode    = RenderMode::Lambert;
-    int        m_pathSpp       = 8;       // samples per pixel per frame (inline avg)
+    int        m_pathSpp       = 4;       // samples per pixel per frame (inline avg)
     float      m_pathG         = 0.4f;    // Henyey-Greenstein anisotropy (forward biological tissue)
     int        m_pathBounces   = 2;       // max scattering bounces
     uint32_t   m_frameSeed     = 0;       // bumped each frame so noise decorrelates
+
+    // M4 v1 accumulation state.
+    float      m_pathSampleCount = 0.0f;  // running average count N; reset on camera/param change
+    uint32_t   m_pathPingPong    = 0u;    // which accum texture is the next OUTPUT (the other is INPUT)
 };
 
 } // namespace rendering

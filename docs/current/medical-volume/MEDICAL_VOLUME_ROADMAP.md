@@ -265,6 +265,14 @@ CAREER_ROADMAP의 "수치화가 전부다" 원칙 계승. 마일스톤별 정량
   지원, 중첩 undefined-length sequence skip(item-walk). 로더 외 엔진 무변경.
   M3-2 헤드라인은 미해결(공개 코퍼스에 큰 multi-slice CT 시리즈 부재; TCIA류 인증
   필요한 데이터셋에서 재측정).
+- **M4 v1 progressive 누적** (2026-06-02): 정지 카메라에서 매 프레임 path-trace 결과를
+  RGBA16Float ping-pong 텍스처에 running-mean으로 누적, 두 번째 패스가 tonemap만
+  담당. 카메라/윈도우/프리셋/SPP/anisotropy/bounces/모드/리사이즈 변경 시 N=0
+  reset (N=0이면 history×0이라 텍스처 clear 불필요). path-trace는 자체 bind-group
+  layout — depth/occupancy 제거, history 추가. WebGPU `textureLoad`는 sampler 미사용,
+  GLSL `texelFetch`는 sampler 필요 → display 바인딩이 백엔드별로 갈림. 네이티브
+  뷰어는 카메라+파라미터 비교로 reset, WASM 뷰어는 JS-bound setter마다 reset 호출
+  + 카메라 매트릭스 비교(JS 훅 없음).
 
 **결정 기록**:
 
@@ -276,10 +284,9 @@ CAREER_ROADMAP의 "수치화가 전부다" 원칙 계승. 마일스톤별 정량
   (2026-05-31). CPU 직관과 반대 — 원본 per-sample 체크는 cache가 read를 무료화해
   더 빠름. 셰이더 주석에 기록.
 
-**다음 진입 작업**: **M4 v1 — 누적 버퍼로 progressive convergence**. 정지 카메라
-에서 매 프레임 샘플을 history 텍스처에 누적, 카메라/파라미터 변경 시 reset.
-TAA 인프라(이미 보유)와 같은 ping-pong 패턴. v0의 노이즈가 사라지고 진짜 시네마틱
-정지 이미지가 됨.
+**다음 진입 작업**: **M3-3 bricking** 또는 **DICOM Implicit VR LE 지원** —
+M4 트랙은 v1까지 완료. 다음은 데이터 커버리지(Implicit VR) 또는 대용량
+페이징(bricking) 중 택일.
 
 **남은 후보**:
 

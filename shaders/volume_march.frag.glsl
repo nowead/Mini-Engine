@@ -26,6 +26,7 @@ layout(set = 0, binding = 0) uniform VolumeUBO {
     vec4 shade;       // x = ambient, y = diffuse, z = gradEps (texture-space step), w spare
     vec4 shadow;      // x = enable (0/1), y = stepSize (world), z = maxSteps, w = strength
     vec4 occ;         // xyz = occupancy grid dims (cells), w = skipEnable (0/1)
+    vec4 accum;       // unused by march (used by path-trace accumulation)
 } ubo;
 
 layout(set = 0, binding = 1) uniform texture2D depthTex;

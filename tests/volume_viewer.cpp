@@ -33,6 +33,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -89,6 +90,19 @@ private:
     bool   m_drag = false;
     double m_lastX = 0, m_lastY = 0;
 
+    // M4 v1 accumulation reset triggers. Compare current camera view + params to
+    // previous frame; any change clears the running average (since the radiance
+    // function changed). All zero-initialised so the first frame always resets.
+    glm::mat4 m_prevViewMatrix{0.0f};
+    float     m_prevWinCenter   = std::numeric_limits<float>::quiet_NaN();
+    float     m_prevWinWidth    = std::numeric_limits<float>::quiet_NaN();
+    int       m_prevPreset      = -1;
+    int       m_prevSpp         = -1;
+    float     m_prevG           = std::numeric_limits<float>::quiet_NaN();
+    int       m_prevBounces     = -1;
+    int       m_prevRenderMode  = -1;
+    uint32_t  m_prevW = 0, m_prevH = 0;
+
     static bool endsWith(const std::string& s, const std::string& suffix) {
         return s.size() >= suffix.size() &&
                s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
@@ -136,6 +150,13 @@ private:
                     a->recreateDummyDepth(static_cast<uint32_t>(width),
                                           static_cast<uint32_t>(height));
                     a->m_volume->createBindGroups(a->m_dummyDepthView.get());
+                    // M4 v1: accumulation textures are screen-sized; recreate at
+                    // the new resolution. Pipeline/layouts are reusable so this
+                    // is just texture + bind-group rebuild.
+                    a->m_volume->createAccumulationResources(
+                        static_cast<uint32_t>(width),
+                        static_cast<uint32_t>(height),
+                        rhi::TextureFormat::BGRA8UnormSrgb);
                 }
             }
         });
@@ -231,6 +252,12 @@ private:
         if (!m_volume->createPipeline(m_dummyDepthView.get(), nullptr,
                                       rhi::TextureFormat::BGRA8UnormSrgb)) {
             std::cerr << "volume pipeline failed\n"; std::exit(1);
+        }
+        // M4 v1: path-trace + display pipelines + ping-pong accumulation textures.
+        if (!m_volume->createAccumulationResources(m_swapchain->getWidth(),
+                                                   m_swapchain->getHeight(),
+                                                   rhi::TextureFormat::BGRA8UnormSrgb)) {
+            std::cerr << "path-trace accumulation init failed\n"; std::exit(1);
         }
     }
 
@@ -365,11 +392,36 @@ private:
                             glm::vec3(m_high[0], m_high[1], m_high[2]));
     }
 
+    // M4 v1: reset the running average if any input to the radiance function
+    // changed since the previous frame. Saves the user manually toggling reset.
+    void checkAccumulationReset() {
+        const glm::mat4 view = m_camera.getViewMatrix();
+        const uint32_t  w = m_swapchain->getWidth();
+        const uint32_t  h = m_swapchain->getHeight();
+        bool dirty = false;
+        if (view != m_prevViewMatrix) dirty = true;
+        if (m_winCenter != m_prevWinCenter || m_winWidth != m_prevWinWidth) dirty = true;
+        if (m_preset != m_prevPreset) dirty = true;
+        if (m_pathSpp != m_prevSpp || m_pathG != m_prevG || m_pathBounces != m_prevBounces) dirty = true;
+        if (m_renderMode != m_prevRenderMode) dirty = true;
+        if (w != m_prevW || h != m_prevH) dirty = true;
+        if (dirty) m_volume->resetAccumulation();
+        m_prevViewMatrix = view;
+        m_prevWinCenter = m_winCenter; m_prevWinWidth = m_winWidth;
+        m_prevPreset = m_preset;
+        m_prevSpp = m_pathSpp; m_prevG = m_pathG; m_prevBounces = m_pathBounces;
+        m_prevRenderMode = m_renderMode;
+        m_prevW = w; m_prevH = h;
+    }
+
     void render() {
         if (!m_bridge->beginFrame()) return;
         auto enc = m_bridge->createCommandEncoder();
         const uint32_t w = m_swapchain->getWidth();
         const uint32_t h = m_swapchain->getHeight();
+        const bool pathTrace = (m_renderMode == 1) && m_volume->isPathReady();
+
+        checkAccumulationReset();
 
         // No render graph here, so manage the swapchain image layout ourselves:
         // disable beginRenderPass's auto-barrier and transition explicitly. (The
@@ -399,6 +451,28 @@ private:
                             glm::inverse(m_camera.getProjectionMatrix()),
                             m_camera.getPosition());
 
+        // ---- Path-trace mode: pass 1 renders into the ping-pong accumulation. ----
+        if (pathTrace && m_volume->isEnabled()) {
+            rhi::RenderPassColorAttachment ptCa{};
+            ptCa.view       = m_volume->getPathOutputView();
+            ptCa.loadOp     = rhi::LoadOp::Clear;   // shader gates on N==0 so loadOp doesn't matter for correctness
+            ptCa.storeOp    = rhi::StoreOp::Store;
+            ptCa.clearValue = rhi::ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f);
+            rhi::RenderPassDesc ptPd{};
+            ptPd.colorAttachments = { ptCa };
+            ptPd.width = w; ptPd.height = h; ptPd.label = "VolumePathTrace";
+            auto ptRp = enc->beginRenderPass(ptPd);
+            if (ptRp) {
+                ptRp->setViewport(0, 0, static_cast<float>(w), static_cast<float>(h), 0.0f, 1.0f);
+                ptRp->setScissorRect(0, 0, w, h);
+                ptRp->setPipeline(m_volume->getPathPipeline());
+                ptRp->setBindGroup(0, m_volume->getPathBindGroup(m_frameIndex));
+                ptRp->draw(3);
+                ptRp->end();
+            }
+        }
+
+        // ---- Display / Lambert pass: write swapchain. ----
         rhi::RenderPassColorAttachment ca{};
         ca.view       = m_bridge->getCurrentSwapchainView();
         ca.loadOp     = rhi::LoadOp::Clear;
@@ -413,13 +487,21 @@ private:
             if (m_volume->isEnabled() && m_volume->isPipelineReady()) {
                 rp->setViewport(0, 0, static_cast<float>(w), static_cast<float>(h), 0.0f, 1.0f);
                 rp->setScissorRect(0, 0, w, h);
-                rp->setPipeline(m_volume->getPipeline());
-                rp->setBindGroup(0, m_volume->getBindGroup(m_frameIndex));
+                if (pathTrace) {
+                    rp->setPipeline(m_volume->getDisplayPipeline());
+                    rp->setBindGroup(0, m_volume->getDisplayBindGroup());
+                } else {
+                    rp->setPipeline(m_volume->getPipeline());
+                    rp->setBindGroup(0, m_volume->getBindGroup(m_frameIndex));
+                }
                 rp->draw(3);
             }
             // ImGui records into the same active render pass.
             m_imgui->render(enc.get(), m_bridge->getCurrentImageIndex());
             rp->end();
+        }
+        if (pathTrace && m_volume->isEnabled()) {
+            m_volume->advanceAccumulationFrame();
         }
 
         // Transition the swapchain image to PRESENT_SRC for presentation.

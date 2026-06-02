@@ -37,9 +37,15 @@ DICOM 생성기로 NIfTI와 크로스 검증(동일 입력 → 동일 출력).
 SQ skip**(item-walk으로 정확히, 단순 byte scan은 inner delimitation에 걸려 픽셀
 데이터를 지나침). 실 데이터로 검증된 범위: HU CT(128²), 고해상도 MR(1024²),
 multi-frame MR(64²×10), enhanced CT(512²×2). 양 백엔드 엔진 무변경(파서 레벨만).
+**M4 v1 progressive 누적 완료** (2026-06-02): 정지 카메라에서 매 프레임 path-trace
+결과를 RGBA16Float ping-pong 텍스처에 running-mean으로 누적, 두 번째 패스가
+tonemap만 담당. 카메라/윈도우/프리셋/SPP/anisotropy/bounces/모드/리사이즈 변경 시
+N=0 reset(N=0이면 history×0이라 텍스처 clear 불필요). path-trace는 자체 bind-group
+layout — depth/occupancy 제거, history 추가. WebGPU `textureLoad`는 sampler 미사용,
+GLSL `texelFetch`는 sampler 필요 → display 바인딩이 백엔드별로 갈림.
 
-**다음 후보**: M4 v1(누적 버퍼로 progressive convergence) · M3-3(bricking) ·
-DICOM 후속(Implicit VR LE 지원 시 임상 PACS 데이터 커버리지 ↑).
+**다음 후보**: M3-3(bricking) · DICOM 후속(Implicit VR LE 지원 시 임상 PACS 데이터
+커버리지 ↑).
 
 **선행 완료**: 볼륨 렌더링 기초(3D 텍스처 + 레이마칭, Vulkan + WebGPU) ·
 TF 프리셋 · 독립 뷰어(네이티브 `volume_viewer` + 브라우저 `volume_viewer_wasm`).

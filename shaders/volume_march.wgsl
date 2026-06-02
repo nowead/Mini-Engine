@@ -22,6 +22,7 @@ struct VolumeUBO {
     shade:     vec4<f32>,   // x=ambient, y=diffuse, z=gradEps (texture-space step), w spare
     shadow:    vec4<f32>,   // x=enable (0/1), y=stepSize (world), z=maxSteps, w=strength
     occ:       vec4<f32>,   // xyz = occupancy grid dims (cells), w = skipEnable (0/1)
+    accum:     vec4<f32>,   // unused by march (used by path-trace accumulation)
 };
 
 @group(0) @binding(0) var<uniform> ubo: VolumeUBO;

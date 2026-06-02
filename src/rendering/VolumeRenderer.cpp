@@ -569,40 +569,9 @@ bool VolumeRenderer::createPipeline(rhi::RHITextureView* depthView, void* native
     m_pipeline = m_device->createRenderPipeline(pipelineDesc);
     if (!m_pipeline) { LOG_ERROR("VolumeRenderer") << "pipeline create failed"; return false; }
 
-    // M4 v0: second pipeline -- volumetric path tracer. Shares everything with the
-    // march pipeline except the fragment shader, so we just reload that and build
-    // a sibling pipeline. Missing shader degrades gracefully (path-trace toggle
-    // simply falls back to the march pipeline via getPipeline()'s null check).
-#ifdef __EMSCRIPTEN__
-    {
-        auto raw = FileUtils::readFile("shaders/volume_pathtrace.wgsl");
-        if (!raw.empty()) {
-            std::vector<uint8_t> code(raw.begin(), raw.end());
-            rhi::ShaderSource fsPT(rhi::ShaderLanguage::WGSL, code, rhi::ShaderStage::Fragment, "fs_main");
-            m_pathFragmentShader = m_device->createShader(rhi::ShaderDesc(fsPT, "VolumePathtraceFS"));
-        }
-    }
-#else
-    {
-        auto raw = FileUtils::readFile("shaders/volume_pathtrace.frag.spv");
-        if (!raw.empty()) {
-            std::vector<uint8_t> code(raw.begin(), raw.end());
-            rhi::ShaderSource fsPT(rhi::ShaderLanguage::SPIRV, code, rhi::ShaderStage::Fragment, "main");
-            m_pathFragmentShader = m_device->createShader(rhi::ShaderDesc(fsPT, "VolumePathtraceFS"));
-        }
-    }
-#endif
-    if (m_pathFragmentShader) {
-        rhi::RenderPipelineDesc ptDesc = pipelineDesc;
-        ptDesc.label          = "VolumePathtracePipeline";
-        ptDesc.fragmentShader = m_pathFragmentShader.get();
-        m_pathPipeline = m_device->createRenderPipeline(ptDesc);
-        if (!m_pathPipeline)
-            LOG_WARN("VolumeRenderer") << "pathtrace pipeline create failed -- only Lambert mode available";
-    } else {
-        LOG_WARN("VolumeRenderer") << "pathtrace shader missing -- only Lambert mode available";
-    }
-
+    // M4 v1: the path-trace + display pipelines live in createAccumulationResources
+    // because they need the swapchain width/height (for the accumulation textures)
+    // and a separate bind-group layout (no depth/occupancy, adds the history tex).
     return createBindGroups(depthView);
 }
 
@@ -637,6 +606,216 @@ bool VolumeRenderer::createBindGroups(rhi::RHITextureView* depthView) {
         m_bindGroups[i] = m_device->createBindGroup(desc);
         if (!m_bindGroups[i]) { LOG_ERROR("VolumeRenderer") << "bind group create failed"; return false; }
     }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// M4 v1: path-trace + display pipelines, ping-pong accumulation textures.
+// Called once after createPipeline, again on swapchain resize.
+// ---------------------------------------------------------------------------
+bool VolumeRenderer::createAccumulationResources(uint32_t width, uint32_t height,
+                                                 rhi::TextureFormat swapchainFormat) {
+    if (!m_device || !m_vertexShader || width == 0 || height == 0) return false;
+
+    // 1. Two RGBA16Float accumulation textures (ping-pong: read prev, write current).
+    for (uint32_t i = 0; i < 2; ++i) {
+        rhi::TextureDesc td{};
+        td.size          = rhi::Extent3D{width, height, 1};
+        td.dimension     = rhi::TextureDimension::Texture2D;
+        td.format        = rhi::TextureFormat::RGBA16Float;
+        td.mipLevelCount = 1;
+        td.sampleCount   = 1;
+        td.usage         = rhi::TextureUsage::RenderTarget | rhi::TextureUsage::Sampled;
+        td.label         = "VolumePathAccum";
+        m_accumTextures[i] = m_device->createTexture(td);
+        if (!m_accumTextures[i]) { LOG_ERROR("VolumeRenderer") << "accum texture create failed"; return false; }
+
+        rhi::TextureViewDesc vd{};
+        vd.format          = rhi::TextureFormat::RGBA16Float;
+        vd.dimension       = rhi::TextureViewDimension::View2D;
+        vd.mipLevelCount   = 1;
+        vd.arrayLayerCount = 1;
+        m_accumViews[i] = m_accumTextures[i]->createView(vd);
+        if (!m_accumViews[i]) return false;
+    }
+    if (!m_accumSampler) {
+        rhi::SamplerDesc sd{};
+        sd.magFilter    = rhi::FilterMode::Nearest;
+        sd.minFilter    = rhi::FilterMode::Nearest;
+        sd.addressModeU = rhi::AddressMode::ClampToEdge;
+        sd.addressModeV = rhi::AddressMode::ClampToEdge;
+        sd.addressModeW = rhi::AddressMode::ClampToEdge;
+        m_accumSampler = m_device->createSampler(sd);
+        if (!m_accumSampler) return false;
+    }
+
+    // 2. Load both path-trace shaders (lazy: once).
+    if (!m_pathFragmentShader) {
+#ifdef __EMSCRIPTEN__
+        auto raw = FileUtils::readFile("shaders/volume_pathtrace.wgsl");
+        if (raw.empty()) { LOG_ERROR("VolumeRenderer") << "missing volume_pathtrace.wgsl"; return false; }
+        std::vector<uint8_t> code(raw.begin(), raw.end());
+        rhi::ShaderSource fs(rhi::ShaderLanguage::WGSL, code, rhi::ShaderStage::Fragment, "fs_main");
+        m_pathFragmentShader = m_device->createShader(rhi::ShaderDesc(fs, "VolumePathtraceFS"));
+#else
+        auto raw = FileUtils::readFile("shaders/volume_pathtrace.frag.spv");
+        if (raw.empty()) { LOG_ERROR("VolumeRenderer") << "missing volume_pathtrace.frag.spv"; return false; }
+        std::vector<uint8_t> code(raw.begin(), raw.end());
+        rhi::ShaderSource fs(rhi::ShaderLanguage::SPIRV, code, rhi::ShaderStage::Fragment, "main");
+        m_pathFragmentShader = m_device->createShader(rhi::ShaderDesc(fs, "VolumePathtraceFS"));
+#endif
+        if (!m_pathFragmentShader) return false;
+    }
+    if (!m_pathDisplayFragmentShader) {
+#ifdef __EMSCRIPTEN__
+        auto raw = FileUtils::readFile("shaders/volume_pathtrace_display.wgsl");
+        if (raw.empty()) { LOG_ERROR("VolumeRenderer") << "missing volume_pathtrace_display.wgsl"; return false; }
+        std::vector<uint8_t> code(raw.begin(), raw.end());
+        rhi::ShaderSource fs(rhi::ShaderLanguage::WGSL, code, rhi::ShaderStage::Fragment, "fs_main");
+        m_pathDisplayFragmentShader = m_device->createShader(rhi::ShaderDesc(fs, "VolumePathDisplayFS"));
+#else
+        auto raw = FileUtils::readFile("shaders/volume_pathtrace_display.frag.spv");
+        if (raw.empty()) { LOG_ERROR("VolumeRenderer") << "missing volume_pathtrace_display.frag.spv"; return false; }
+        std::vector<uint8_t> code(raw.begin(), raw.end());
+        rhi::ShaderSource fs(rhi::ShaderLanguage::SPIRV, code, rhi::ShaderStage::Fragment, "main");
+        m_pathDisplayFragmentShader = m_device->createShader(rhi::ShaderDesc(fs, "VolumePathDisplayFS"));
+#endif
+        if (!m_pathDisplayFragmentShader) return false;
+    }
+
+    // 3. Path-trace bind-group layout (lazy: once). Different from march -- no
+    //    depth or occupancy bindings; adds the previous accumulation texture.
+    if (!m_pathBindGroupLayout) {
+        using S = rhi::ShaderStage;
+        using T = rhi::BindingType;
+        using D = rhi::TextureViewDimension;
+        auto entry = [](uint32_t b, S s, T t, D dim = D::View2D) {
+            rhi::BindGroupLayoutEntry e(b, s, t);
+            e.textureViewDimension = dim;
+            return e;
+        };
+        rhi::BindGroupLayoutDesc ld;
+        ld.entries = {
+            entry(0, S::Fragment, T::UniformBuffer),
+            entry(1, S::Fragment, T::SampledTexture, D::View3D),  // volume
+            entry(2, S::Fragment, T::Sampler),                    // volume + LUT sampler
+            entry(3, S::Fragment, T::SampledTexture, D::View2D),  // TF LUT
+            entry(4, S::Fragment, T::SampledTexture, D::View2D),  // history (prev accumulation)
+        };
+        ld.label = "VolumePathBGLayout";
+        m_pathBindGroupLayout = m_device->createBindGroupLayout(ld);
+        if (!m_pathBindGroupLayout) return false;
+        rhi::PipelineLayoutDesc pl;
+        pl.bindGroupLayouts.push_back(m_pathBindGroupLayout.get());
+        pl.label = "VolumePathPipelineLayout";
+        m_pathPipelineLayout = m_device->createPipelineLayout(pl);
+        if (!m_pathPipelineLayout) return false;
+    }
+
+    // 4. Path-trace pipeline (targets RGBA16Float accumulation; no blend).
+    {
+        rhi::RenderPipelineDesc pd;
+        pd.label          = "VolumePathPipeline";
+        pd.layout         = m_pathPipelineLayout.get();
+        pd.vertexShader   = m_vertexShader.get();
+        pd.fragmentShader = m_pathFragmentShader.get();
+        pd.primitive.topology  = rhi::PrimitiveTopology::TriangleList;
+        pd.primitive.cullMode  = rhi::CullMode::None;
+        pd.primitive.frontFace = rhi::FrontFace::CounterClockwise;
+        rhi::ColorTargetState ct;
+        ct.format             = rhi::TextureFormat::RGBA16Float;
+        ct.blend.blendEnabled = false;
+        pd.colorTargets = { ct };
+        pd.depthStencil = nullptr;
+        pd.nativeRenderPass = nullptr;   // dynamic rendering on Vulkan; n/a on WebGPU
+        m_pathPipeline = m_device->createRenderPipeline(pd);
+        if (!m_pathPipeline) { LOG_ERROR("VolumeRenderer") << "path-trace pipeline create failed"; return false; }
+    }
+
+    // 5. Display bind-group layout + pipeline (target = swapchain).
+    if (!m_pathDisplayLayout) {
+        using S = rhi::ShaderStage;
+        using T = rhi::BindingType;
+        rhi::BindGroupLayoutDesc ld;
+#ifdef __EMSCRIPTEN__
+        // WGSL textureLoad needs no sampler.
+        ld.entries = {
+            rhi::BindGroupLayoutEntry(0, S::Fragment, T::SampledTexture),
+        };
+#else
+        // GLSL texelFetch(sampler2D(...)) needs a sampler.
+        ld.entries = {
+            rhi::BindGroupLayoutEntry(0, S::Fragment, T::SampledTexture),
+            rhi::BindGroupLayoutEntry(1, S::Fragment, T::Sampler),
+        };
+#endif
+        ld.label = "VolumePathDisplayBGLayout";
+        m_pathDisplayLayout = m_device->createBindGroupLayout(ld);
+        if (!m_pathDisplayLayout) return false;
+        rhi::PipelineLayoutDesc pl;
+        pl.bindGroupLayouts.push_back(m_pathDisplayLayout.get());
+        pl.label = "VolumePathDisplayPipelineLayout";
+        m_pathDisplayPipelineLayout = m_device->createPipelineLayout(pl);
+        if (!m_pathDisplayPipelineLayout) return false;
+    }
+    {
+        rhi::RenderPipelineDesc pd;
+        pd.label          = "VolumePathDisplayPipeline";
+        pd.layout         = m_pathDisplayPipelineLayout.get();
+        pd.vertexShader   = m_vertexShader.get();
+        pd.fragmentShader = m_pathDisplayFragmentShader.get();
+        pd.primitive.topology  = rhi::PrimitiveTopology::TriangleList;
+        pd.primitive.cullMode  = rhi::CullMode::None;
+        pd.primitive.frontFace = rhi::FrontFace::CounterClockwise;
+        rhi::ColorTargetState ct;
+        ct.format             = swapchainFormat;
+        ct.blend.blendEnabled = false;
+        pd.colorTargets = { ct };
+        pd.depthStencil = nullptr;
+        pd.nativeRenderPass = nullptr;
+        m_pathDisplayPipeline = m_device->createRenderPipeline(pd);
+        if (!m_pathDisplayPipeline) { LOG_ERROR("VolumeRenderer") << "display pipeline create failed"; return false; }
+    }
+
+    // 6. Bind groups (rebuild every resize because they reference the textures).
+    for (uint32_t fi = 0; fi < kFramesInFlight; ++fi) {
+        for (uint32_t pp = 0; pp < 2; ++pp) {
+            rhi::BindGroupDesc desc;
+            desc.layout = m_pathBindGroupLayout.get();
+            desc.entries = {
+                rhi::BindGroupEntry::Buffer(0, m_uniformBuffers[fi].get(), 0, sizeof(VolumeUBO)),
+                rhi::BindGroupEntry::TextureView(1, m_volumeView.get()),
+                rhi::BindGroupEntry::Sampler(2, m_sampler.get()),
+                rhi::BindGroupEntry::TextureView(3, m_lutView.get()),
+                rhi::BindGroupEntry::TextureView(4, m_accumViews[pp].get()),  // read from this ping-pong slot
+            };
+            desc.label = "VolumePathBindGroup";
+            m_pathBindGroups[fi][pp] = m_device->createBindGroup(desc);
+            if (!m_pathBindGroups[fi][pp]) { LOG_ERROR("VolumeRenderer") << "path bind group create failed"; return false; }
+        }
+    }
+    for (uint32_t pp = 0; pp < 2; ++pp) {
+        rhi::BindGroupDesc desc;
+        desc.layout = m_pathDisplayLayout.get();
+#ifdef __EMSCRIPTEN__
+        desc.entries = {
+            rhi::BindGroupEntry::TextureView(0, m_accumViews[pp].get()),
+        };
+#else
+        desc.entries = {
+            rhi::BindGroupEntry::TextureView(0, m_accumViews[pp].get()),
+            rhi::BindGroupEntry::Sampler(1, m_accumSampler.get()),
+        };
+#endif
+        desc.label = "VolumePathDisplayBindGroup";
+        m_pathDisplayBindGroups[pp] = m_device->createBindGroup(desc);
+        if (!m_pathDisplayBindGroups[pp]) { LOG_ERROR("VolumeRenderer") << "display bind group create failed"; return false; }
+    }
+
+    // Resize implies a fresh accumulation. Garbage in the two textures is fine
+    // because the integrator gates on N==0 (prev * 0 = 0), but reset the counter.
+    resetAccumulation();
+    LOG_INFO("VolumeRenderer") << "path-trace accumulation ready (" << width << "x" << height << ")";
     return true;
 }
 
@@ -810,6 +989,7 @@ void VolumeRenderer::updateUBO(uint32_t frameIndex, const glm::mat4& invView,
     std::memcpy(&seedAsFloat, &m_frameSeed, sizeof(float));
     ubo.pathtrace = glm::vec4(static_cast<float>(m_pathSpp), m_pathG,
                               seedAsFloat, static_cast<float>(m_pathBounces));
+    ubo.accum     = glm::vec4(m_pathSampleCount, 0.0f, 0.0f, 0.0f);
 
     m_uniformBuffers[fi]->write(&ubo, sizeof(VolumeUBO));
 }

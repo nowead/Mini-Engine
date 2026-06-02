@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <memory>
 
 class VolumeViewerWasm {
@@ -55,22 +56,26 @@ public:
     }
 
     // ---- Controls (called from JS via EMSCRIPTEN_BINDINGS) ----
-    void setPreset(int p)        { m_volume->setTFPreset(p); }
-    void setWinCenter(float v)   { m_volume->setWindowCenter(v); }
-    void setWinWidth(float v)    { m_volume->setWindowWidth(v); }
-    void setDensity(float v)     { m_volume->setDensityScale(v); }
-    void setExtinction(float v)  { m_volume->setExtinction(v); }
-    void setThreshold(float v)   { m_volume->setThreshold(v); }
-    void setShading(bool on)     { m_volume->setShadingEnabled(on); }
-    void setShadow(bool on)      { m_volume->setShadowEnabled(on); }
-    void setShadowStrength(float v) { m_volume->setShadowStrength(v); }
-    void setSkip(bool on)        { m_volume->setOccupancyEnabled(on); }
-    void setRenderMode(int m)    { m_volume->setRenderMode(
-        m == 1 ? rendering::VolumeRenderer::RenderMode::PathTrace
-               : rendering::VolumeRenderer::RenderMode::Lambert); }
-    void setSpp(int s)           { m_volume->setPathtraceSpp(s); }
-    void setAniso(float g)       { m_volume->setPathtraceAnisotropy(g); }
-    void setBounces(int b)       { m_volume->setPathtraceBounces(b); }
+    // Every setter that changes the path-trace radiance function must reset the
+    // running average so the next frame restarts the integration with N=0.
+    void setPreset(int p)        { m_volume->setTFPreset(p); m_volume->resetAccumulation(); }
+    void setWinCenter(float v)   { m_volume->setWindowCenter(v); m_volume->resetAccumulation(); }
+    void setWinWidth(float v)    { m_volume->setWindowWidth(v); m_volume->resetAccumulation(); }
+    void setDensity(float v)     { m_volume->setDensityScale(v); m_volume->resetAccumulation(); }
+    void setExtinction(float v)  { m_volume->setExtinction(v); m_volume->resetAccumulation(); }
+    void setThreshold(float v)   { m_volume->setThreshold(v); m_volume->resetAccumulation(); }
+    void setShading(bool on)     { m_volume->setShadingEnabled(on); m_volume->resetAccumulation(); }
+    void setShadow(bool on)      { m_volume->setShadowEnabled(on); m_volume->resetAccumulation(); }
+    void setShadowStrength(float v) { m_volume->setShadowStrength(v); m_volume->resetAccumulation(); }
+    void setSkip(bool on)        { m_volume->setOccupancyEnabled(on); m_volume->resetAccumulation(); }
+    void setRenderMode(int m)    {
+        m_volume->setRenderMode(m == 1 ? rendering::VolumeRenderer::RenderMode::PathTrace
+                                       : rendering::VolumeRenderer::RenderMode::Lambert);
+        m_volume->resetAccumulation();
+    }
+    void setSpp(int s)           { m_volume->setPathtraceSpp(s); m_volume->resetAccumulation(); }
+    void setAniso(float g)       { m_volume->setPathtraceAnisotropy(g); m_volume->resetAccumulation(); }
+    void setBounces(int b)       { m_volume->setPathtraceBounces(b); m_volume->resetAccumulation(); }
     float dataMin() const        { return m_volume->getDataMin(); }
     float dataMax() const        { return m_volume->getDataMax(); }
 
@@ -91,6 +96,10 @@ private:
     double m_lastX = 0, m_lastY = 0;
     bool   m_pendingResize = false;
     int    m_pendingW = 0, m_pendingH = 0;
+
+    // M4 v1: camera change triggers an accumulation reset. (Param changes reset
+    // from inside their setters; the camera has no JS hook so we poll instead.)
+    glm::mat4 m_prevViewMatrix{0.0f};
 
     void initWindow() {
         glfwInit();
@@ -192,6 +201,9 @@ private:
         if (!m_volume->createPipeline(m_dummyDepthView.get(), nullptr, m_swapchain->getFormat())) {
             std::cerr << "volume pipeline failed\n";
         }
+        if (!m_volume->createAccumulationResources(m_width, m_height, m_swapchain->getFormat())) {
+            std::cerr << "path-trace accumulation init failed\n";
+        }
     }
 
     void applyPendingResize() {
@@ -205,6 +217,7 @@ private:
         m_device->waitIdle();
         recreateDummyDepth(m_width, m_height);
         m_volume->createBindGroups(m_dummyDepthView.get());
+        m_volume->createAccumulationResources(m_width, m_height, m_swapchain->getFormat());
     }
 
     void render() {
@@ -213,11 +226,45 @@ private:
         const uint32_t w = m_swapchain->getWidth();
         const uint32_t h = m_swapchain->getHeight();
 
+        // M4 v1: camera motion resets the running average. (Other inputs reset
+        // from their JS-bound setters.)
+        const glm::mat4 view = m_camera.getViewMatrix();
+        if (view != m_prevViewMatrix) {
+            m_volume->resetAccumulation();
+            m_prevViewMatrix = view;
+        }
+
+        const bool pathTrace =
+            (m_volume->getRenderMode() == rendering::VolumeRenderer::RenderMode::PathTrace)
+            && m_volume->isPathReady();
+
         m_volume->updateUBO(m_frame,
                             glm::inverse(m_camera.getViewMatrix()),
                             glm::inverse(m_camera.getProjectionMatrix()),
                             m_camera.getPosition());
 
+        // ---- Pass 1: path-trace into the ping-pong accumulation (PT mode only). ----
+        if (pathTrace && m_volume->isEnabled()) {
+            rhi::RenderPassColorAttachment ptCa{};
+            ptCa.view       = m_volume->getPathOutputView();
+            ptCa.loadOp     = rhi::LoadOp::Clear;
+            ptCa.storeOp    = rhi::StoreOp::Store;
+            ptCa.clearValue = rhi::ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f);
+            rhi::RenderPassDesc ptPd{};
+            ptPd.colorAttachments = { ptCa };
+            ptPd.width = w; ptPd.height = h; ptPd.label = "VolumePathTraceWasm";
+            auto ptRp = enc->beginRenderPass(ptPd);
+            if (ptRp) {
+                ptRp->setViewport(0, 0, static_cast<float>(w), static_cast<float>(h), 0.0f, 1.0f);
+                ptRp->setScissorRect(0, 0, w, h);
+                ptRp->setPipeline(m_volume->getPathPipeline());
+                ptRp->setBindGroup(0, m_volume->getPathBindGroup(m_frame));
+                ptRp->draw(3);
+                ptRp->end();
+            }
+        }
+
+        // ---- Pass 2: display (PT mode tonemaps; Lambert mode does the march). ----
         rhi::RenderPassColorAttachment ca{};
         ca.view       = m_bridge->getCurrentSwapchainView();
         ca.loadOp     = rhi::LoadOp::Clear;
@@ -232,11 +279,19 @@ private:
             if (m_volume->isEnabled() && m_volume->isPipelineReady()) {
                 rp->setViewport(0, 0, static_cast<float>(w), static_cast<float>(h), 0.0f, 1.0f);
                 rp->setScissorRect(0, 0, w, h);
-                rp->setPipeline(m_volume->getPipeline());
-                rp->setBindGroup(0, m_volume->getBindGroup(m_frame));
+                if (pathTrace) {
+                    rp->setPipeline(m_volume->getDisplayPipeline());
+                    rp->setBindGroup(0, m_volume->getDisplayBindGroup());
+                } else {
+                    rp->setPipeline(m_volume->getPipeline());
+                    rp->setBindGroup(0, m_volume->getBindGroup(m_frame));
+                }
                 rp->draw(3);
             }
             rp->end();
+        }
+        if (pathTrace && m_volume->isEnabled()) {
+            m_volume->advanceAccumulationFrame();
         }
 
         auto cb = enc->finish();

@@ -1,15 +1,18 @@
 #version 450
 
-// M4 v0 -- volumetric path tracing with Henyey-Greenstein phase function and
-// Woodcock (delta) free-flight distance sampling. Trades the absorption-only
-// Beer-Lambert march of volume_march for a Monte Carlo integrator: at each
-// scattering event we (a) accumulate direct light via next-event estimation
-// (single shadow ray, Woodcock-tracked) and (b) optionally continue the path
-// for indirect contributions, terminated by Russian roulette.
+// M4 v1 -- volumetric path tracing with progressive temporal accumulation.
 //
-// No history buffer in v0; SPP samples are averaged inline within the shader.
-// Inputs/outputs share the volume_march bind-group layout so VolumeRenderer can
-// flip pipelines at runtime without rebuilding bind groups.
+// The integrator is unchanged from v0 (Woodcock free-flight + Henyey-Greenstein
+// phase + single-light NEE + inline-SPP averaging). What's new is the output:
+// instead of writing a tone-mapped sRGB sample to the swapchain, we read the
+// previous frame's running average from a sampled HDR history texture, blend
+// the new sample in linearly (running mean), and write linear HDR back to the
+// accumulation target. A separate display shader tonemaps the result to the
+// swapchain. Tonemap must run AFTER averaging, not per-frame, because Reinhard
+// is non-linear.
+//
+// Bind-group layout differs from volume_march -- path-trace gets its own
+// pipeline layout (no depth, no occupancy; adds the history sampler).
 
 layout(location = 0) out vec4 outColor;
 
@@ -19,29 +22,28 @@ layout(set = 0, binding = 0) uniform VolumeUBO {
     vec4 cameraPos;
     vec4 aabbMin;
     vec4 aabbMax;
-    vec4 params;     // x = stepSize (unused PT), y = extinction, z = densityScale, w = maxSteps (unused PT)
-    vec4 tf;         // x = densityThreshold, y = colorMix, z = useLUT (0/1), w = useDepth (unused PT)
+    vec4 params;     // y = extinction, z = densityScale, x/w unused here
+    vec4 tf;         // x = densityThreshold, y = colorMix, z = useLUT (0/1), w unused here
     vec4 lowColor;
     vec4 highColor;
     vec4 window;     // x = windowCenter, y = windowWidth
-    vec4 light;      // xyz = light dir (world), w = shadingEnable (unused PT)
-    vec4 shade;      // x = ambient, y = lightIntensity (reuses diffuse slider), zw spare
-    vec4 shadow;     // unused PT
-    vec4 occ;        // unused PT (the integrator picks events from density itself)
-    vec4 pathtrace;  // x = spp (1..32), y = HG anisotropy g, z = frame seed, w = max bounces
+    vec4 light;      // xyz = light dir (world), w unused here
+    vec4 shade;      // x = ambient, y = lightIntensity (reuses diffuse slider)
+    vec4 shadow;     // unused here
+    vec4 occ;        // unused here
+    vec4 pathtrace;  // x = spp, y = HG anisotropy g, z = frame seed, w = max bounces
+    vec4 accum;      // x = previous accumulated sample count N (host-incremented)
 } ubo;
 
-layout(set = 0, binding = 1) uniform texture2D depthTex;     // unused but layout needs it
-layout(set = 0, binding = 2) uniform sampler   depthSampler; // unused
-layout(set = 0, binding = 3) uniform texture3D volumeTex;
-layout(set = 0, binding = 4) uniform sampler   volumeSampler;
-layout(set = 0, binding = 5) uniform texture2D tfLUT;
-layout(std430, set = 0, binding = 6) readonly buffer OccGrid { vec2 occCells[]; };  // unused PT
+layout(set = 0, binding = 1) uniform texture3D volumeTex;
+layout(set = 0, binding = 2) uniform sampler   volumeSampler;
+layout(set = 0, binding = 3) uniform texture2D tfLUT;
+layout(set = 0, binding = 4) uniform texture2D historyTex;
 
 const float PI = 3.14159265359;
 
 // ---------------------------------------------------------------------------
-// PRNG (PCG-derived). One uint of state mutated per call.
+// PRNG (PCG)
 // ---------------------------------------------------------------------------
 uint pcg(uint v) {
     uint state = v * 747796405u + 2891336453u;
@@ -54,7 +56,7 @@ float rnd(inout uint seed) {
 }
 
 // ---------------------------------------------------------------------------
-// Henyey-Greenstein phase function (eval + importance sampling).
+// Henyey-Greenstein
 // ---------------------------------------------------------------------------
 float hgPhase(float cosTheta, float g) {
     float denom = 1.0 + g * g - 2.0 * g * cosTheta;
@@ -72,7 +74,6 @@ vec3 sampleHG(vec3 wi, float g, inout uint seed) {
     cosTheta = clamp(cosTheta, -1.0, 1.0);
     float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
     float phi = 2.0 * PI * u2;
-    // Ortho frame around wi.
     vec3 w  = wi;
     vec3 ax = abs(w.x) > 0.1 ? vec3(0, 1, 0) : vec3(1, 0, 0);
     vec3 u  = normalize(cross(ax, w));
@@ -81,7 +82,7 @@ vec3 sampleHG(vec3 wi, float g, inout uint seed) {
 }
 
 // ---------------------------------------------------------------------------
-// Volume / TF helpers (mirror volume_march so visuals are coherent across modes).
+// Volume / TF helpers
 // ---------------------------------------------------------------------------
 float sampleDensity(vec3 uvw) {
     float raw = texture(sampler3D(volumeTex, volumeSampler), uvw).r;
@@ -107,8 +108,6 @@ vec2 intersectAABB(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax) {
     return vec2(max(max(ts.x, ts.y), ts.z), min(min(tb.x, tb.y), tb.z));
 }
 
-// Visibility along (p, L) via Woodcock tracking: 1 if reaches the AABB exit
-// without a "real" collision, 0 otherwise.
 float transmittance(vec3 p, vec3 L, vec3 bmin, vec3 bmax, vec3 boxSize,
                     float sigmaMax, inout uint seed) {
     vec2 hit = intersectAABB(p, L, bmin, bmax);
@@ -126,7 +125,6 @@ float transmittance(vec3 p, vec3 L, vec3 bmin, vec3 bmax, vec3 boxSize,
     return 1.0;
 }
 
-// One path-traced sample (Monte Carlo radiance estimate along the camera ray).
 vec3 tracePath(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax,
                float sigmaMax, inout uint seed) {
     vec2 hit = intersectAABB(ro, rd, bmin, bmax);
@@ -141,13 +139,12 @@ vec3 tracePath(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax,
     vec3 result      = vec3(0.0);
     vec3 throughput  = vec3(1.0);
     vec3 L           = normalize(ubo.light.xyz);
-    float lightI     = ubo.shade.y;          // reuse the "diffuse" slider as light intensity
+    float lightI     = ubo.shade.y;
     float ambient    = ubo.shade.x;
     float g          = ubo.pathtrace.y;
     int   maxBounce  = max(0, int(ubo.pathtrace.w));
 
     for (int b = 0; b <= maxBounce; ++b) {
-        // Sample next collision via Woodcock tracking inside the AABB.
         float t = 0.0;
         bool exited = false;
         for (int it = 0; it < 128; ++it) {
@@ -156,7 +153,7 @@ vec3 tracePath(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax,
             vec3 q = ro + rd * t;
             vec3 uvw = (q - bmin) / boxSize;
             float sigma_t = sampleDensity(uvw) * ubo.params.y;
-            if (rnd(seed) < sigma_t / sigmaMax) break;   // real scattering event
+            if (rnd(seed) < sigma_t / sigmaMax) break;
         }
         if (exited) break;
 
@@ -165,15 +162,11 @@ vec3 tracePath(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax,
         float density = sampleDensity(uvw);
         vec3 albedo = sampleTF(density).rgb;
 
-        // Direct light contribution (next-event estimation, single directional light).
         float Tl    = transmittance(p, L, bmin, bmax, boxSize, sigmaMax, seed);
         float phase = hgPhase(dot(-rd, L), g);
         result += throughput * albedo * lightI * phase * Tl;
-
-        // Ambient term (constant environmental contribution at this event).
         result += throughput * albedo * ambient;
 
-        // Continue path (indirect) up to the bounce budget.
         if (b == maxBounce) break;
         rd = sampleHG(rd, g, seed);
         ro = p;
@@ -182,7 +175,6 @@ vec3 tracePath(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax,
         remaining = hit2.y;
         throughput *= albedo;
 
-        // Russian roulette to keep variance bounded.
         float rrProb = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.1, 0.95);
         if (rnd(seed) > rrProb) break;
         throughput /= rrProb;
@@ -192,7 +184,7 @@ vec3 tracePath(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax,
 
 void main() {
     ivec2 fragCoord  = ivec2(gl_FragCoord.xy);
-    vec2  screenSize = vec2(textureSize(sampler2D(depthTex, depthSampler), 0));
+    vec2  screenSize = vec2(textureSize(sampler2D(historyTex, volumeSampler), 0));
     vec2  uv         = vec2(fragCoord) / screenSize;
     vec2  ndcXY      = uv * 2.0 - 1.0;
 
@@ -205,27 +197,27 @@ void main() {
     vec3 bmin = ubo.aabbMin.xyz;
     vec3 bmax = ubo.aabbMax.xyz;
 
-    // Per-pixel, per-frame seed for the PRNG. The frame seed (ubo.pathtrace.z)
-    // is bumped each frame on the host so the noise pattern decorrelates.
     uint seed = uint(fragCoord.x) * 1973u
               + uint(fragCoord.y) * 9277u
               + floatBitsToUint(ubo.pathtrace.z) * 26699u
               + 1u;
 
-    // Upper bound for delta tracking. extinction * max(densityScale, 1) is safe
-    // when the windowed density is in [0,1] and the threshold subtracts.
     float sigmaMax = ubo.params.y * max(ubo.params.z, 1.0) + 1e-3;
 
-    int   spp   = clamp(int(ubo.pathtrace.x), 1, 32);
-    vec3  accum = vec3(0.0);
+    int   spp = clamp(int(ubo.pathtrace.x), 1, 32);
+    vec3  current = vec3(0.0);
     for (int s = 0; s < spp; ++s) {
-        accum += tracePath(ro, rd, bmin, bmax, sigmaMax, seed);
+        current += tracePath(ro, rd, bmin, bmax, sigmaMax, seed);
     }
-    accum /= float(spp);
+    current /= float(spp);
 
-    // Simple Reinhard tonemap so highlights don't blow out; the swapchain is sRGB
-    // and the linear write is encoded automatically on store.
-    accum = accum / (1.0 + accum);
+    // Progressive temporal accumulation. At sample count N=0 the prev*N term
+    // collapses to zero so any stale history content is ignored -- no need to
+    // clear the texture on reset. Output is LINEAR HDR; the display pass
+    // tonemaps after the average is final.
+    vec3  prev      = texelFetch(sampler2D(historyTex, volumeSampler), fragCoord, 0).rgb;
+    float N         = max(ubo.accum.x, 0.0);
+    vec3  blended   = (prev * N + current) / (N + 1.0);
 
-    outColor = vec4(accum, 1.0);
+    outColor = vec4(blended, 1.0);
 }
