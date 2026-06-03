@@ -29,6 +29,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -102,6 +103,10 @@ private:
     int       m_prevBounces     = -1;
     int       m_prevRenderMode  = -1;
     uint32_t  m_prevW = 0, m_prevH = 0;
+
+    // D3 wall-clock: CPU time spent inside render() (excluding swap/present).
+    // EMA-smoothed so the ImGui readout doesn't flicker frame to frame.
+    float     m_lastRenderCpuMs = 0.0f;
 
     static bool endsWith(const std::string& s, const std::string& suffix) {
         return s.size() >= suffix.size() &&
@@ -353,6 +358,25 @@ private:
         const ImGuiIO& io = ImGui::GetIO();
         ImGui::Text("%.1f FPS  (%.2f ms/frame)", io.Framerate,
                     io.Framerate > 0.0f ? 1000.0f / io.Framerate : 0.0f);
+        ImGui::Text("Render CPU: %.2f ms", m_lastRenderCpuMs);
+
+        ImGui::SeparatorText("Brick storage (M3-3)");
+        const auto vol  = m_volume->getVolDims();
+        const auto pg   = m_volume->getPageGrid();
+        const auto ag   = m_volume->getAtlasGrid();
+        const uint32_t used  = m_volume->getUsedSlots();
+        const uint32_t total = m_volume->getTotalSlots();
+        const uint64_t denseB = m_volume->getDenseBytes();
+        const uint64_t allocB = m_volume->getAtlasBytesAllocated();
+        const uint64_t usedB  = m_volume->getAtlasBytesUsed();
+        const double mb = 1024.0 * 1024.0;
+        ImGui::Text("Volume: %ux%ux%u (%.1f MB dense)", vol.x, vol.y, vol.z, denseB / mb);
+        ImGui::Text("Page grid: %ux%ux%u (%u virtual bricks)", pg.x, pg.y, pg.z, pg.x * pg.y * pg.z);
+        ImGui::Text("Atlas: %ux%ux%u, %u/%u slots (%.1f%%)", ag.x, ag.y, ag.z,
+                    used, total, total > 0 ? (100.0f * used / total) : 0.0f);
+        ImGui::Text("Atlas memory: %.1f / %.1f MB (live / allocated)", usedB / mb, allocB / mb);
+        const double saved = denseB > 0 ? (100.0 * (1.0 - static_cast<double>(allocB) / denseB)) : 0.0;
+        ImGui::Text("Sparse saving vs dense: %.1f%%", saved);
 
         const bool customTF = (m_preset == 0);
         ImGui::BeginDisabled(!customTF);
@@ -415,6 +439,7 @@ private:
     }
 
     void render() {
+        const auto cpuT0 = std::chrono::steady_clock::now();
         if (!m_bridge->beginFrame()) return;
         auto enc = m_bridge->createCommandEncoder();
         const uint32_t w = m_swapchain->getWidth();
@@ -527,6 +552,15 @@ private:
                                       m_bridge->getInFlightFence());
         m_bridge->endFrame();
         ++m_frameIndex;
+
+        // EMA-smoothed CPU time for render(). Includes command-encoder
+        // recording + dispatches + endFrame submit; excludes the glfwPollEvents
+        // and UI build that happen in loop().
+        const auto cpuT1 = std::chrono::steady_clock::now();
+        const float dtMs = std::chrono::duration<float, std::milli>(cpuT1 - cpuT0).count();
+        const float alpha = 0.1f;
+        m_lastRenderCpuMs = m_lastRenderCpuMs == 0.0f ? dtMs
+                                                      : m_lastRenderCpuMs * (1.0f - alpha) + dtMs * alpha;
     }
 
     void loop() {

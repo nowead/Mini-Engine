@@ -78,6 +78,22 @@ public:
     uint32_t   usedSlots()  const { return m_usedSlots; }
     uint32_t   totalSlots() const { return m_atlasGrid.x * m_atlasGrid.y * m_atlasGrid.z; }
 
+    // Memory used by the atlas texture in bytes (R16Float = 2 B per voxel).
+    // Used slots only — empty slots cost the same VRAM since the texture is
+    // allocated dense, but this is the "live data" footprint that matters for
+    // M3-3 v1 streaming budgets.
+    uint64_t atlasBytesAllocated() const {
+        const glm::uvec3 v = atlasVoxels();
+        return static_cast<uint64_t>(v.x) * v.y * v.z * 2;
+    }
+    uint64_t atlasBytesUsed() const {
+        return static_cast<uint64_t>(m_usedSlots) * kBrickStored * kBrickStored * kBrickStored * 2;
+    }
+    // Equivalent dense-volume bytes (the storage we'd need without bricking).
+    uint64_t denseBytes() const {
+        return static_cast<uint64_t>(m_volSize.x) * m_volSize.y * m_volSize.z * 2;
+    }
+
 private:
     std::unique_ptr<rhi::RHITexture>     m_atlasTex;
     std::unique_ptr<rhi::RHITextureView> m_atlasView;

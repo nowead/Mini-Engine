@@ -24,6 +24,7 @@
 #include <glm/glm.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <iostream>
 #include <limits>
@@ -79,6 +80,24 @@ public:
     float dataMin() const        { return m_volume->getDataMin(); }
     float dataMax() const        { return m_volume->getDataMax(); }
 
+    // D3 stats exposure for the HTML readout. Scalars only (emscripten::val
+    // packs them into a JS object on the JS side via the binding adapter).
+    uint32_t volW() const { return m_volume ? m_volume->getVolDims().x : 0u; }
+    uint32_t volH() const { return m_volume ? m_volume->getVolDims().y : 0u; }
+    uint32_t volD() const { return m_volume ? m_volume->getVolDims().z : 0u; }
+    uint32_t pageX() const { return m_volume ? m_volume->getPageGrid().x : 0u; }
+    uint32_t pageY() const { return m_volume ? m_volume->getPageGrid().y : 0u; }
+    uint32_t pageZ() const { return m_volume ? m_volume->getPageGrid().z : 0u; }
+    uint32_t atlasX() const { return m_volume ? m_volume->getAtlasGrid().x : 0u; }
+    uint32_t atlasY() const { return m_volume ? m_volume->getAtlasGrid().y : 0u; }
+    uint32_t atlasZ() const { return m_volume ? m_volume->getAtlasGrid().z : 0u; }
+    uint32_t slotsUsed()  const { return m_volume ? m_volume->getUsedSlots() : 0u; }
+    uint32_t slotsTotal() const { return m_volume ? m_volume->getTotalSlots() : 0u; }
+    double atlasMBUsed()  const { return m_volume ? (m_volume->getAtlasBytesUsed() / 1048576.0) : 0.0; }
+    double atlasMBAlloc() const { return m_volume ? (m_volume->getAtlasBytesAllocated() / 1048576.0) : 0.0; }
+    double denseMB()      const { return m_volume ? (m_volume->getDenseBytes() / 1048576.0) : 0.0; }
+    float lastRenderMs() const { return m_lastRenderCpuMs; }
+
 private:
     GLFWwindow* m_window = nullptr;
     std::unique_ptr<rendering::RendererBridge> m_bridge;
@@ -100,6 +119,9 @@ private:
     // M4 v1: camera change triggers an accumulation reset. (Param changes reset
     // from inside their setters; the camera has no JS hook so we poll instead.)
     glm::mat4 m_prevViewMatrix{0.0f};
+
+    // D3 wall-clock: CPU time spent inside render(), EMA-smoothed for readout.
+    float m_lastRenderCpuMs = 0.0f;
 
     void initWindow() {
         glfwInit();
@@ -221,6 +243,7 @@ private:
     }
 
     void render() {
+        const auto cpuT0 = std::chrono::steady_clock::now();
         if (!m_bridge->beginFrame()) return;
         auto enc = m_bridge->createCommandEncoder();
         const uint32_t w = m_swapchain->getWidth();
@@ -301,6 +324,12 @@ private:
                                       m_bridge->getInFlightFence());
         m_bridge->endFrame();
         ++m_frame;
+
+        const auto cpuT1 = std::chrono::steady_clock::now();
+        const float dtMs = std::chrono::duration<float, std::milli>(cpuT1 - cpuT0).count();
+        const float alpha = 0.1f;
+        m_lastRenderCpuMs = m_lastRenderCpuMs == 0.0f ? dtMs
+                                                      : m_lastRenderCpuMs * (1.0f - alpha) + dtMs * alpha;
     }
 };
 
@@ -323,6 +352,25 @@ EMSCRIPTEN_BINDINGS(volume_viewer) {
     emscripten::function("setBounces",        +[](int b)     { if (g_viewer) g_viewer->setBounces(b); });
     emscripten::function("dataMin",           +[]() -> float { return g_viewer ? g_viewer->dataMin() : 0.0f; });
     emscripten::function("dataMax",           +[]() -> float { return g_viewer ? g_viewer->dataMax() : 0.0f; });
+
+    // D3 stats — JS polls these from a setInterval (gated on Module._wasmBusy
+    // per the ASYNCIFY discipline). Returned as individual scalars; JS packs
+    // them into a panel readout.
+    emscripten::function("volW",         +[]() -> unsigned { return g_viewer ? g_viewer->volW() : 0u; });
+    emscripten::function("volH",         +[]() -> unsigned { return g_viewer ? g_viewer->volH() : 0u; });
+    emscripten::function("volD",         +[]() -> unsigned { return g_viewer ? g_viewer->volD() : 0u; });
+    emscripten::function("pageX",        +[]() -> unsigned { return g_viewer ? g_viewer->pageX() : 0u; });
+    emscripten::function("pageY",        +[]() -> unsigned { return g_viewer ? g_viewer->pageY() : 0u; });
+    emscripten::function("pageZ",        +[]() -> unsigned { return g_viewer ? g_viewer->pageZ() : 0u; });
+    emscripten::function("atlasX",       +[]() -> unsigned { return g_viewer ? g_viewer->atlasX() : 0u; });
+    emscripten::function("atlasY",       +[]() -> unsigned { return g_viewer ? g_viewer->atlasY() : 0u; });
+    emscripten::function("atlasZ",       +[]() -> unsigned { return g_viewer ? g_viewer->atlasZ() : 0u; });
+    emscripten::function("slotsUsed",    +[]() -> unsigned { return g_viewer ? g_viewer->slotsUsed() : 0u; });
+    emscripten::function("slotsTotal",   +[]() -> unsigned { return g_viewer ? g_viewer->slotsTotal() : 0u; });
+    emscripten::function("atlasMBUsed",  +[]() -> double { return g_viewer ? g_viewer->atlasMBUsed() : 0.0; });
+    emscripten::function("atlasMBAlloc", +[]() -> double { return g_viewer ? g_viewer->atlasMBAlloc() : 0.0; });
+    emscripten::function("denseMB",      +[]() -> double { return g_viewer ? g_viewer->denseMB() : 0.0; });
+    emscripten::function("lastRenderMs", +[]() -> float { return g_viewer ? g_viewer->lastRenderMs() : 0.0f; });
 }
 
 int main() {

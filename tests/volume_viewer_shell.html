@@ -28,6 +28,7 @@
     .winbtns button { cursor: pointer; }
     #status { position: fixed; left: 12px; bottom: 12px; color: #8b95a7; font-size: 11px; }
     #hint { position: fixed; left: 12px; top: 12px; color: #6f7a8c; font-size: 11px; }
+    #stats { font-size: 11px; color: #cfd3dc; margin: 4px 0 0 0; line-height: 1.4; }
 </style>
 </head>
 <body>
@@ -103,6 +104,9 @@
 
         <div class="sec">Performance</div>
         <label class="tog"><input type="checkbox" id="skip" checked> Empty-space skip</label>
+
+        <div class="sec">Stats (M3-3)</div>
+        <pre id="stats">loading…</pre>
     </div>
 
     <script>
@@ -174,6 +178,30 @@
             document.getElementById('wBone').addEventListener('click', function() { setWin(300, 1500); });
             document.getElementById('wSoft').addEventListener('click', function() { setWin(40, 400); });
             document.getElementById('wLung').addEventListener('click', function() { setWin(-600, 1500); });
+
+            // Stats poll. Same _wasmBusy gate as the command flush -- the
+            // wasm-side getters touch m_volume and could ASYNCIFY-suspend if a
+            // frame is mid-render.
+            var statsEl = document.getElementById('stats');
+            setInterval(function() {
+                if (Module._wasmBusy) return;
+                if (typeof Module.volW !== 'function') return;
+                var vw = Module.volW(), vh = Module.volH(), vd = Module.volD();
+                if (vw === 0) { statsEl.textContent = 'no volume'; return; }
+                var pgx = Module.pageX(), pgy = Module.pageY(), pgz = Module.pageZ();
+                var ax = Module.atlasX(), ay = Module.atlasY(), az = Module.atlasZ();
+                var used = Module.slotsUsed(), tot = Module.slotsTotal();
+                var mbUsed = Module.atlasMBUsed(), mbAlloc = Module.atlasMBAlloc();
+                var denseMB = Module.denseMB();
+                var ms = Module.lastRenderMs();
+                var saved = denseMB > 0 ? (100 * (1 - mbAlloc / denseMB)) : 0;
+                statsEl.textContent =
+                    'Volume: ' + vw + 'x' + vh + 'x' + vd + '  (' + denseMB.toFixed(1) + ' MB dense)\n' +
+                    'Page:   ' + pgx + 'x' + pgy + 'x' + pgz + '  (' + (pgx*pgy*pgz) + ' bricks)\n' +
+                    'Atlas:  ' + ax + 'x' + ay + 'x' + az + '  ' + used + '/' + tot + ' slots\n' +
+                    'Memory: ' + mbUsed.toFixed(1) + ' / ' + mbAlloc.toFixed(1) + ' MB  (-' + saved.toFixed(1) + '% vs dense)\n' +
+                    'CPU:    ' + ms.toFixed(2) + ' ms/frame';
+            }, 500);
         }
 
         // ── Emscripten Module ──

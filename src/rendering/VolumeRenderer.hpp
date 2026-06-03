@@ -219,6 +219,18 @@ public:
     rhi::RHIBindGroup*      getBindGroup(uint32_t frame) const { return m_bindGroups[frame % kFramesInFlight].get(); }
     uint32_t                getResolution() const { return m_resolution; }
 
+    // M3-3 brick storage statistics (read-only; for viewer stats panels and
+    // memory-budget logging). All four are O(1) computed from BrickedVolume.
+    const BrickedVolume&    getBrickedVolume() const { return m_brick; }
+    glm::uvec3              getVolDims()       const { return m_brick.volSize(); }
+    glm::uvec3              getPageGrid()      const { return m_brick.pageGrid(); }
+    glm::uvec3              getAtlasGrid()     const { return m_brick.atlasGrid(); }
+    uint32_t                getUsedSlots()     const { return m_brick.usedSlots(); }
+    uint32_t                getTotalSlots()    const { return m_brick.totalSlots(); }
+    uint64_t                getAtlasBytesAllocated() const { return m_brick.atlasBytesAllocated(); }
+    uint64_t                getAtlasBytesUsed() const { return m_brick.atlasBytesUsed(); }
+    uint64_t                getDenseBytes()    const { return m_brick.denseBytes(); }
+
     // M4 v1 path-trace pass accessors (caller renders 2 passes in PT mode).
     // Pass 1: getPathPipeline + getPathBindGroup(frame) -> getPathOutputView (RGBA16Float).
     // Pass 2: getDisplayPipeline + getDisplayBindGroup() -> swapchain.
