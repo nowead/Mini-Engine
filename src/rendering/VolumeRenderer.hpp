@@ -41,7 +41,7 @@ public:
 
     // Transfer-function presets. Custom uses the low/high color gradient (no LUT);
     // the others bake a density->(color,opacity) curve into a 256x1 LUT texture.
-    enum class TFPreset { Custom = 0, Cloud, Fire, CTBone, CTSoftTissue, Count };
+    enum class TFPreset { Custom = 0, Cloud, Fire, CTBone, CTSoftTissue, MRT1, MRT2, Count };
 
     // GPU-side UBO layout (must match volume_march.frag.glsl's VolumeUBO).
     struct VolumeUBO {

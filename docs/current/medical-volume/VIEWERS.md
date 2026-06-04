@@ -82,18 +82,41 @@ make serve-wasm   # scripts\serve_nocache.py 사용 (브라우저 캐시 우회)
 
 ### 합성 데이터 생성
 
-테스트용 NIfTI / DICOM 생성기:
+테스트용 NIfTI / DICOM 생성기 (CT/MR 둘 다, sphere/brain phantom):
 
 ```powershell
+# CT 합성 sphere (기본)
 python scripts\make_synthetic_nii.py    out\synthetic_ct.nii  96 96 48
 python scripts\make_synthetic_dicom.py  out\dicom_series\     96 96 48
+
+# MR 합성 sphere (T1 강도값)
+python scripts\make_synthetic_nii.py    out\synthetic_mr.nii  96 96 48 --modality mr
+
+# MR 뇌 phantom (4-shell: 외부 CSF / GM / WM / 중심 CSF) — T1 preset으로 보기 좋음
+python scripts\make_synthetic_nii.py    out\mr_brain.nii      128 128 128 --modality mr --shape brain
 ```
 
-공개 임상 DICOM (pydicom 코퍼스 4종 다운로드):
+공개 임상 코퍼스 다운로드:
 
 ```powershell
-python scripts\fetch_sample_ct.py out\dicom_corpus
+python scripts\fetch_sample_ct.py out\dicom_ct_corpus   # pydicom CT 슬라이스
+python scripts\fetch_sample_mr.py out\dicom_mr_corpus   # pydicom MR_small.dcm
 ```
+
+### Transfer function preset
+
+| Preset | 적합 데이터 | 효과 |
+| --- | --- | --- |
+| Custom | — | 2색 그래디언트, UI 슬라이더 |
+| Cloud | 안개 / 절차적 노이즈 | 부드러운 흰색 |
+| Fire | 폭발 / 에너지 효과 | 검정→빨강→흰 |
+| CT - Bone | CT (뼈 윈도우) | 뼈 강조 |
+| CT - Soft Tissue | CT (연조직 윈도우) | 장기·근육 |
+| **MR - T1** | MR T1-weighted | WM 밝게, CSF 어둡게 (전형 brain T1) |
+| **MR - T2** | MR T2-weighted | 물(CSF) 밝게, WM 어둡게 |
+
+MR 데이터 로드 시 `MR - T1` 또는 `MR - T2` 전환으로 즉시 임상 콘트라스트 표시.
+Window center/width는 데이터 범위 자동 감지(데이터 min/max).
 
 ---
 

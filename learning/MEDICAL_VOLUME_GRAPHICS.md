@@ -71,6 +71,38 @@ CT에서 8비트 양자화 후 윈도잉을 하면 "이미 잃어버린 정밀�
 코드: [`volume_march.frag.glsl:124-127`](../shaders/volume_march.frag.glsl),
 [`VolumeRenderer::loadFromFloatData`](../src/rendering/VolumeRenderer.cpp).
 
+### MR 데이터 — 같은 파이프라인, 다른 의미
+
+CT가 HU(Hounsfield Unit, 표준화된 물리량)를 쓰는 반면 **MR은 임의 signal
+intensity** — 단위 없고, 같은 시퀀스라도 스캐너·설정에 따라 절대값이 다름.
+공통점은 둘 다 16비트 이상 정밀도 필요. R16Float 저장 + window/level 정규화
+파이프라인이 그대로 동작 (`loadFromFloatData`가 데이터 min/max 자동 감지).
+
+전형 콘트라스트 (T1 weighted):
+
+| 조직 | T1 signal | T2 signal |
+| --- | --- | --- |
+| 백질 (WM) | 밝음 (~800) | 어두움 |
+| 회백질 (GM) | 중간 (~400) | 중간 |
+| 뇌척수액 (CSF) | 어두움 (~100) | **밝음** (water signal) |
+| 지방 | 가장 밝음 | 중간 |
+
+→ **T1과 T2는 같은 볼륨의 다른 정보**. CT의 Bone vs Soft Tissue 윈도우와 같은
+관계.
+
+엔진은 두 modality 모두 같은 셰이더 경로로 처리. preset만 분기 — TFPreset의
+`MRT1` / `MRT2`가 T1·T2 콘트라스트를 LUT로 매핑.
+
+테스트 데이터:
+
+- **합성 sphere** (`--modality mr`): 강도값만 다른 sphere shell, dev 회전용
+- **합성 brain phantom** (`--shape brain`): 4-shell CSF/GM/WM/CSF, T1 콘트라스트
+  검증용
+- **실 임상 DICOM** (`fetch_sample_mr.py`): pydicom 공개 MR 슬라이스
+
+자세한 사용: [VIEWERS.md](../docs/current/medical-volume/VIEWERS.md) "합성 데이터
+생성" 섹션.
+
 ### 트레이드오프
 
 - HU 손실 0, 윈도잉 자유.

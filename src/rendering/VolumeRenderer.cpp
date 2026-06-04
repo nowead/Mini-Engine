@@ -775,6 +775,8 @@ const char* VolumeRenderer::tfPresetName(int i) {
         case TFPreset::Fire:         return "Fire";
         case TFPreset::CTBone:       return "CT - Bone";
         case TFPreset::CTSoftTissue: return "CT - Soft Tissue";
+        case TFPreset::MRT1:         return "MR - T1";
+        case TFPreset::MRT2:         return "MR - T2";
         default: return "?";
     }
 }
@@ -858,6 +860,37 @@ void VolumeRenderer::applyPendingTFUpdate() {
                 { 0.55f, 0.90f, 0.45f, 0.30f, 0.55f },
                 { 0.85f, 0.70f, 0.30f, 0.20f, 0.35f },
                 { 1.00f, 0.40f, 0.15f, 0.10f, 0.10f },
+            };
+            fillFromKeys(lut.data(), k, 5);
+            break;
+        }
+        case TFPreset::MRT1: {
+            // T1-weighted brain contrast: WM bright, GM mid, CSF dark.
+            // Voxel value rises from CSF (~100) -> GM (~400) -> WM (~800),
+            // which the window/level step normalises into the LUT's 0..1
+            // density axis. Map low density to dark/transparent (CSF), mid
+            // to gray (GM), high to bright white (WM).
+            const TFKey k[] = {
+                { 0.00f, 0.00f, 0.00f, 0.00f, 0.00f },
+                { 0.15f, 0.18f, 0.18f, 0.20f, 0.10f },  // CSF
+                { 0.50f, 0.60f, 0.60f, 0.62f, 0.50f },  // GM
+                { 0.85f, 0.95f, 0.95f, 0.93f, 0.85f },  // WM
+                { 1.00f, 1.00f, 1.00f, 1.00f, 1.00f },
+            };
+            fillFromKeys(lut.data(), k, 5);
+            break;
+        }
+        case TFPreset::MRT2: {
+            // T2-weighted brain contrast: water (CSF) bright, WM dark.
+            // Same intensity axis as T1 but the LUT is inverted around the
+            // CSF/WM ends, with a slightly cool-tinted highlight on CSF to
+            // distinguish from T1 at a glance.
+            const TFKey k[] = {
+                { 0.00f, 0.00f, 0.00f, 0.00f, 0.00f },
+                { 0.15f, 0.92f, 0.95f, 1.00f, 0.85f },  // CSF (water bright)
+                { 0.50f, 0.55f, 0.58f, 0.62f, 0.45f },  // GM
+                { 0.85f, 0.20f, 0.22f, 0.25f, 0.25f },  // WM (dark)
+                { 1.00f, 0.10f, 0.10f, 0.12f, 0.20f },
             };
             fillFromKeys(lut.data(), k, 5);
             break;

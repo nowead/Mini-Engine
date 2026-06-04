@@ -322,7 +322,7 @@ private:
         ImGui::Separator();
         ImGui::Checkbox("Enable volume", &m_enabled);
 
-        static const char* kPresets[] = { "Custom", "Cloud", "Fire", "CT - Bone", "CT - Soft Tissue" };
+        static const char* kPresets[] = { "Custom", "Cloud", "Fire", "CT - Bone", "CT - Soft Tissue", "MR - T1", "MR - T2" };
         ImGui::Combo("TF preset", &m_preset, kPresets, IM_ARRAYSIZE(kPresets));
 
         ImGui::SeparatorText("Window / Level");

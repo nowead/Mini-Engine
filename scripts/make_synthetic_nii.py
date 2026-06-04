@@ -14,8 +14,19 @@ Two modalities supported:
   --modality mr
     T1-weighted-style brain signal intensity. Background = 0 (no signal),
     outer shell = 300 (gray-matter-like), inner core = 800 (white-matter-
-    like high signal). Test the MR window/level behaviour. The shape stays
-    a sphere shell -- MR-B2 (brain phantom WM/GM/CSF shells) is a follow-up.
+    like high signal). Test the MR window/level behaviour.
+
+Two shapes supported:
+
+  --shape sphere (default)
+    Two concentric spheres: outer (soft tissue / mid signal) and inner
+    (bone / high signal). Same shape both modalities, intensities differ.
+
+  --shape brain
+    Four-shell brain phantom: outermost CSF, GM (gray-matter cortex), WM
+    (white-matter core), innermost CSF (ventricle). Intensities pulled
+    from per-modality profile (T1 contrast on MR, low-contrast on CT).
+    Best paired with --modality mr to see WM/GM/CSF separation.
 
 Content: x is the fastest-varying axis, matching the engine's
 (z*H + y)*W + x layout. Each xy slice is a 2D annulus (single z plane =
@@ -25,8 +36,9 @@ Per-row inner-radius math is O(1). Net cost is O(H * D) Python ops, which
 keeps 1024^3 generation feasible (under a minute) without numpy.
 
 Usage:
-    python scripts/make_synthetic_nii.py [out.nii] [W H D] [outer_frac] [inner_frac] [--modality ct|mr]
-Defaults: synthetic_ct.nii  96 96 48  0.85  0.35  --modality ct
+    python scripts/make_synthetic_nii.py [out.nii] [W H D] [outer_frac] [inner_frac]
+                                          [--modality ct|mr] [--shape sphere|brain]
+Defaults: synthetic_ct.nii  96 96 48  0.85  0.35  --modality ct  --shape sphere
 """
 import struct
 import sys
@@ -34,20 +46,43 @@ import sys
 
 # Per-modality intensity profile. CT values are HU; MR values are T1-weighted
 # signal intensity (unitless, scaled to a plausible 0..1000 dynamic range so
-# the existing window/level path picks them up the same way as HU).
+# the existing window/level path picks them up the same way as HU). Brain
+# bands (csf/gm/wm) are only consumed by --shape brain; sphere uses outer/
+# inner. CT brain values are realistic-but-low-contrast (clinical CT brain
+# differentiates WM/GM weakly); MR T1 brain values reflect typical contrast.
 MODALITY_PROFILES = {
     "ct": {
-        "background": -1000,   # air
+        "background": -1000,
         "outer":         40,   # soft tissue
         "inner":        800,   # bone core
-        "label":        "HU air=-1000 tissue=40 bone=800",
+        "csf":            0,   # ventricle / extra-axial CSF
+        "gm":            40,   # cortical gray matter
+        "wm":            30,   # subcortical white matter
+        "label":        "HU air=-1000 tissue=40 bone=800 (brain: csf=0 gm=40 wm=30)",
     },
     "mr": {
-        "background":     0,   # no signal
-        "outer":        300,   # gray-matter-ish T1 mid-signal
-        "inner":        800,   # white-matter-ish T1 high-signal
-        "label":        "T1 bg=0 outer=300 inner=800",
+        "background":     0,
+        "outer":        300,
+        "inner":        800,
+        "csf":          100,   # T1 dark CSF
+        "gm":           400,   # T1 mid GM
+        "wm":           800,   # T1 bright WM
+        "label":        "T1 bg=0 outer=300 inner=800 (brain: csf=100 gm=400 wm=800)",
     },
+}
+
+
+# Per-shape concentric-shell layout: list of (radius_frac_of_half, profile_band_key),
+# sorted OUTERMOST first. Outer-first order means inner shells overwrite outer
+# ones in their range during fill, naturally producing nested rings.
+SHAPE_LAYOUTS = {
+    "sphere": None,    # special-cased; uses outer_frac / inner_frac args
+    "brain":  [
+        (0.75, "csf"),   # outer CSF (extra-axial)
+        (0.65, "gm"),    # gray-matter cortex
+        (0.50, "wm"),    # white-matter core
+        (0.10, "csf"),   # central CSF (ventricle)
+    ],
 }
 
 
@@ -69,69 +104,72 @@ def build_header(w, h, d, sx, sy, sz, datatype, bitpix):
     return hdr
 
 
-def fill_row(row_buf, w, x_outer_lo, x_outer_hi, x_inner_lo, x_inner_hi,
-             bg_bytes, outer_bytes, inner_bytes):
-    """Fill a single x-row (int16 voxels, 2*w bytes) as
-    background | (outer (inner) outer) | background.
+def fill_row_shells(row_buf, w, x_ranges, bg_bytes, shell_bytes_list):
+    """Fill a single x-row (int16 voxels, 2*w bytes) as nested concentric shells.
 
-    All x_* are inclusive integer voxel indices; -1 means "no such band on this
-    row" (radius didn't reach this y). row_buf is a bytearray view of length 2*w.
-    bg/outer/inner_bytes are pre-packed 2-byte int16 values (per modality).
+    x_ranges  : list of (x_lo, x_hi) inclusive, sorted OUTERMOST first. -1/-1
+                means the shell does not reach this row.
+    bg_bytes  : 2-byte packed int16 background value.
+    shell_bytes_list : 2-byte packed int16 per shell, same order as x_ranges.
+
+    Strategy: init the whole row to background, then walk shells outer-first.
+    Each shell's x range OVERWRITES whatever is there, so inner shells
+    naturally end up nested inside outer ones. Slightly more write traffic
+    than the old 2-band per-segment fill but bytearray slice assignment is
+    byte-block memcpy (very fast); for 1024^3 the extra cost is <1s total.
     """
-    bg_left  = x_outer_lo if x_outer_lo >= 0 else w
-    bg_right = (x_outer_hi + 1) if x_outer_hi >= 0 else 0
-    # Left background band [0, bg_left)
-    if bg_left > 0:
-        row_buf[0:2 * bg_left] = bg_bytes * bg_left
-    if x_outer_lo < 0:
-        return   # row outside the outer radius entirely -> all background, done
-
-    if x_inner_lo < 0:
-        # Outer only on this row.
-        n = (x_outer_hi - x_outer_lo + 1)
-        row_buf[2 * x_outer_lo : 2 * (x_outer_hi + 1)] = outer_bytes * n
-    else:
-        # Outer (left), inner (middle), outer (right).
-        n_left = (x_inner_lo - x_outer_lo)
-        if n_left > 0:
-            row_buf[2 * x_outer_lo : 2 * x_inner_lo] = outer_bytes * n_left
-        n_inner = (x_inner_hi - x_inner_lo + 1)
-        row_buf[2 * x_inner_lo : 2 * (x_inner_hi + 1)] = inner_bytes * n_inner
-        n_right = (x_outer_hi - x_inner_hi)
-        if n_right > 0:
-            row_buf[2 * (x_inner_hi + 1) : 2 * (x_outer_hi + 1)] = outer_bytes * n_right
-
-    # Right background band [bg_right, w)
-    n_right_bg = w - bg_right
-    if n_right_bg > 0:
-        row_buf[2 * bg_right : 2 * w] = bg_bytes * n_right_bg
+    # No shell touches this row -> just fill background.
+    if not any(x_lo >= 0 and x_hi >= x_lo for x_lo, x_hi in x_ranges):
+        row_buf[0:2 * w] = bg_bytes * w
+        return
+    # Init full row to background, then layer shells outer -> inner.
+    row_buf[0:2 * w] = bg_bytes * w
+    for (x_lo, x_hi), val_bytes in zip(x_ranges, shell_bytes_list):
+        if x_lo < 0 or x_hi < x_lo:
+            continue
+        n = x_hi - x_lo + 1
+        row_buf[2 * x_lo : 2 * (x_hi + 1)] = val_bytes * n
 
 
 def parse_args(argv):
-    """Strip the optional --modality X flag from argv and return (modality, rest).
-    Keeps the existing positional [out W H D outer_frac inner_frac] interface
-    intact so old callers don't break."""
+    """Strip optional --modality / --shape flags. Keep the legacy positional
+    interface [out W H D outer_frac inner_frac] intact so old callers don't
+    break."""
     modality = "ct"
+    shape    = "sphere"
     rest = []
     i = 0
     while i < len(argv):
         if argv[i] == "--modality" and i + 1 < len(argv):
             modality = argv[i + 1].lower()
             i += 2
+        elif argv[i] == "--shape" and i + 1 < len(argv):
+            shape = argv[i + 1].lower()
+            i += 2
         else:
             rest.append(argv[i])
             i += 1
     if modality not in MODALITY_PROFILES:
         raise SystemExit(f"unknown --modality '{modality}'; valid: ct, mr")
-    return modality, rest
+    if shape not in SHAPE_LAYOUTS:
+        raise SystemExit(f"unknown --shape '{shape}'; valid: sphere, brain")
+    return modality, shape, rest
+
+
+def resolve_shells(shape, profile, outer_frac, inner_frac):
+    """Return list of (radius_frac_of_half, intensity_int) outermost first."""
+    if shape == "sphere":
+        return [(outer_frac, profile["outer"]),
+                (inner_frac, profile["inner"])]
+    # brain (or any future shape) pulls per-band intensity from profile.
+    layout = SHAPE_LAYOUTS[shape]
+    return [(frac, profile[band]) for frac, band in layout]
 
 
 def main():
-    modality, argv = parse_args(sys.argv[1:])
-    profile = MODALITY_PROFILES[modality]
-    bg_bytes    = struct.pack("<h", profile["background"])
-    outer_bytes = struct.pack("<h", profile["outer"])
-    inner_bytes = struct.pack("<h", profile["inner"])
+    modality, shape, argv = parse_args(sys.argv[1:])
+    profile  = MODALITY_PROFILES[modality]
+    bg_bytes = struct.pack("<h", profile["background"])
 
     default_name = "synthetic_ct.nii" if modality == "ct" else "synthetic_mr.nii"
     out = argv[0] if len(argv) > 0 else default_name
@@ -145,10 +183,11 @@ def main():
 
     cx, cy, cz = (w - 1) / 2.0, (h - 1) / 2.0, (d - 1) / 2.0
     half = min(cx, cy, cz)
-    r_outer = outer_frac * half
-    r_inner = inner_frac * half
-    r_outer_sq = r_outer * r_outer
-    r_inner_sq = r_inner * r_inner
+
+    shells_def = resolve_shells(shape, profile, outer_frac, inner_frac)
+    shell_radii    = [frac * half for frac, _ in shells_def]
+    shell_radii_sq = [r * r for r in shell_radii]
+    shell_bytes_list = [struct.pack("<h", v) for _, v in shells_def]
 
     row_bytes = 2 * w
     total_bytes = row_bytes * h * d
@@ -156,40 +195,30 @@ def main():
 
     for z in range(d):
         dz = z - cz
-        # For this z slice, the radii in 2D are sqrt(R^2 - dz^2). If dz exceeds
-        # R the band doesn't appear in this slice.
-        outer_z2 = r_outer_sq - dz * dz
-        inner_z2 = r_inner_sq - dz * dz
-        rt_z = (outer_z2 ** 0.5) if outer_z2 > 0.0 else -1.0
-        rb_z = (inner_z2 ** 0.5) if inner_z2 > 0.0 else -1.0
+        # Projected radius per shell at this z slice (sqrt(R^2 - dz^2)).
+        shell_r_z = [
+            (rsq - dz * dz) ** 0.5 if rsq > dz * dz else -1.0
+            for rsq in shell_radii_sq
+        ]
 
         for y in range(h):
             dy = y - cy
-            outer_y2 = (rt_z * rt_z - dy * dy) if rt_z > 0.0 else -1.0
-            inner_y2 = (rb_z * rb_z - dy * dy) if rb_z > 0.0 else -1.0
-
-            # Inclusive x ranges for outer and inner bands. -1 = absent.
-            if outer_y2 > 0.0:
-                hx = outer_y2 ** 0.5
-                xt_lo = max(0,     int(cx - hx + 0.5))
-                xt_hi = min(w - 1, int(cx + hx + 0.5) - 1)
-                if xt_hi < xt_lo: xt_lo, xt_hi = -1, -1
-            else:
-                xt_lo = xt_hi = -1
-
-            if inner_y2 > 0.0:
-                hx = inner_y2 ** 0.5
-                xb_lo = max(0,     int(cx - hx + 0.5))
-                xb_hi = min(w - 1, int(cx + hx + 0.5) - 1)
-                if xb_hi < xb_lo: xb_lo, xb_hi = -1, -1
-            else:
-                xb_lo = xb_hi = -1
+            # Inclusive x range per shell at this y. -1/-1 = absent on this row.
+            x_ranges = []
+            for r_z in shell_r_z:
+                if r_z > 0.0:
+                    y2 = r_z * r_z - dy * dy
+                    if y2 > 0.0:
+                        hx = y2 ** 0.5
+                        xlo = max(0,     int(cx - hx + 0.5))
+                        xhi = min(w - 1, int(cx + hx + 0.5) - 1)
+                        x_ranges.append((xlo, xhi) if xhi >= xlo else (-1, -1))
+                        continue
+                x_ranges.append((-1, -1))
 
             row_off = ((z * h) + y) * row_bytes
-            # memoryview avoids slice-copy overhead on the big bytearray.
             row_view = memoryview(voxels)[row_off : row_off + row_bytes]
-            fill_row(row_view, w, xt_lo, xt_hi, xb_lo, xb_hi,
-                     bg_bytes, outer_bytes, inner_bytes)
+            fill_row_shells(row_view, w, x_ranges, bg_bytes, shell_bytes_list)
 
     hdr = build_header(w, h, d, sx, sy, sz, datatype=4, bitpix=16)  # 4 = int16
     with open(out, "wb") as f:
@@ -197,7 +226,7 @@ def main():
         f.write(b"\x00\x00\x00\x00")   # extension flag -> data starts at 352
         f.write(voxels)
     print(f"wrote {out}: {w}x{h}x{d} int16, spacing ({sx},{sy},{sz})mm, "
-          f"modality={modality}, {profile['label']}")
+          f"modality={modality}, shape={shape}, {profile['label']}")
 
 
 if __name__ == "__main__":
