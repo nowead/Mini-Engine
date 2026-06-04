@@ -99,6 +99,9 @@ public:
     float lastRenderMs() const { return m_lastRenderCpuMs; }
     uint32_t visibleBricks()   const { return m_lastStreamStats.visibleBricks; }
     uint32_t visibleNonEmpty() const { return m_lastStreamStats.visibleNonEmpty; }
+    uint32_t visibleResident() const { return m_lastStreamStats.visibleResident; }
+    uint32_t visibleMissing()  const { return m_lastStreamStats.visibleMissing; }
+    bool     isStreaming()     const { return m_volume && m_volume->getBrickedVolume().isStreaming(); }
 
 private:
     GLFWwindow* m_window = nullptr;
@@ -382,6 +385,9 @@ EMSCRIPTEN_BINDINGS(volume_viewer) {
     emscripten::function("lastRenderMs", +[]() -> float { return g_viewer ? g_viewer->lastRenderMs() : 0.0f; });
     emscripten::function("visibleBricks",   +[]() -> unsigned { return g_viewer ? g_viewer->visibleBricks() : 0u; });
     emscripten::function("visibleNonEmpty", +[]() -> unsigned { return g_viewer ? g_viewer->visibleNonEmpty() : 0u; });
+    emscripten::function("visibleResident", +[]() -> unsigned { return g_viewer ? g_viewer->visibleResident() : 0u; });
+    emscripten::function("visibleMissing",  +[]() -> unsigned { return g_viewer ? g_viewer->visibleMissing() : 0u; });
+    emscripten::function("isStreaming",     +[]() -> bool     { return g_viewer ? g_viewer->isStreaming() : false; });
 }
 
 int main() {

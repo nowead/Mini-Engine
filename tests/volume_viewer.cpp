@@ -68,6 +68,9 @@ private:
     bool     m_isNifti = false;     // .nii path -> dims/spacing/intensity from header
     bool     m_isDicom = false;     // directory  -> DICOM series, dims from headers
     uint32_t m_vw = 0, m_vh = 0, m_vd = 0, m_vbpv = 1;
+    // v1-2 testing: explicit atlas cap forces Streaming mode on volumes that
+    // would otherwise fit Static. 0 (default) keeps auto-sizing.
+    uint32_t m_atlasCap = 0;
     float    m_winLo = 0.0f, m_winHi = 1.0f;   // window-slider bounds (data units)
 
     // UI state (mirrors the engine's volume controls).
@@ -133,9 +136,17 @@ private:
             if (argc >= 6) m_vbpv = std::strtoul(argv[5], nullptr, 10);
         } else {
             std::cout << "[VolumeViewer] no volume given -> procedural. Usage:\n"
-                         "  volume_viewer <file.nii>\n"
-                         "  volume_viewer <dicom_dir>\n"
-                         "  volume_viewer <raw> <W> <H> <D> [bytesPerVoxel]\n";
+                         "  volume_viewer <file.nii> [--atlas-cap N]\n"
+                         "  volume_viewer <dicom_dir> [--atlas-cap N]\n"
+                         "  volume_viewer <raw> <W> <H> <D> [bytesPerVoxel] [--atlas-cap N]\n";
+        }
+        // Trailing optional --atlas-cap N: force atlasGrid = (N,N,N) at load,
+        // mainly to trigger Streaming mode on volumes that would auto-Static.
+        for (int i = 1; i + 1 < argc; ++i) {
+            if (std::string(argv[i]) == "--atlas-cap") {
+                m_atlasCap = std::strtoul(argv[i + 1], nullptr, 10);
+                break;
+            }
         }
     }
 
@@ -215,7 +226,8 @@ private:
                 ? assets::loadNifti(m_volPath, vol)
                 : assets::loadDicomSeries(m_volPath, vol);
             if (loaded) {
-                m_volume->loadFromFloatData(vol.intensity, vol.w, vol.h, vol.d);
+                m_volume->loadFromFloatData(vol.intensity, vol.w, vol.h, vol.d,
+                    m_atlasCap > 0 ? glm::uvec3(m_atlasCap) : glm::uvec3(0));
                 m_vw = vol.w; m_vh = vol.h; m_vd = vol.d;
                 // Aspect-correct box: the largest PHYSICAL extent spans [-1,1] so an
                 // anisotropic CT (e.g. thicker slices) is not distorted.
@@ -380,11 +392,16 @@ private:
         ImGui::Text("Atlas memory: %.1f / %.1f MB (live / allocated)", usedB / mb, allocB / mb);
         const double saved = denseB > 0 ? (100.0 * (1.0 - static_cast<double>(allocB) / denseB)) : 0.0;
         ImGui::Text("Sparse saving vs dense: %.1f%%", saved);
-        // v1-1 streaming counters (diagnostic): visible total / non-empty.
-        // Other fields (uploaded, evicted, missing) light up in v1-3.
+        const bool streaming = m_volume->getBrickedVolume().isStreaming();
+        ImGui::Text("Mode: %s", streaming ? "Streaming (v1-alpha)" : "Static");
         ImGui::Text("Frustum-visible bricks: %u (%u non-empty)",
                     m_lastStreamStats.visibleBricks,
                     m_lastStreamStats.visibleNonEmpty);
+        if (streaming) {
+            ImGui::Text("  resident: %u   missing: %u",
+                        m_lastStreamStats.visibleResident,
+                        m_lastStreamStats.visibleMissing);
+        }
 
         const bool customTF = (m_preset == 0);
         ImGui::BeginDisabled(!customTF);

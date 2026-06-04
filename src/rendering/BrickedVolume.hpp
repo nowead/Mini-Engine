@@ -23,6 +23,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 #include <glm/glm.hpp>
@@ -40,9 +41,9 @@ public:
     static constexpr uint32_t kBrickStored = kBrickSize + 2; // 66, with 1-voxel halo
     static constexpr uint32_t kEmptySlot   = 0xFFFFFFFFu;   // page table sentinel
 
-    // v1-alpha streaming per-frame counters. v1-1 only populates visibleBricks;
-    // bricksUploaded / bricksEvicted / visibleResident / visibleMissing fill
-    // in v1-3 once the LRU + incremental upload path lands.
+    // v1-alpha streaming per-frame counters. v1-1 populates visibleBricks +
+    // visibleNonEmpty; v1-2 adds visibleMissing for streaming-mode volumes;
+    // bricksUploaded / bricksEvicted / visibleResident light up in v1-3.
     struct StreamUpdateStats {
         uint32_t visibleBricks    = 0;   // total page-grid bricks intersecting frustum (incl. empty)
         uint32_t visibleNonEmpty  = 0;   // subset that has data in the source volume
@@ -51,6 +52,12 @@ public:
         uint32_t visibleResident  = 0;
         uint32_t visibleMissing   = 0;
     };
+
+    // v1-2 mode: Static = atlas fully populated at load time (v0 behavior);
+    // Streaming = atlas starts empty + source data kept in CPU RAM, bricks
+    // page in on demand. Mode is decided at build() time by comparing the
+    // non-empty brick count to atlas capacity. Runtime mode change unsupported.
+    enum class Mode { StaticFullyLoaded, Streaming };
 
     // Auto-size cap per axis. (8,8,8) = 512 slots * 66^3 * 2B ~= 292 MB, the
     // upper bound we're willing to allocate from a load-time decision. Larger
@@ -82,6 +89,19 @@ public:
     // so frustum-cull code can ask "is this page non-empty?" without a GPU
     // readback. v1-3 streaming will rewrite entries as bricks page in/out.
     const std::vector<uint32_t>& pageTableHost() const { return m_pageTableHost; }
+
+    Mode mode()         const { return m_mode; }
+    bool isStreaming()  const { return m_mode == Mode::Streaming; }
+
+    // v1-2: per-virtual-brick "is this brick non-empty in the source data?"
+    // Computed once during build() so updateBrickStreaming can distinguish
+    // visible-empty (skip, never needs upload) from visible-non-empty-but-
+    // not-resident (the "missing" count -- v1-3 will turn that into upload
+    // requests). Bit-packed: 1 bit per virtual brick.
+    bool pageHasData(uint32_t pageIdx) const {
+        if (pageIdx >= m_pageGrid.x * m_pageGrid.y * m_pageGrid.z) return false;
+        return (m_pageOccupancy[pageIdx >> 3] >> (pageIdx & 7)) & 1u;
+    }
 
     rhi::RHITextureView* atlasView()    const { return m_atlasView.get(); }
     rhi::RHIBuffer*      pageTable()    const { return m_pageTable.get(); }
@@ -117,10 +137,22 @@ private:
     std::unique_ptr<rhi::RHITextureView> m_atlasView;
     std::unique_ptr<rhi::RHIBuffer>      m_pageTable;
     std::vector<uint32_t>                m_pageTableHost;  // v1-1 CPU mirror
+    std::vector<uint8_t>                 m_pageOccupancy;  // v1-2 bitmap: 1 = source brick has data
     glm::uvec3 m_volSize{0};
     glm::uvec3 m_pageGrid{0};
     glm::uvec3 m_atlasGrid{0};
     uint32_t   m_usedSlots = 0;
+
+    // v1-2 streaming-mode state. Empty / default-constructed in Static mode.
+    Mode m_mode = Mode::StaticFullyLoaded;
+    std::vector<uint16_t> m_originalHalfData;  // CPU mirror, indexed (z*H + y)*W + x
+    uint16_t m_emptyValueHalf = 0;             // for empty-slot init + halo padding
+    struct AtlasSlotState {
+        uint32_t residentPageIdx = kEmptySlot; // page index living in this slot, or kEmptySlot
+        uint64_t lastFrameUsed   = 0;          // LRU key (monotonically increasing)
+    };
+    std::vector<AtlasSlotState> m_slotStates;  // sized to totalSlots() in streaming mode
+    std::unordered_map<uint32_t, uint32_t> m_pageToSlot;  // page index -> slot index
 };
 
 } // namespace rendering

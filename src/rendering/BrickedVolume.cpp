@@ -114,84 +114,112 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
 
     std::vector<uint32_t> pageTable(totalPageEntries, kEmptySlot);
 
-    m_usedSlots = 0;
+    // ------------------------------------------------------------------
+    // 1a. v1-2 pre-scan: build occupancy bitmap + count non-empty bricks.
+    // Decoupling the scan from the pack lets us choose Static vs Streaming
+    // before any atlas writes happen, and the bitmap doubles as the
+    // "does this page have data?" query used by updateBrickStreaming.
+    // ------------------------------------------------------------------
+    m_pageOccupancy.assign((totalPageEntries + 7u) >> 3, 0u);
+    uint32_t nonEmptyCount = 0;
     for (uint32_t bz = 0; bz < m_pageGrid.z; ++bz) {
         for (uint32_t by = 0; by < m_pageGrid.y; ++by) {
             for (uint32_t bx = 0; bx < m_pageGrid.x; ++bx) {
                 if (isInteriorEmpty(halfData, bx, by, bz, w, h, d, emptyValueHalf)) continue;
-                if (m_usedSlots >= totalSlots) {
-                    // Atlas exhausted. Finish the scan to count *all* non-empty
-                    // bricks so the user gets a concrete "you need >= N slots"
-                    // recommendation instead of just "more". Cube-root then ceil
-                    // gives a balanced atlasGrid suggestion (clamped by pageGrid
-                    // per axis -- never recommend more slots per axis than
-                    // virtual bricks).
-                    uint32_t totalNonEmpty = m_usedSlots + 1;  // include current
-                    for (uint32_t cz = bz; cz < m_pageGrid.z; ++cz) {
-                        const uint32_t cyStart = (cz == bz) ? by : 0u;
-                        for (uint32_t cy = cyStart; cy < m_pageGrid.y; ++cy) {
-                            const uint32_t cxStart = (cz == bz && cy == by) ? (bx + 1u) : 0u;
-                            for (uint32_t cx = cxStart; cx < m_pageGrid.x; ++cx) {
-                                if (!isInteriorEmpty(halfData, cx, cy, cz, w, h, d, emptyValueHalf))
-                                    ++totalNonEmpty;
-                            }
-                        }
-                    }
-                    const double cbrt = std::cbrt(static_cast<double>(totalNonEmpty));
-                    const uint32_t axisGuess = static_cast<uint32_t>(std::ceil(cbrt));
-                    const glm::uvec3 recommend(
-                        std::min(std::max(axisGuess, atlasGrid.x), m_pageGrid.x),
-                        std::min(std::max(axisGuess, atlasGrid.y), m_pageGrid.y),
-                        std::min(std::max(axisGuess, atlasGrid.z), m_pageGrid.z));
-                    LOG_ERROR("BrickedVolume") << "atlas full: volume "
-                        << w << "x" << h << "x" << d << " has " << totalNonEmpty
-                        << " non-empty bricks but atlas " << atlasGrid.x << "x"
-                        << atlasGrid.y << "x" << atlasGrid.z << " holds only "
-                        << totalSlots << " slots. Recommend atlasGrid ("
-                        << recommend.x << "," << recommend.y << "," << recommend.z
-                        << ") = " << (recommend.x * recommend.y * recommend.z)
-                        << " slots (~" << ((static_cast<uint64_t>(recommend.x) * recommend.y
-                                            * recommend.z * kBrickStored * kBrickStored
-                                            * kBrickStored * 2) >> 20) << " MB)";
-                    return false;
-                }
-
-                const uint32_t slot = m_usedSlots++;
                 const uint32_t pageIdx = (bz * m_pageGrid.y + by) * m_pageGrid.x + bx;
-                pageTable[pageIdx] = slot;
+                m_pageOccupancy[pageIdx >> 3] |= static_cast<uint8_t>(1u << (pageIdx & 7));
+                ++nonEmptyCount;
+            }
+        }
+    }
 
-                // Atlas slot origin (in voxels) for linear unpacking:
-                // slot = sx + sy*Ax + sz*Ax*Ay.
-                const uint32_t sx = slot % atlasGrid.x;
-                const uint32_t sy = (slot / atlasGrid.x) % atlasGrid.y;
-                const uint32_t sz =  slot / (atlasGrid.x * atlasGrid.y);
-                const uint32_t aOriginX = sx * kBrickStored;
-                const uint32_t aOriginY = sy * kBrickStored;
-                const uint32_t aOriginZ = sz * kBrickStored;
+    // ------------------------------------------------------------------
+    // 1b. Mode decision. Static when every non-empty brick fits the atlas
+    // (v0 behaviour, identical packing). Streaming when it doesn't -- atlas
+    // starts empty, the source halfData stays in CPU RAM, and v1-3 will
+    // page bricks in/out per frame on top of this scaffold.
+    // ------------------------------------------------------------------
+    if (nonEmptyCount <= totalSlots) {
+        m_mode = Mode::StaticFullyLoaded;
+    } else {
+        m_mode = Mode::Streaming;
+        // Recommended atlasGrid for the user who wants Static instead.
+        // Cube-root then ceil gives a balanced shape, clamped by pageGrid.
+        const double cbrt = std::cbrt(static_cast<double>(nonEmptyCount));
+        const uint32_t axisGuess = static_cast<uint32_t>(std::ceil(cbrt));
+        const glm::uvec3 recommend(
+            std::min(std::max(axisGuess, atlasGrid.x), m_pageGrid.x),
+            std::min(std::max(axisGuess, atlasGrid.y), m_pageGrid.y),
+            std::min(std::max(axisGuess, atlasGrid.z), m_pageGrid.z));
+        LOG_INFO("BrickedVolume") << "streaming mode: " << nonEmptyCount
+            << " non-empty bricks > " << totalSlots << " atlas slots"
+            << " (pass atlasGrid (" << recommend.x << "," << recommend.y
+            << "," << recommend.z << ") = "
+            << (recommend.x * recommend.y * recommend.z)
+            << " slots for static, or leave the auto-cap to keep streaming)";
+    }
 
-                // Copy the 66^3 brick (interior + 1-voxel halo) from source.
-                // Source coords range [bx*64 - 1, bx*64 + 64] inclusive; clamped
-                // by srcVoxel when reading.
-                const int srcX0 = static_cast<int>(bx * kBrickSize) - 1;
-                const int srcY0 = static_cast<int>(by * kBrickSize) - 1;
-                const int srcZ0 = static_cast<int>(bz * kBrickSize) - 1;
-                for (uint32_t lz = 0; lz < kBrickStored; ++lz) {
-                    for (uint32_t ly = 0; ly < kBrickStored; ++ly) {
-                        uint16_t* dstRow = reinterpret_cast<uint16_t*>(
-                            atlasBuf.data()
-                            + (static_cast<uint64_t>(aOriginZ + lz) * atlasVoxelsY
-                               + (aOriginY + ly)) * paddedBytesPerRow
-                            + aOriginX * 2);
-                        const int srcZ = srcZ0 + static_cast<int>(lz);
-                        const int srcY = srcY0 + static_cast<int>(ly);
-                        for (uint32_t lx = 0; lx < kBrickStored; ++lx) {
-                            const int srcXcoord = srcX0 + static_cast<int>(lx);
-                            dstRow[lx] = srcVoxel(halfData, srcXcoord, srcY, srcZ, w, h, d);
+    // ------------------------------------------------------------------
+    // 1c. Static-only packing pass. Streaming mode skips this entirely;
+    // atlasBuf stays filled with emptyValueHalf and pageTable stays
+    // all-sentinel (the empty atlas the shader will sample until v1-3
+    // pages bricks in).
+    // ------------------------------------------------------------------
+    m_usedSlots = 0;
+    if (m_mode == Mode::StaticFullyLoaded) {
+        for (uint32_t bz = 0; bz < m_pageGrid.z; ++bz) {
+            for (uint32_t by = 0; by < m_pageGrid.y; ++by) {
+                for (uint32_t bx = 0; bx < m_pageGrid.x; ++bx) {
+                    const uint32_t pageIdx = (bz * m_pageGrid.y + by) * m_pageGrid.x + bx;
+                    const bool hasData = (m_pageOccupancy[pageIdx >> 3] >> (pageIdx & 7)) & 1u;
+                    if (!hasData) continue;
+
+                    const uint32_t slot = m_usedSlots++;
+                    pageTable[pageIdx] = slot;
+
+                    // Atlas slot origin (in voxels) for linear unpacking:
+                    // slot = sx + sy*Ax + sz*Ax*Ay.
+                    const uint32_t sx = slot % atlasGrid.x;
+                    const uint32_t sy = (slot / atlasGrid.x) % atlasGrid.y;
+                    const uint32_t sz =  slot / (atlasGrid.x * atlasGrid.y);
+                    const uint32_t aOriginX = sx * kBrickStored;
+                    const uint32_t aOriginY = sy * kBrickStored;
+                    const uint32_t aOriginZ = sz * kBrickStored;
+
+                    // Copy the 66^3 brick (interior + 1-voxel halo) from source.
+                    const int srcX0 = static_cast<int>(bx * kBrickSize) - 1;
+                    const int srcY0 = static_cast<int>(by * kBrickSize) - 1;
+                    const int srcZ0 = static_cast<int>(bz * kBrickSize) - 1;
+                    for (uint32_t lz = 0; lz < kBrickStored; ++lz) {
+                        for (uint32_t ly = 0; ly < kBrickStored; ++ly) {
+                            uint16_t* dstRow = reinterpret_cast<uint16_t*>(
+                                atlasBuf.data()
+                                + (static_cast<uint64_t>(aOriginZ + lz) * atlasVoxelsY
+                                   + (aOriginY + ly)) * paddedBytesPerRow
+                                + aOriginX * 2);
+                            const int srcZ = srcZ0 + static_cast<int>(lz);
+                            const int srcY = srcY0 + static_cast<int>(ly);
+                            for (uint32_t lx = 0; lx < kBrickStored; ++lx) {
+                                const int srcXcoord = srcX0 + static_cast<int>(lx);
+                                dstRow[lx] = srcVoxel(halfData, srcXcoord, srcY, srcZ, w, h, d);
+                            }
                         }
                     }
                 }
             }
         }
+    }
+
+    // ------------------------------------------------------------------
+    // 1d. Streaming-mode state setup. m_usedSlots stays 0 (no resident
+    // bricks yet); v1-3 will increment it as pages stream in.
+    // ------------------------------------------------------------------
+    if (m_mode == Mode::Streaming) {
+        m_originalHalfData = halfData;            // copy for v1-3 brick extraction
+        m_emptyValueHalf   = emptyValueHalf;
+        m_slotStates.assign(totalSlots, AtlasSlotState{});
+        m_pageToSlot.clear();
+        m_pageToSlot.reserve(nonEmptyCount);      // upper bound for the lifetime
     }
 
     // ------------------------------------------------------------------
@@ -297,7 +325,9 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
 
     LOG_INFO("BrickedVolume") << "built " << w << "x" << h << "x" << d
         << " -> page " << m_pageGrid.x << "x" << m_pageGrid.y << "x" << m_pageGrid.z
-        << ", " << m_usedSlots << "/" << totalSlots << " atlas slots"
+        << " (" << nonEmptyCount << " non-empty), "
+        << m_usedSlots << "/" << totalSlots << " atlas slots, mode = "
+        << (m_mode == Mode::Streaming ? "Streaming" : "Static")
         << " (atlas " << atlasVoxelsX << "x" << atlasVoxelsY << "x" << atlasVoxelsZ << ")";
     return true;
 }

@@ -1015,10 +1015,13 @@ VolumeRenderer::updateBrickStreaming(const glm::mat4& view,
                               boxSize.y / static_cast<float>(pg.y),
                               boxSize.z / static_cast<float>(pg.z));
 
-    // Empty entries cost the same cull arithmetic as occupied ones; we count
-    // them separately so the panel can show both "frustum hits" and "actual
-    // data brick hits". The non-empty filter is what v1-3 streaming will use
-    // to decide what to upload.
+    // Two queries per visible brick:
+    //   pageHasData(idx): does the source brick contain non-air voxels?
+    //   pageTableHost[idx] != kEmptySlot: is that brick currently in the atlas?
+    // Static mode: those two agree -- non-empty bricks are always resident.
+    // Streaming mode (v1-2): pageTableHost is all sentinel, so visibleMissing
+    // equals visibleNonEmpty until v1-3 lands. visibleResident climbs as v1-3
+    // pages bricks in.
     const auto& pageHost = m_brick.pageTableHost();
     const bool haveHost = !pageHost.empty();
 
@@ -1029,10 +1032,13 @@ VolumeRenderer::updateBrickStreaming(const glm::mat4& view,
                 const glm::vec3 mx = mn + brickSize;
                 if (!aabbIntersectsFrustum(planes, mn, mx)) continue;
                 ++stats.visibleBricks;
-                if (haveHost) {
-                    const uint32_t idx = (bz * pg.y + by) * pg.x + bx;
-                    if (pageHost[idx] != BrickedVolume::kEmptySlot)
-                        ++stats.visibleNonEmpty;
+                const uint32_t idx = (bz * pg.y + by) * pg.x + bx;
+                if (m_brick.pageHasData(idx)) {
+                    ++stats.visibleNonEmpty;
+                    if (haveHost && pageHost[idx] != BrickedVolume::kEmptySlot)
+                        ++stats.visibleResident;
+                    else
+                        ++stats.visibleMissing;
                 }
             }
         }

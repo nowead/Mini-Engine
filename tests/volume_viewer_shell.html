@@ -196,13 +196,20 @@
                 var ms = Module.lastRenderMs();
                 var saved = denseMB > 0 ? (100 * (1 - mbAlloc / denseMB)) : 0;
                 var vis = Module.visibleBricks(), visNE = Module.visibleNonEmpty();
+                var streaming = Module.isStreaming();
+                var modeStr = streaming ? 'Streaming (v1-alpha)' : 'Static';
+                var line = 'Visible: ' + vis + ' bricks (' + visNE + ' non-empty)';
+                if (streaming) {
+                    line += '\n  resident: ' + Module.visibleResident() + '   missing: ' + Module.visibleMissing();
+                }
                 statsEl.textContent =
                     'Volume: ' + vw + 'x' + vh + 'x' + vd + '  (' + denseMB.toFixed(1) + ' MB dense)\n' +
                     'Page:   ' + pgx + 'x' + pgy + 'x' + pgz + '  (' + (pgx*pgy*pgz) + ' bricks)\n' +
                     'Atlas:  ' + ax + 'x' + ay + 'x' + az + '  ' + used + '/' + tot + ' slots\n' +
                     'Memory: ' + mbUsed.toFixed(1) + ' / ' + mbAlloc.toFixed(1) + ' MB  (-' + saved.toFixed(1) + '% vs dense)\n' +
                     'CPU:    ' + ms.toFixed(2) + ' ms/frame\n' +
-                    'Visible: ' + vis + ' bricks (' + visNE + ' non-empty)';
+                    'Mode:   ' + modeStr + '\n' +
+                    line;
             }, 500);
         }
 
