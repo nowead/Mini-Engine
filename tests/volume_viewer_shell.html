@@ -201,6 +201,7 @@
                 var line = 'Visible: ' + vis + ' bricks (' + visNE + ' non-empty)';
                 if (streaming) {
                     line += '\n  resident: ' + Module.visibleResident() + '   missing: ' + Module.visibleMissing();
+                    line += '\n  this frame: +' + Module.bricksUploaded() + ' uploaded / -' + Module.bricksEvicted() + ' evicted';
                 }
                 statsEl.textContent =
                     'Volume: ' + vw + 'x' + vh + 'x' + vd + '  (' + denseMB.toFixed(1) + ' MB dense)\n' +

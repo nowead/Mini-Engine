@@ -61,18 +61,69 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
         LOG_ERROR("BrickedVolume") << "halfData too small for " << w << "x" << h << "x" << d;
         return false;
     }
+    // Cache for v1-3 updateStreaming.
+    m_device = device;
+    m_queue  = queue;
 
     m_volSize   = glm::uvec3(w, h, d);
     m_pageGrid  = glm::uvec3((w + kBrickSize - 1) / kBrickSize,
                              (h + kBrickSize - 1) / kBrickSize,
                              (d + kBrickSize - 1) / kBrickSize);
-    // Auto-size: cover the whole pageGrid up to the per-axis cap. Caller can
-    // override by passing a non-zero atlasGrid for known-large or known-dense
-    // workloads. Auto-size never exceeds (8,8,8) = 512 slots ~= 292 MB.
+    const uint32_t totalPageEntries = m_pageGrid.x * m_pageGrid.y * m_pageGrid.z;
+
+    // ------------------------------------------------------------------
+    // v1-3 alpha pre-scan (moved earlier): we need the non-empty brick count
+    // BEFORE atlas auto-sizing so the auto path can size atlas to fit the
+    // visible set instead of capping at an arbitrary axis count. The same
+    // bitmap also drives the mode decision and the streaming-time
+    // pageHasData() query.
+    // ------------------------------------------------------------------
+    m_pageOccupancy.assign((totalPageEntries + 7u) >> 3, 0u);
+    uint32_t nonEmptyCount = 0;
+    for (uint32_t bz = 0; bz < m_pageGrid.z; ++bz) {
+        for (uint32_t by = 0; by < m_pageGrid.y; ++by) {
+            for (uint32_t bx = 0; bx < m_pageGrid.x; ++bx) {
+                if (isInteriorEmpty(halfData, bx, by, bz, w, h, d, emptyValueHalf)) continue;
+                const uint32_t pageIdx = (bz * m_pageGrid.y + by) * m_pageGrid.x + bx;
+                m_pageOccupancy[pageIdx >> 3] |= static_cast<uint8_t>(1u << (pageIdx & 7));
+                ++nonEmptyCount;
+            }
+        }
+    }
+
+    // Auto-size: pick the smallest balanced atlas that holds every non-empty
+    // brick (so Static wins whenever feasible), bounded by kAutoAtlasBudgetBytes
+    // to keep VRAM allocation reasonable. The cube-root start point keeps the
+    // atlas shape close to cubic, and we shrink the longest axis until we fit
+    // the budget if we overshoot. Caller can pass an explicit atlasGrid to
+    // override the policy entirely.
     if (atlasGrid.x == 0 || atlasGrid.y == 0 || atlasGrid.z == 0) {
-        atlasGrid = glm::uvec3(std::min(m_pageGrid.x, kAutoAtlasAxisCap),
-                               std::min(m_pageGrid.y, kAutoAtlasAxisCap),
-                               std::min(m_pageGrid.z, kAutoAtlasAxisCap));
+        const uint32_t axisGuess = std::max<uint32_t>(
+            kAutoAtlasMinAxis,
+            static_cast<uint32_t>(std::ceil(std::cbrt(static_cast<double>(std::max(nonEmptyCount, 1u))))));
+        atlasGrid = glm::uvec3(std::min(axisGuess, m_pageGrid.x),
+                               std::min(axisGuess, m_pageGrid.y),
+                               std::min(axisGuess, m_pageGrid.z));
+        auto atlasBytesOf = [](glm::uvec3 a) {
+            const uint64_t vx = static_cast<uint64_t>(a.x) * kBrickStored;
+            const uint64_t vy = static_cast<uint64_t>(a.y) * kBrickStored;
+            const uint64_t vz = static_cast<uint64_t>(a.z) * kBrickStored;
+            return vx * vy * vz * 2;  // R16Float
+        };
+        while (atlasBytesOf(atlasGrid) > kAutoAtlasBudgetBytes &&
+               (atlasGrid.x > kAutoAtlasMinAxis ||
+                atlasGrid.y > kAutoAtlasMinAxis ||
+                atlasGrid.z > kAutoAtlasMinAxis)) {
+            if (atlasGrid.x >= atlasGrid.y && atlasGrid.x >= atlasGrid.z && atlasGrid.x > kAutoAtlasMinAxis) {
+                --atlasGrid.x;
+            } else if (atlasGrid.y >= atlasGrid.z && atlasGrid.y > kAutoAtlasMinAxis) {
+                --atlasGrid.y;
+            } else if (atlasGrid.z > kAutoAtlasMinAxis) {
+                --atlasGrid.z;
+            } else {
+                break;
+            }
+        }
     }
     m_atlasGrid = atlasGrid;
 
@@ -80,7 +131,6 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
     const uint32_t atlasVoxelsY = atlasGrid.y * kBrickStored;
     const uint32_t atlasVoxelsZ = atlasGrid.z * kBrickStored;
     const uint32_t totalSlots   = atlasGrid.x * atlasGrid.y * atlasGrid.z;
-    const uint32_t totalPageEntries = m_pageGrid.x * m_pageGrid.y * m_pageGrid.z;
 
     // ------------------------------------------------------------------
     // 1. Build the atlas image + page table in CPU memory.
@@ -115,48 +165,40 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
     std::vector<uint32_t> pageTable(totalPageEntries, kEmptySlot);
 
     // ------------------------------------------------------------------
-    // 1a. v1-2 pre-scan: build occupancy bitmap + count non-empty bricks.
-    // Decoupling the scan from the pack lets us choose Static vs Streaming
-    // before any atlas writes happen, and the bitmap doubles as the
-    // "does this page have data?" query used by updateBrickStreaming.
-    // ------------------------------------------------------------------
-    m_pageOccupancy.assign((totalPageEntries + 7u) >> 3, 0u);
-    uint32_t nonEmptyCount = 0;
-    for (uint32_t bz = 0; bz < m_pageGrid.z; ++bz) {
-        for (uint32_t by = 0; by < m_pageGrid.y; ++by) {
-            for (uint32_t bx = 0; bx < m_pageGrid.x; ++bx) {
-                if (isInteriorEmpty(halfData, bx, by, bz, w, h, d, emptyValueHalf)) continue;
-                const uint32_t pageIdx = (bz * m_pageGrid.y + by) * m_pageGrid.x + bx;
-                m_pageOccupancy[pageIdx >> 3] |= static_cast<uint8_t>(1u << (pageIdx & 7));
-                ++nonEmptyCount;
-            }
-        }
-    }
-
-    // ------------------------------------------------------------------
-    // 1b. Mode decision. Static when every non-empty brick fits the atlas
-    // (v0 behaviour, identical packing). Streaming when it doesn't -- atlas
-    // starts empty, the source halfData stays in CPU RAM, and v1-3 will
-    // page bricks in/out per frame on top of this scaffold.
+    // Mode decision. Static when every non-empty brick fits the atlas
+    // (v0 behaviour); Streaming when not. v1-3 alpha: the pre-scan already
+    // ran (before atlas auto-sizing) so we just compare counts here.
     // ------------------------------------------------------------------
     if (nonEmptyCount <= totalSlots) {
         m_mode = Mode::StaticFullyLoaded;
     } else {
         m_mode = Mode::Streaming;
-        // Recommended atlasGrid for the user who wants Static instead.
-        // Cube-root then ceil gives a balanced shape, clamped by pageGrid.
+        // Recommended atlasGrid for Static. Cube-root rounded up, clamped by
+        // pageGrid. Memory estimate uses the same R16Float * kBrickStored^3
+        // accounting as atlasBytesAllocated().
         const double cbrt = std::cbrt(static_cast<double>(nonEmptyCount));
         const uint32_t axisGuess = static_cast<uint32_t>(std::ceil(cbrt));
         const glm::uvec3 recommend(
             std::min(std::max(axisGuess, atlasGrid.x), m_pageGrid.x),
             std::min(std::max(axisGuess, atlasGrid.y), m_pageGrid.y),
             std::min(std::max(axisGuess, atlasGrid.z), m_pageGrid.z));
-        LOG_INFO("BrickedVolume") << "streaming mode: " << nonEmptyCount
-            << " non-empty bricks > " << totalSlots << " atlas slots"
-            << " (pass atlasGrid (" << recommend.x << "," << recommend.y
-            << "," << recommend.z << ") = "
-            << (recommend.x * recommend.y * recommend.z)
-            << " slots for static, or leave the auto-cap to keep streaming)";
+        const uint64_t recommendMB =
+            (static_cast<uint64_t>(recommend.x) * recommend.y * recommend.z
+             * kBrickStored * kBrickStored * kBrickStored * 2) >> 20;
+        // WARN, not INFO: with atlas < estimated max-visible bricks, every
+        // camera view that exceeds the atlas size will lose visible structure
+        // (sentinel returns 0 for non-resident slots). Acceptable for total
+        // > atlas + max-visible <= atlas, broken otherwise. For medical
+        // imaging the caller should size atlas to fit visible at minimum.
+        LOG_WARN("BrickedVolume") << "streaming mode (atlas too small): "
+            << nonEmptyCount << " non-empty bricks vs " << totalSlots
+            << " atlas slots. When the camera sees more than " << totalSlots
+            << " bricks at once, the excess will render as empty. Pass atlasGrid"
+            << " (" << recommend.x << "," << recommend.y << "," << recommend.z
+            << ") = " << (recommend.x * recommend.y * recommend.z)
+            << " slots (~" << recommendMB << " MB) for guaranteed Static "
+            << "rendering. Streaming is best when total bricks > atlas but "
+            << "visible-set << atlas (zoom-in workflows on large volumes).";
     }
 
     // ------------------------------------------------------------------
@@ -330,6 +372,248 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
         << (m_mode == Mode::Streaming ? "Streaming" : "Static")
         << " (atlas " << atlasVoxelsX << "x" << atlasVoxelsY << "x" << atlasVoxelsZ << ")";
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// v1-3 streaming: per-frame brick page-in + LRU eviction + page-table push.
+// ---------------------------------------------------------------------------
+namespace {
+
+// Per-brick staging byte layout, accounting for the WebGPU 256-byte row stride
+// requirement (see CLAUDE.md section 9). Returned values are used both at
+// staging-buffer allocation time and at copyBufferToTexture descriptor fill.
+struct BrickStagingLayout {
+    uint32_t paddedBytesPerRow = 0;
+    uint64_t totalBytes        = 0;
+};
+inline BrickStagingLayout computeBrickLayout() {
+    const uint32_t tightRow = BrickedVolume::kBrickStored * 2;  // R16Float = 2 B
+#ifdef __EMSCRIPTEN__
+    const uint32_t paddedRow = (tightRow + 255u) & ~255u;
+#else
+    const uint32_t paddedRow = tightRow;
+#endif
+    BrickStagingLayout L;
+    L.paddedBytesPerRow = paddedRow;
+    L.totalBytes = static_cast<uint64_t>(paddedRow)
+                 * BrickedVolume::kBrickStored
+                 * BrickedVolume::kBrickStored;
+    return L;
+}
+
+// Pack one virtual brick from the source CPU buffer into a freshly mapped
+// staging buffer with the WebGPU-aligned row stride. Mirrors the per-brick
+// copy inside the original build() pack loop.
+void packBrickToStaging(const std::vector<uint16_t>& src,
+                        uint32_t srcW, uint32_t srcH, uint32_t srcD,
+                        uint32_t bx, uint32_t by, uint32_t bz,
+                        uint8_t* mapped,
+                        uint32_t paddedBytesPerRow) {
+    using BV = BrickedVolume;
+    const int srcX0 = static_cast<int>(bx * BV::kBrickSize) - 1;
+    const int srcY0 = static_cast<int>(by * BV::kBrickSize) - 1;
+    const int srcZ0 = static_cast<int>(bz * BV::kBrickSize) - 1;
+    auto srcVoxel = [&](int x, int y, int z) -> uint16_t {
+        x = std::clamp(x, 0, static_cast<int>(srcW) - 1);
+        y = std::clamp(y, 0, static_cast<int>(srcH) - 1);
+        z = std::clamp(z, 0, static_cast<int>(srcD) - 1);
+        return src[(static_cast<size_t>(z) * srcH + y) * srcW + x];
+    };
+    for (uint32_t lz = 0; lz < BV::kBrickStored; ++lz) {
+        for (uint32_t ly = 0; ly < BV::kBrickStored; ++ly) {
+            uint16_t* dstRow = reinterpret_cast<uint16_t*>(
+                mapped + (static_cast<uint64_t>(lz) * BV::kBrickStored + ly) * paddedBytesPerRow);
+            const int srcZ = srcZ0 + static_cast<int>(lz);
+            const int srcY = srcY0 + static_cast<int>(ly);
+            for (uint32_t lx = 0; lx < BV::kBrickStored; ++lx) {
+                dstRow[lx] = srcVoxel(srcX0 + static_cast<int>(lx), srcY, srcZ);
+            }
+        }
+    }
+}
+
+} // namespace
+
+BrickedVolume::StreamPerFrameStats
+BrickedVolume::updateStreaming(const std::vector<uint32_t>& visiblePageIndices,
+                               uint64_t frameIdx) {
+    StreamPerFrameStats stats{};
+    if (m_mode != Mode::Streaming) return stats;
+    if (!m_device || !m_queue) return stats;
+
+    // ------------------------------------------------------------------
+    // 1. Walk the visible set once: bump LRU on residents, collect missing.
+    // ------------------------------------------------------------------
+    std::vector<uint32_t> newlyNeeded;
+    newlyNeeded.reserve(std::min<size_t>(visiblePageIndices.size(),
+                                          kStreamUploadsPerFrame * 4u));
+    for (uint32_t pageIdx : visiblePageIndices) {
+        if (!pageHasData(pageIdx)) continue;  // empty source brick, never needs upload
+        auto it = m_pageToSlot.find(pageIdx);
+        if (it != m_pageToSlot.end()) {
+            m_slotStates[it->second].lastFrameUsed = frameIdx;
+        } else {
+            newlyNeeded.push_back(pageIdx);
+        }
+    }
+    if (newlyNeeded.empty()) return stats;
+
+    const uint32_t totalSlots = m_atlasGrid.x * m_atlasGrid.y * m_atlasGrid.z;
+    const uint32_t budget = std::min<uint32_t>(static_cast<uint32_t>(newlyNeeded.size()),
+                                                kStreamUploadsPerFrame);
+
+    // ------------------------------------------------------------------
+    // 2. Pick target slots. Prefer empty slots; LRU-evict otherwise. We
+    //    skip slots whose lastFrameUsed == frameIdx (they hold visible
+    //    bricks we just bumped) so we never thrash residents we still
+    //    need this frame.
+    // ------------------------------------------------------------------
+    std::vector<uint32_t> targets;
+    targets.reserve(budget);
+    for (uint32_t s = 0; s < totalSlots && targets.size() < budget; ++s) {
+        if (m_slotStates[s].residentPageIdx == kEmptySlot)
+            targets.push_back(s);
+    }
+    if (targets.size() < budget) {
+        std::vector<uint32_t> evictable;
+        evictable.reserve(totalSlots);
+        for (uint32_t s = 0; s < totalSlots; ++s) {
+            if (m_slotStates[s].residentPageIdx != kEmptySlot &&
+                m_slotStates[s].lastFrameUsed != frameIdx) {
+                evictable.push_back(s);
+            }
+        }
+        std::sort(evictable.begin(), evictable.end(),
+                  [&](uint32_t a, uint32_t b) {
+                      return m_slotStates[a].lastFrameUsed
+                           < m_slotStates[b].lastFrameUsed;
+                  });
+        const size_t need = budget - targets.size();
+        const size_t take = std::min(need, evictable.size());
+        for (size_t i = 0; i < take; ++i) targets.push_back(evictable[i]);
+    }
+
+    const uint32_t uploads = std::min<uint32_t>(budget, static_cast<uint32_t>(targets.size()));
+    if (uploads == 0) return stats;
+
+    // ------------------------------------------------------------------
+    // 3. Record the upload pass: transition atlas to CopyDst, do K
+    //    copyBufferToTexture calls, transition back.
+    // ------------------------------------------------------------------
+    const uint32_t frameSlot = static_cast<uint32_t>(frameIdx % kStreamingFramesInFlight);
+    const BrickStagingLayout L = computeBrickLayout();
+
+    auto enc = m_device->createCommandEncoder();
+    enc->transitionTextureLayout(m_atlasTex.get(),
+                                 rhi::TextureLayout::ShaderReadOnly,
+                                 rhi::TextureLayout::TransferDst);
+
+    for (uint32_t i = 0; i < uploads; ++i) {
+        const uint32_t pageIdx = newlyNeeded[i];
+        const uint32_t slot    = targets[i];
+
+        // Evict previous resident of this slot, if any.
+        const uint32_t prevPage = m_slotStates[slot].residentPageIdx;
+        if (prevPage != kEmptySlot) {
+            m_pageToSlot.erase(prevPage);
+            m_pageTableHost[prevPage] = kEmptySlot;
+            ++stats.bricksEvicted;
+        } else {
+            ++m_usedSlots;  // claiming a previously-empty slot
+        }
+
+        // Lazy-alloc this staging slot on first use.
+        auto& stagingPtr = m_brickStaging[frameSlot][i];
+        if (!stagingPtr) {
+            rhi::BufferDesc bd{};
+            bd.size  = L.totalBytes;
+            bd.usage = rhi::BufferUsage::CopySrc | rhi::BufferUsage::MapWrite;
+            bd.label = "BrickStreamStaging";
+            stagingPtr = m_device->createBuffer(bd);
+            if (!stagingPtr) {
+                LOG_ERROR("BrickedVolume") << "brick staging alloc failed";
+                return stats;
+            }
+        }
+
+        // Decompose pageIdx into brick coords.
+        const uint32_t bx = pageIdx % m_pageGrid.x;
+        const uint32_t by = (pageIdx / m_pageGrid.x) % m_pageGrid.y;
+        const uint32_t bz =  pageIdx / (m_pageGrid.x * m_pageGrid.y);
+
+        // CPU-pack the brick into staging.
+        uint8_t* mapped = static_cast<uint8_t*>(stagingPtr->map());
+        packBrickToStaging(m_originalHalfData, m_volSize.x, m_volSize.y, m_volSize.z,
+                           bx, by, bz, mapped, L.paddedBytesPerRow);
+        stagingPtr->unmap();
+
+        // Atlas slot origin in voxels.
+        const uint32_t sx = slot % m_atlasGrid.x;
+        const uint32_t sy = (slot / m_atlasGrid.x) % m_atlasGrid.y;
+        const uint32_t sz =  slot / (m_atlasGrid.x * m_atlasGrid.y);
+
+        rhi::BufferTextureCopyInfo bc{};
+        bc.buffer = stagingPtr.get();
+        bc.offset = 0;
+#ifdef __EMSCRIPTEN__
+        bc.bytesPerRow  = L.paddedBytesPerRow;
+        bc.rowsPerImage = kBrickStored;
+#else
+        bc.bytesPerRow  = 0;  // tightly packed (Vulkan reads this as texels)
+        bc.rowsPerImage = 0;
+#endif
+        rhi::TextureCopyInfo tc{};
+        tc.texture  = m_atlasTex.get();
+        tc.mipLevel = 0;
+        tc.origin   = {static_cast<int32_t>(sx * kBrickStored),
+                       static_cast<int32_t>(sy * kBrickStored),
+                       static_cast<int32_t>(sz * kBrickStored)};
+        tc.aspect   = 0;
+        enc->copyBufferToTexture(bc, tc,
+            rhi::Extent3D{kBrickStored, kBrickStored, kBrickStored});
+
+        // Update CPU mirror.
+        m_slotStates[slot] = {pageIdx, frameIdx};
+        m_pageToSlot[pageIdx] = slot;
+        m_pageTableHost[pageIdx] = slot;
+        ++stats.bricksUploaded;
+    }
+
+    enc->transitionTextureLayout(m_atlasTex.get(),
+                                 rhi::TextureLayout::TransferDst,
+                                 rhi::TextureLayout::ShaderReadOnly);
+
+    // ------------------------------------------------------------------
+    // 4. Push the page-table mirror to the GPU. Full re-upload: at typical
+    //    page-grid sizes (<= 16x16x8 = 8 KB) the cost is negligible
+    //    compared to per-frame brick copies.
+    // ------------------------------------------------------------------
+    {
+        auto& ptStaging = m_pageStaging[frameSlot];
+        const uint64_t pageBytes = pageTableSize();
+        if (!ptStaging) {
+            rhi::BufferDesc bd{};
+            bd.size  = pageBytes;
+            bd.usage = rhi::BufferUsage::CopySrc | rhi::BufferUsage::MapWrite;
+            bd.label = "PageTableStreamStaging";
+            ptStaging = m_device->createBuffer(bd);
+            if (!ptStaging) {
+                LOG_ERROR("BrickedVolume") << "page table staging alloc failed";
+                return stats;
+            }
+        }
+        std::memcpy(ptStaging->map(), m_pageTableHost.data(), pageBytes);
+        ptStaging->unmap();
+        enc->copyBufferToBuffer(ptStaging.get(), 0, m_pageTable.get(), 0, pageBytes);
+    }
+
+    auto cmd = enc->finish();
+    m_queue->submit(cmd.get());
+    // Do NOT waitIdle here -- the frame-in-flight model handles synchronisation
+    // and the next frame's reuse of m_brickStaging[frameSlot] is safe because
+    // kStreamingFramesInFlight queue submits precede that reuse.
+
+    return stats;
 }
 
 } // namespace rendering

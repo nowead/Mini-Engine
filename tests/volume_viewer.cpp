@@ -401,6 +401,9 @@ private:
             ImGui::Text("  resident: %u   missing: %u",
                         m_lastStreamStats.visibleResident,
                         m_lastStreamStats.visibleMissing);
+            ImGui::Text("  this frame: +%u uploaded / -%u evicted",
+                        m_lastStreamStats.bricksUploaded,
+                        m_lastStreamStats.bricksEvicted);
         }
 
         const bool customTF = (m_preset == 0);

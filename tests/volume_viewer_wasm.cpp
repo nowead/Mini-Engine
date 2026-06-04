@@ -101,6 +101,8 @@ public:
     uint32_t visibleNonEmpty() const { return m_lastStreamStats.visibleNonEmpty; }
     uint32_t visibleResident() const { return m_lastStreamStats.visibleResident; }
     uint32_t visibleMissing()  const { return m_lastStreamStats.visibleMissing; }
+    uint32_t bricksUploaded()  const { return m_lastStreamStats.bricksUploaded; }
+    uint32_t bricksEvicted()   const { return m_lastStreamStats.bricksEvicted; }
     bool     isStreaming()     const { return m_volume && m_volume->getBrickedVolume().isStreaming(); }
 
 private:
@@ -387,6 +389,8 @@ EMSCRIPTEN_BINDINGS(volume_viewer) {
     emscripten::function("visibleNonEmpty", +[]() -> unsigned { return g_viewer ? g_viewer->visibleNonEmpty() : 0u; });
     emscripten::function("visibleResident", +[]() -> unsigned { return g_viewer ? g_viewer->visibleResident() : 0u; });
     emscripten::function("visibleMissing",  +[]() -> unsigned { return g_viewer ? g_viewer->visibleMissing() : 0u; });
+    emscripten::function("bricksUploaded",  +[]() -> unsigned { return g_viewer ? g_viewer->bricksUploaded() : 0u; });
+    emscripten::function("bricksEvicted",   +[]() -> unsigned { return g_viewer ? g_viewer->bricksEvicted() : 0u; });
     emscripten::function("isStreaming",     +[]() -> bool     { return g_viewer ? g_viewer->isStreaming() : false; });
 }
 

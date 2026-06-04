@@ -1004,7 +1004,7 @@ inline bool aabbIntersectsFrustum(const std::array<Plane, 6>& planes,
 BrickedVolume::StreamUpdateStats
 VolumeRenderer::updateBrickStreaming(const glm::mat4& view,
                                       const glm::mat4& proj,
-                                      uint64_t /*frameIdx*/) {
+                                      uint64_t frameIdx) {
     BrickedVolume::StreamUpdateStats stats{};
     const glm::uvec3 pg = m_brick.pageGrid();
     if (pg.x == 0 || pg.y == 0 || pg.z == 0) return stats;
@@ -1019,11 +1019,15 @@ VolumeRenderer::updateBrickStreaming(const glm::mat4& view,
     //   pageHasData(idx): does the source brick contain non-air voxels?
     //   pageTableHost[idx] != kEmptySlot: is that brick currently in the atlas?
     // Static mode: those two agree -- non-empty bricks are always resident.
-    // Streaming mode (v1-2): pageTableHost is all sentinel, so visibleMissing
-    // equals visibleNonEmpty until v1-3 lands. visibleResident climbs as v1-3
-    // pages bricks in.
+    // Streaming mode: pageTableHost flips as v1-3 pages bricks in/out.
     const auto& pageHost = m_brick.pageTableHost();
     const bool haveHost = !pageHost.empty();
+    const bool streaming = m_brick.isStreaming();
+
+    // Collect visible page indices for v1-3 streaming. In Static mode we
+    // skip this allocation -- updateStreaming would be a no-op anyway.
+    std::vector<uint32_t> visibleList;
+    if (streaming) visibleList.reserve(static_cast<size_t>(pg.x * pg.y * pg.z) / 4);
 
     for (uint32_t bz = 0; bz < pg.z; ++bz) {
         for (uint32_t by = 0; by < pg.y; ++by) {
@@ -1039,9 +1043,22 @@ VolumeRenderer::updateBrickStreaming(const glm::mat4& view,
                         ++stats.visibleResident;
                     else
                         ++stats.visibleMissing;
+                    if (streaming) visibleList.push_back(idx);
                 }
             }
         }
+    }
+
+    // v1-3: hand the visible list to the streaming update. It picks up to K
+    // missing bricks per frame, LRU-evicts non-visible residents, and submits
+    // the copy + page-table push on its own. Stats are merged in -- the
+    // per-frame uploaded/evicted counts join the resident/missing snapshot
+    // captured above (note: this snapshot is from BEFORE the upload, so
+    // visibleResident lags by one frame in the readout).
+    if (streaming) {
+        auto perFrame = m_brick.updateStreaming(visibleList, frameIdx);
+        stats.bricksUploaded = perFrame.bricksUploaded;
+        stats.bricksEvicted  = perFrame.bricksEvicted;
     }
     return stats;
 }

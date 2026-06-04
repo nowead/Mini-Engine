@@ -59,11 +59,20 @@ public:
     // non-empty brick count to atlas capacity. Runtime mode change unsupported.
     enum class Mode { StaticFullyLoaded, Streaming };
 
-    // Auto-size cap per axis. (8,8,8) = 512 slots * 66^3 * 2B ~= 292 MB, the
-    // upper bound we're willing to allocate from a load-time decision. Larger
-    // volumes either get truncated (caller passes a bigger override) or fail
-    // build() with a recommendation (see kAtlasFullRecommendBias below).
-    static constexpr uint32_t kAutoAtlasAxisCap = 8;
+    // v1-3 streaming: how many brick uploads we'll execute in one frame.
+    // Per-frame staging pool is sized at this. Best-effort -- if more bricks
+    // need to come in than this budget, the remainder waits a frame.
+    static constexpr uint32_t kStreamUploadsPerFrame = 8;
+    static constexpr uint32_t kStreamingFramesInFlight = 2;
+
+    // v1-3 alpha auto-sizing budget. The build picks the smallest balanced
+    // atlas that holds all non-empty bricks (so Static mode wins whenever
+    // possible) and caps the total VRAM allocation to this budget; volumes
+    // whose data exceeds the budget fall to Streaming with a recommendation
+    // logged. 512 MB is a generous-but-safe default for a single volume on
+    // a typical desktop or browser WebGPU device.
+    static constexpr uint64_t kAutoAtlasBudgetBytes = 512ULL * 1024 * 1024;
+    static constexpr uint32_t kAutoAtlasMinAxis     = 2;
 
     BrickedVolume() = default;
     ~BrickedVolume() = default;
@@ -92,6 +101,21 @@ public:
 
     Mode mode()         const { return m_mode; }
     bool isStreaming()  const { return m_mode == Mode::Streaming; }
+
+    // v1-3 streaming update. Given the list of virtual brick page indices
+    // the camera frustum sees this frame, this method:
+    //   1. Bumps lastFrameUsed on resident slots that are in the visible set.
+    //   2. Picks up to kStreamUploadsPerFrame missing visible bricks.
+    //   3. Evicts the LRU non-visible slots to make room (if needed).
+    //   4. Copies the new bricks from CPU source into the atlas via staging.
+    //   5. Pushes the updated page table to the GPU.
+    // No-op in Static mode. Returns counts for the stats panel.
+    struct StreamPerFrameStats {
+        uint32_t bricksUploaded = 0;
+        uint32_t bricksEvicted  = 0;
+    };
+    StreamPerFrameStats updateStreaming(const std::vector<uint32_t>& visiblePageIndices,
+                                        uint64_t frameIdx);
 
     // v1-2: per-virtual-brick "is this brick non-empty in the source data?"
     // Computed once during build() so updateBrickStreaming can distinguish
@@ -153,6 +177,24 @@ private:
     };
     std::vector<AtlasSlotState> m_slotStates;  // sized to totalSlots() in streaming mode
     std::unordered_map<uint32_t, uint32_t> m_pageToSlot;  // page index -> slot index
+
+    // v1-3 cached RHI handles (set in build() so updateStreaming can do its
+    // own copy + submit without the caller threading them through every frame).
+    rhi::RHIDevice* m_device = nullptr;
+    rhi::RHIQueue*  m_queue  = nullptr;
+
+    // v1-3 streaming staging pools. Per frame-in-flight, K slots; each slot
+    // holds one brick (kBrickStored^3 voxels, WebGPU-aligned row stride).
+    // Allocated lazily on first upload to the slot. Re-used round-robin by
+    // frame index; the GPU is guaranteed to have finished frame N's copy
+    // before frame N+kStreamingFramesInFlight reuses the same slot.
+    std::array<std::array<std::unique_ptr<rhi::RHIBuffer>, kStreamUploadsPerFrame>,
+               kStreamingFramesInFlight> m_brickStaging;
+    // Per-frame staging for the page table buffer (small: 4 B per virtual
+    // brick). Cheaper to push the whole table than tracking dirty ranges
+    // for the first cut; v1-beta can switch to incremental updates if
+    // page tables ever get large enough to matter.
+    std::array<std::unique_ptr<rhi::RHIBuffer>, kStreamingFramesInFlight> m_pageStaging;
 };
 
 } // namespace rendering
