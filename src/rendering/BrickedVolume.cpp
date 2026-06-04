@@ -299,6 +299,7 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
         m_slotStates.assign(totalSlots, AtlasSlotState{});
         m_pageToSlot.clear();
         m_pageToSlot.reserve(nonEmptyCount);      // upper bound for the lifetime
+        m_lodTableHost.assign(totalPageEntries, 0);  // beta-3 writes; beta-4 uses
 
         // v1-beta beta-1: build the mip chain L1..L3 (2x box-filter each step).
         // Skipped in Static mode -- the atlas already holds everything at L0.
@@ -329,54 +330,96 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
     }
 
     // ------------------------------------------------------------------
-    // 2. Allocate atlas texture + upload.
+    // 2. Allocate atlas texture(s) + upload L0 content.
+    // Static mode allocates only L0 and packs the brick data into it.
+    // Streaming mode allocates all four LODs; L0 starts empty (filled by
+    // streaming page-ins), L1..L3 are empty-initialised so the shader can
+    // sample them safely once beta-5 binds them (until then they go unused).
     // ------------------------------------------------------------------
-    {
+    const uint32_t lodLevelsToAlloc = (m_mode == Mode::Streaming) ? kLodLevels : 1u;
+    uint64_t totalAtlasBytes = 0;
+    for (uint32_t lv = 0; lv < lodLevelsToAlloc; ++lv) {
+        const uint32_t brickStoredLod = kBrickStoredAtLod(lv);
+        const uint32_t voxelsX_lv = atlasGrid.x * brickStoredLod;
+        const uint32_t voxelsY_lv = atlasGrid.y * brickStoredLod;
+        const uint32_t voxelsZ_lv = atlasGrid.z * brickStoredLod;
+        const uint32_t tightRowLv = voxelsX_lv * 2;
+#ifdef __EMSCRIPTEN__
+        const uint32_t paddedRowLv = (tightRowLv + 255u) & ~255u;
+#else
+        const uint32_t paddedRowLv = tightRowLv;
+#endif
+        const uint64_t bytesLv =
+            static_cast<uint64_t>(paddedRowLv) * voxelsY_lv * voxelsZ_lv;
+        totalAtlasBytes += bytesLv;
+
         rhi::TextureDesc td{};
-        td.size          = rhi::Extent3D{atlasVoxelsX, atlasVoxelsY, atlasVoxelsZ};
+        td.size          = rhi::Extent3D{voxelsX_lv, voxelsY_lv, voxelsZ_lv};
         td.dimension     = rhi::TextureDimension::Texture3D;
         td.format        = rhi::TextureFormat::R16Float;
         td.mipLevelCount = 1;
         td.sampleCount   = 1;
         td.usage         = rhi::TextureUsage::CopyDst | rhi::TextureUsage::Sampled;
         td.label         = "VolumeBrickAtlas";
-        m_atlasTex = device->createTexture(td);
-        if (!m_atlasTex) { LOG_ERROR("BrickedVolume") << "atlas texture create failed"; return false; }
+        m_atlasTexes[lv] = device->createTexture(td);
+        if (!m_atlasTexes[lv]) {
+            LOG_ERROR("BrickedVolume") << "atlas texture L" << lv << " create failed"; return false;
+        }
+
+        // Build the CPU-side init buffer:
+        //   L0: use the prebuilt atlasBuf (already empty-filled, packed if Static)
+        //   L1..L3: allocate fresh, fill with emptyValueHalf row-by-row
+        std::vector<uint8_t> initBufLocal;
+        const uint8_t* initBytes = nullptr;
+        if (lv == 0) {
+            initBytes = atlasBuf.data();
+        } else {
+            initBufLocal.resize(bytesLv);
+            for (uint32_t z = 0; z < voxelsZ_lv; ++z) {
+                for (uint32_t y = 0; y < voxelsY_lv; ++y) {
+                    uint16_t* row = reinterpret_cast<uint16_t*>(
+                        initBufLocal.data()
+                        + (static_cast<uint64_t>(z) * voxelsY_lv + y) * paddedRowLv);
+                    std::fill(row, row + voxelsX_lv, emptyValueHalf);
+                }
+            }
+            initBytes = initBufLocal.data();
+        }
 
         rhi::BufferDesc bd{};
-        bd.size  = atlasBytes;
+        bd.size  = bytesLv;
         bd.usage = rhi::BufferUsage::CopySrc | rhi::BufferUsage::MapWrite;
         bd.label = "BrickAtlasStaging";
         auto staging = device->createBuffer(bd);
-        if (!staging) { LOG_ERROR("BrickedVolume") << "atlas staging create failed"; return false; }
-        std::memcpy(staging->map(), atlasBuf.data(), atlasBytes);
+        if (!staging) {
+            LOG_ERROR("BrickedVolume") << "atlas staging L" << lv << " create failed"; return false;
+        }
+        std::memcpy(staging->map(), initBytes, bytesLv);
         staging->unmap();
 
         auto enc = device->createCommandEncoder();
-        enc->transitionTextureLayout(m_atlasTex.get(),
+        enc->transitionTextureLayout(m_atlasTexes[lv].get(),
                                      rhi::TextureLayout::Undefined,
                                      rhi::TextureLayout::TransferDst);
 
         rhi::BufferTextureCopyInfo bufferCopy{};
-        bufferCopy.buffer       = staging.get();
-        bufferCopy.offset       = 0;
+        bufferCopy.buffer = staging.get();
+        bufferCopy.offset = 0;
 #ifdef __EMSCRIPTEN__
-        bufferCopy.bytesPerRow  = paddedBytesPerRow;
-        bufferCopy.rowsPerImage = atlasVoxelsY;
+        bufferCopy.bytesPerRow  = paddedRowLv;
+        bufferCopy.rowsPerImage = voxelsY_lv;
 #else
-        // Vulkan path: bytesPerRow is interpreted as TEXELS (see CLAUDE.md).
-        // 0 = tightly packed.
         bufferCopy.bytesPerRow  = 0;
         bufferCopy.rowsPerImage = 0;
 #endif
         rhi::TextureCopyInfo texCopy{};
-        texCopy.texture  = m_atlasTex.get();
+        texCopy.texture  = m_atlasTexes[lv].get();
         texCopy.mipLevel = 0;
         texCopy.origin   = {0, 0, 0};
         texCopy.aspect   = 0;
         enc->copyBufferToTexture(bufferCopy, texCopy,
-                                 rhi::Extent3D{atlasVoxelsX, atlasVoxelsY, atlasVoxelsZ});
-        enc->transitionTextureLayout(m_atlasTex.get(),
+                                 rhi::Extent3D{voxelsX_lv, voxelsY_lv, voxelsZ_lv});
+        enc->transitionTextureLayout(m_atlasTexes[lv].get(),
                                      rhi::TextureLayout::TransferDst,
                                      rhi::TextureLayout::ShaderReadOnly);
         auto cmd = enc->finish();
@@ -388,8 +431,15 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
         vd.dimension       = rhi::TextureViewDimension::View3D;
         vd.baseMipLevel    = 0;  vd.mipLevelCount   = 1;
         vd.baseArrayLayer  = 0;  vd.arrayLayerCount = 1;
-        m_atlasView = m_atlasTex->createView(vd);
-        if (!m_atlasView) { LOG_ERROR("BrickedVolume") << "atlas view create failed"; return false; }
+        m_atlasViews[lv] = m_atlasTexes[lv]->createView(vd);
+        if (!m_atlasViews[lv]) {
+            LOG_ERROR("BrickedVolume") << "atlas view L" << lv << " create failed"; return false;
+        }
+    }
+    if (m_mode == Mode::Streaming) {
+        LOG_INFO("BrickedVolume") << "atlas total: "
+            << (totalAtlasBytes >> 20) << " MB across " << kLodLevels
+            << " LOD textures (L0 + L1 + L2 + L3)";
     }
 
     // ------------------------------------------------------------------
@@ -599,7 +649,7 @@ BrickedVolume::updateStreaming(const std::vector<uint32_t>& visiblePageIndices,
     const BrickStagingLayout L = computeBrickLayout();
 
     auto enc = m_device->createCommandEncoder();
-    enc->transitionTextureLayout(m_atlasTex.get(),
+    enc->transitionTextureLayout(m_atlasTexes[0].get(),
                                  rhi::TextureLayout::ShaderReadOnly,
                                  rhi::TextureLayout::TransferDst);
 
@@ -658,7 +708,7 @@ BrickedVolume::updateStreaming(const std::vector<uint32_t>& visiblePageIndices,
         bc.rowsPerImage = 0;
 #endif
         rhi::TextureCopyInfo tc{};
-        tc.texture  = m_atlasTex.get();
+        tc.texture  = m_atlasTexes[0].get();
         tc.mipLevel = 0;
         tc.origin   = {static_cast<int32_t>(sx * kBrickStored),
                        static_cast<int32_t>(sy * kBrickStored),
@@ -668,13 +718,13 @@ BrickedVolume::updateStreaming(const std::vector<uint32_t>& visiblePageIndices,
             rhi::Extent3D{kBrickStored, kBrickStored, kBrickStored});
 
         // Update CPU mirror.
-        m_slotStates[slot] = {pageIdx, frameIdx};
+        m_slotStates[slot] = AtlasSlotState{pageIdx, /*residentLod=*/0u, frameIdx};
         m_pageToSlot[pageIdx] = slot;
         m_pageTableHost[pageIdx] = slot;
         ++stats.bricksUploaded;
     }
 
-    enc->transitionTextureLayout(m_atlasTex.get(),
+    enc->transitionTextureLayout(m_atlasTexes[0].get(),
                                  rhi::TextureLayout::TransferDst,
                                  rhi::TextureLayout::ShaderReadOnly);
 

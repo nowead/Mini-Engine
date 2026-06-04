@@ -144,7 +144,16 @@ public:
         return (m_pageOccupancy[pageIdx >> 3] >> (pageIdx & 7)) & 1u;
     }
 
-    rhi::RHITextureView* atlasView()    const { return m_atlasView.get(); }
+    // L0 (full-resolution) atlas view used by the existing shader bindings.
+    // beta-5 will add per-LOD bindings via atlasViewLod(level).
+    rhi::RHITextureView* atlasView()         const { return m_atlasViews[0].get(); }
+    rhi::RHITextureView* atlasViewLod(uint32_t level) const {
+        return (level < kLodLevels) ? m_atlasViews[level].get() : nullptr;
+    }
+    // Brick voxel extent per LOD: L0=66, L1=34, L2=18, L3=10 (kBrickSize >> L + 2).
+    static constexpr uint32_t kBrickStoredAtLod(uint32_t level) {
+        return ((kBrickSize >> level) | 0u) + 2u;
+    }
     rhi::RHIBuffer*      pageTable()    const { return m_pageTable.get(); }
     uint64_t             pageTableSize() const {
         return static_cast<uint64_t>(m_pageGrid.x) * m_pageGrid.y * m_pageGrid.z * sizeof(uint32_t);
@@ -174,8 +183,13 @@ public:
     }
 
 private:
-    std::unique_ptr<rhi::RHITexture>     m_atlasTex;
-    std::unique_ptr<rhi::RHITextureView> m_atlasView;
+    // v1-beta beta-2: one atlas texture per LOD (L0=full, L1=half, L2=quarter,
+    // L3=eighth in each axis). Static mode populates only m_atlasTexes[0];
+    // Streaming mode allocates all four but currently only L0 receives data
+    // (beta-3 selects which LOD goes into which slot, beta-4 actually uploads
+    // to non-L0 atlases, beta-5 makes the shader sample the right LOD).
+    std::array<std::unique_ptr<rhi::RHITexture>,     kLodLevels> m_atlasTexes;
+    std::array<std::unique_ptr<rhi::RHITextureView>, kLodLevels> m_atlasViews;
     std::unique_ptr<rhi::RHIBuffer>      m_pageTable;
     std::vector<uint32_t>                m_pageTableHost;  // v1-1 CPU mirror
     std::vector<uint8_t>                 m_pageOccupancy;  // v1-2 bitmap: 1 = source brick has data
@@ -192,10 +206,16 @@ private:
     uint16_t m_emptyValueHalf = 0;             // for empty-slot init + halo padding
     struct AtlasSlotState {
         uint32_t residentPageIdx = kEmptySlot; // page index living in this slot, or kEmptySlot
+        uint32_t residentLod     = 0;          // v1-beta: which LOD this slot holds
         uint64_t lastFrameUsed   = 0;          // LRU key (monotonically increasing)
     };
     std::vector<AtlasSlotState> m_slotStates;  // sized to totalSlots() in streaming mode
     std::unordered_map<uint32_t, uint32_t> m_pageToSlot;  // page index -> slot index
+    // v1-beta beta-2: CPU mirror of "which LOD this virtual brick is currently
+    // resident at". One byte per virtual brick, defaults to 0. beta-3 writes
+    // selection, beta-4 streaming respects it, beta-5 shader reads via a GPU
+    // buffer mirror (not allocated yet -- introduced when first used).
+    std::vector<uint8_t> m_lodTableHost;
 
     // v1-3 cached RHI handles (set in build() so updateStreaming can do its
     // own copy + submit without the caller threading them through every frame).
