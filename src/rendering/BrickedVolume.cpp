@@ -2,6 +2,8 @@
 
 #include "src/utils/Logger.hpp"
 
+#include <glm/gtc/packing.hpp>   // packHalf1x16 / unpackHalf1x16 (v1-beta mip)
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -46,6 +48,41 @@ bool isInteriorEmpty(const std::vector<uint16_t>& src,
         }
     }
     return true;
+}
+
+// v1-beta beta-1 mip helper: 2x box-filter downsample of a half-float volume.
+// For each destination voxel, average the 8 source voxels in the 2x2x2
+// neighbourhood (clamping at the source-volume edges so odd source dimensions
+// degrade gracefully). Pure scalar; ~60 ns per output voxel, dominated by the
+// half<->float conversion. Future optimisation: SIMD pack/unpack via AVX2's
+// F16C intrinsics could 8x this.
+void downsampleHalfBoxFilter(const uint16_t* src, glm::uvec3 srcDims,
+                             uint16_t* dst, glm::uvec3 dstDims) {
+    const int sw = static_cast<int>(srcDims.x);
+    const int sh = static_cast<int>(srcDims.y);
+    const int sd = static_cast<int>(srcDims.z);
+    auto sample = [&](int x, int y, int z) -> float {
+        x = std::clamp(x, 0, sw - 1);
+        y = std::clamp(y, 0, sh - 1);
+        z = std::clamp(z, 0, sd - 1);
+        return glm::unpackHalf1x16(src[(static_cast<size_t>(z) * sh + y) * sw + x]);
+    };
+    for (uint32_t z = 0; z < dstDims.z; ++z) {
+        const int sz = static_cast<int>(z) * 2;
+        for (uint32_t y = 0; y < dstDims.y; ++y) {
+            const int sy = static_cast<int>(y) * 2;
+            uint16_t* dstRow = dst + (static_cast<size_t>(z) * dstDims.y + y) * dstDims.x;
+            for (uint32_t x = 0; x < dstDims.x; ++x) {
+                const int sx = static_cast<int>(x) * 2;
+                const float sum =
+                    sample(sx,     sy,     sz)     + sample(sx + 1, sy,     sz)     +
+                    sample(sx,     sy + 1, sz)     + sample(sx + 1, sy + 1, sz)     +
+                    sample(sx,     sy,     sz + 1) + sample(sx + 1, sy,     sz + 1) +
+                    sample(sx,     sy + 1, sz + 1) + sample(sx + 1, sy + 1, sz + 1);
+                dstRow[x] = glm::packHalf1x16(sum * (1.0f / 8.0f));
+            }
+        }
+    }
 }
 
 } // namespace
@@ -262,6 +299,33 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
         m_slotStates.assign(totalSlots, AtlasSlotState{});
         m_pageToSlot.clear();
         m_pageToSlot.reserve(nonEmptyCount);      // upper bound for the lifetime
+
+        // v1-beta beta-1: build the mip chain L1..L3 (2x box-filter each step).
+        // Skipped in Static mode -- the atlas already holds everything at L0.
+        // 1024^3 source takes ~7-10s to generate the chain on a single thread;
+        // the cost is paid once at load. v1-beta-2+ will use these levels in
+        // the LOD-aware streaming path; this commit just builds and logs them.
+        glm::uvec3 srcDims = m_volSize;
+        const uint16_t* srcPtr = m_originalHalfData.data();
+        for (uint32_t lv = 0; lv < kMipChainSize; ++lv) {
+            const glm::uvec3 dstDims(std::max(1u, srcDims.x >> 1),
+                                     std::max(1u, srcDims.y >> 1),
+                                     std::max(1u, srcDims.z >> 1));
+            const size_t dstCount = static_cast<size_t>(dstDims.x) * dstDims.y * dstDims.z;
+            m_mipChain[lv].resize(dstCount);
+            uint16_t* dstPtr = m_mipChain[lv].data();
+            downsampleHalfBoxFilter(srcPtr, srcDims, dstPtr, dstDims);
+            srcDims = dstDims;
+            srcPtr  = dstPtr;
+        }
+        const uint64_t mipBytes =
+            (m_mipChain[0].size() + m_mipChain[1].size() + m_mipChain[2].size()) * 2;
+        LOG_INFO("BrickedVolume") << "mip chain built: L1 "
+            << mipDims(1).x << "x" << mipDims(1).y << "x" << mipDims(1).z << ", L2 "
+            << mipDims(2).x << "x" << mipDims(2).y << "x" << mipDims(2).z << ", L3 "
+            << mipDims(3).x << "x" << mipDims(3).y << "x" << mipDims(3).z
+            << " (chain total " << (mipBytes >> 20) << " MB, "
+            << "+" << (100ull * mipBytes / (m_originalHalfData.size() * 2)) << "% over L0)";
     }
 
     // ------------------------------------------------------------------
