@@ -273,6 +273,14 @@ CAREER_ROADMAP의 "수치화가 전부다" 원칙 계승. 마일스톤별 정량
   GLSL `texelFetch`는 sampler 필요 → display 바인딩이 백엔드별로 갈림. 네이티브
   뷰어는 카메라+파라미터 비교로 reset, WASM 뷰어는 JS-bound setter마다 reset 호출
   + 카메라 매트릭스 비교(JS 훅 없음).
+- **M3-3 v1-α streaming** (2026-06-04): LRU + incremental upload + memory-budget
+  auto-size. Atlas 자동 산정 재작성 — `ceil(cbrt(nonEmpty))` 시작점에서 pageGrid
+  clamp + 512MB budget 안에 longest axis shrink. nonEmpty > slots면 자동 Streaming
+  진입, 매 프레임 K=8 brick CPU pack → `copyBufferToTexture`. LRU eviction은
+  visible bumped slot 보호 (churn 방지). Streaming 진입 시 LOG_WARN으로 권장
+  atlasGrid + "visible-set << atlas 가정" 명시. 1024³ default: atlas 280→188 MB
+  (-33%), Static 유지. 2 GB dense 자동 streaming(493 MB). 한계: 가시 brick >
+  atlas slots면 시각 hole (의료영상 줌아웃 워크플로는 v1-β LOD가 본질 해결).
 - **M3-3 v0 bricked storage** (2026-06-02): 단일 dense 3D 텍스처 → brick atlas
   (64³ interior + 1-voxel halo = 66³ stored) + page table(storage buffer of uint32
   slot indices, 0xFFFFFFFF = "air") 간접 참조로 교체. 모든 density read가 셰이더
@@ -294,17 +302,20 @@ CAREER_ROADMAP의 "수치화가 전부다" 원칙 계승. 마일스톤별 정량
   (2026-05-31). CPU 직관과 반대 — 원본 per-sample 체크는 cache가 read를 무료화해
   더 빠름. 셰이더 주석에 기록.
 
-**다음 진입 작업**: **M3-3 v1 streaming** (LRU + frustum-driven brick upload)
-또는 **DICOM Implicit VR LE 지원**. M3-3 v0(고정 atlas, 단발 packing)와
-M4 v1까지 완료. v1은 RAM 초과 볼륨, frustum 기반 가시성, on-disk 페이징 묶음.
+**다음 진입 작업**: **M3-3 v1-β LOD** 또는 **DICOM Implicit VR LE 지원**.
+v1-α(frustum cull + LRU + memory-budget auto-size)까지 완료. v1-β는 streaming의
+정직한 한계(가시 brick > atlas slots = 시각 hole)를 multi-resolution brick으로
+본질 해결.
 
 **남은 후보**:
 
-- **M3-3 v1 streaming** — 카메라 frustum 기반 brick 가시성 + LRU eviction +
-  on-disk 페이징. v0의 "고정 atlas, 단발 packing" 한계 제거. RAM 초과 볼륨까지
-  포함하는 진짜 "1GB+" 헤드라인 완성. 작업량 큼.
-- **DICOM Implicit VR LE 지원** — 임상 PACS의 기본 transfer syntax. 추가 시 실
-  병원 데이터 커버리지 크게 확장. 엔진 변경 없이 파서만.
+- **M3-3 v1-β LOD** — multi-resolution brick (먼 brick 1/8 다운샘플)로
+  visible >> atlas 케이스를 hole 없이. v1-α 가장 큰 한계(줌아웃 전체보기) 해결.
+- **M3-3 v1-β CPU pack 최적화** — row-memcpy + SIMD로 ~10× 가능 (현재 ~10 ms/brick).
+  Case C 12.6 FPS의 본질.
+- **M3-3 v1-β 디스크 페이징** — 4 GB+ 임상 데이터(CPU RAM 한계 초과).
+- **DICOM Implicit VR LE 지원** — 임상 PACS의 기본 transfer syntax. 엔진 변경
+  없이 파서만.
 - **DICOM 압축 transfer syntax**(JPEG/JPEG2000/RLE) — libjpeg 등 외부 의존 필요.
 
 **다음 세션 진입점**: 이 문서 §2 마일스톤 상세 + 위 후보 목록. 사용자

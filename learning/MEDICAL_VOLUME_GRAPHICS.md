@@ -293,12 +293,62 @@ float sampleVolume(vec3 uvw) {
 3. atlas 초과 시 모든 non-empty brick을 카운트 → `ceil(cbrt(N))`으로 권장
    atlasGrid를 로그로 안내 → 호출자가 즉시 override
 
-### 다음 (M3-3 v1)
+### M3-3 v1-α — LRU streaming + memory-budget auto-size
 
-현재는 **로드 타임 단발 packing**. 진정한 "RAM/VRAM 초과" 1GB+ 시리즈는
-**streaming** 필요: camera frustum 가시성 → 필요한 brick만 atlas에 LRU 업로드,
-디스크/원본 버퍼에서 페이지인. id Tech의 megatexture 또는 Sparse Resource
-(Vulkan VK_EXT_sparse_residency)의 의료 영상 적용 — 다음 마일스톤의 본체.
+v0의 정직한 한계: atlas 크기를 사전 결정해야 하고, 모든 non-empty brick이
+들어가지 않으면 fail. 4 GB+ 임상 데이터를 다루려면 **streaming** 필요.
+
+v1-α 적용:
+
+1. **memory-budget auto-size**: atlas는 `ceil(cbrt(nonEmpty))` 시작점에서
+   pageGrid clamp 후 `kAutoAtlasBudgetBytes = 512 MB` 안에 fit하도록 longest
+   axis shrink. 데이터에 따라 적응 — 1024³ default(304 non-empty)는 (7,7,7)=
+   188 MB, 1024³ dense(2728 non-empty)는 (9,10,10)=493 MB.
+2. **모드 자동 분기**: `nonEmpty <= atlas slots`면 Static (v0 그대로), 아니면
+   Streaming.
+3. **Streaming 시 LRU page-in**:
+   - 매 프레임 CPU frustum cull로 visible brick page index 산출
+   - resident인 brick은 `lastFrameUsed` bump
+   - missing 중 K=8 개 → empty slot or LRU evict로 자리 확보 → CPU에서 brick
+     추출 + `copyBufferToTexture` + page table buffer push
+   - **핵심 정책**: 같은 프레임에 bumped된 slot(가시 brick)은 절대 evict 안
+     함. 가시 brick 보호.
+
+### v1-α의 정직한 한계 — "visible-set ≤ atlas slots"
+
+streaming이 잘 동작하는 케이스: **줌인 워크플로** (대용량 볼륨의 작은 region
+관찰). 매 시점 가시 brick << atlas → LRU가 안 보는 brick을 자연스럽게 evict.
+
+streaming이 깨지는 케이스: **줌아웃 전체보기** (가시 brick == 전체 non-empty).
+LRU가 가시 brick 보호하니 새 brick 들어올 자리 없음 → 일부 가시 영역이
+영원히 missing → 시각 hole.
+
+→ 의료영상 진단에선 두 워크플로 모두 필요. v1-β의 **LOD (multi-resolution
+brick)** 가 본질적 해결책: 멀리 있는 brick은 1/8 다운샘플로 represent → 가시
+brick 수를 줄여 atlas에 fit.
+
+### M3-3 v1-α를 진입할 때 사용자가 보는 안전망
+
+```text
+[WARN][BrickedVolume] streaming mode (atlas too small): N non-empty bricks
+vs M atlas slots. When the camera sees more than M bricks at once, the
+excess will render as empty. Pass atlasGrid (...) for guaranteed Static
+rendering. Streaming is best when total bricks > atlas but visible-set
+<< atlas (zoom-in workflows on large volumes).
+```
+
+권장 atlasGrid + 메모리 추정 + 적합 사용 케이스 명시. **메커니즘 검증 ≠ 정책
+검증** 교훈을 작업 중 발견 (CHANGELOG 2026-06-04).
+
+### v1-β 후보
+
+- **CPU brick pack 최적화** (현재 ~10 ms/brick, dense streaming의 본 cost)
+- **LOD** (multi-resolution brick으로 visible >> atlas 케이스 해결)
+- **디스크 페이징** (4 GB+ 임상 데이터 RAM 한계 초과)
+- **Predictive prefetch** (카메라 속도 기반 다음 프레임 brick 미리 페이지인)
+
+참고 라인: id Tech의 megatexture (Carmack), GigaVoxels SVO (Crassin), Vulkan
+`VK_EXT_sparse_residency` — 의료 볼륨에 동등 적용.
 
 ---
 

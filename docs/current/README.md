@@ -13,6 +13,9 @@ WebGPU 기반 차세대 클라이언트 사이드 **의료 볼륨 렌더러**로
 | --- | --- |
 | [MEDICAL_VOLUME_ROADMAP.md](medical-volume/MEDICAL_VOLUME_ROADMAP.md) | 전략 결정(방향 1) + 격차 진단 + 마일스톤 M1~M4 + 결정·진행 기록 |
 | [VIEWERS.md](medical-volume/VIEWERS.md) | 사용자 가이드 — `volume_viewer` (네이티브) + `volume_viewer_wasm` (브라우저) 빌드·조작·기능·기술 스택 |
+| [M3-3_V1_STREAMING_PLAN.md](medical-volume/M3-3_V1_STREAMING_PLAN.md) | M3-3 v1-α 설계서 + 완료 기록 (v1-1~v1-4) |
+| [BASELINE_2026-06-03.md](medical-volume/BASELINE_2026-06-03.md) | v0 + M4 v1 기준선 측정 |
+| [BASELINE_2026-06-04_V1_ALPHA.md](medical-volume/BASELINE_2026-06-04_V1_ALPHA.md) | v1-α 측정 (auto-size win + streaming 자동 진입 + 정직한 한계) |
 
 **M1 (실데이터 기반) 완료** (2026-05-29): R16Float 16비트 · window/level ·
 NIfTI 로더 + float 강도 경로 + 임상 윈도우 프리셋.
@@ -50,11 +53,18 @@ slot indices, 0xFFFFFFFF = "air") 간접 참조로 교체. 모든 density read�
 helper `sampleVolume(uvw)` 거쳐 page-lookup → linear atlas 샘플로 진행 (3 셰이더
 세트: march · pathtrace · occupancy — 양 백엔드). 빈 brick(interior 전체 = 최솟값)은
 atlas에 안 올라가 → 1024³ × 10% 점유 시 2GB → ~200MB의 가치. v0는 로드 타임 단발
-packing(streaming/LRU는 v1로 연기). 부수: GLSL march UBO에 누락돼 있던 `pathtrace`
-필드 발견·정렬(march 코드가 그 슬롯을 read하지 않아 노출되지 않은 latent skew).
+packing. 부수: GLSL march UBO에 누락돼 있던 `pathtrace` 필드 발견·정렬.
+**M3-3 v1-α streaming 완료** (2026-06-04): LRU + incremental brick upload +
+memory-budget auto-size. Atlas 자동 산정 재작성 — `ceil(cbrt(nonEmpty))` 시작점,
+512MB budget shrink. nonEmpty > slots 시 자동 Streaming, 매 프레임 K=8 brick
+페이지인, LRU가 visible bumped slot 보호 (churn 방지). Streaming 진입 시
+LOG_WARN로 권장 atlasGrid 안내. 1024³ default 280→188 MB(-33%), 2 GB dense 자동
+streaming(493 MB). 정직한 한계: 가시 brick > atlas slots면 시각 hole — 줌아웃
+전체보기 케이스는 v1-β LOD가 본질 해결. 발견·기록: atlas thrashing 디버깅 여정
+([CHANGELOG_2026-06-04](../archive/changelogs/CHANGELOG_2026-06-04.md)).
 
-**다음 후보**: M3-3 v1(streaming + LRU + on-disk paging) · DICOM 후속(Implicit VR LE
-지원 시 임상 PACS 데이터 커버리지 ↑).
+**다음 후보**: M3-3 v1-β (LOD / CPU pack 최적화 / 디스크 페이징) · DICOM 후속
+(Implicit VR LE 지원 시 임상 PACS 데이터 커버리지 ↑).
 
 **선행 완료**: 볼륨 렌더링 기초(3D 텍스처 + 레이마칭, Vulkan + WebGPU) ·
 TF 프리셋 · 독립 뷰어(네이티브 `volume_viewer` + 브라우저 `volume_viewer_wasm`).
@@ -89,7 +99,9 @@ C(TAA, Vulkan + WebGPU) → 그림자 품질(하드웨어 PCF). 상세는 archiv
 | [archive/refactoring/webgpu-showcase/](../archive/refactoring/webgpu-showcase/WEBGPU_SHOWCASE_PLAN.md) | WebGPU Showcase 격상 (2026-05-14 ~ 2026-05-20) |
 | [archive/refactoring/webgpu-deferred/](../archive/refactoring/webgpu-deferred/) | WebGPU Deferred Rendering 포팅 |
 
-최근 변경 이력: [CHANGELOG_2026-06-02](../archive/changelogs/CHANGELOG_2026-06-02.md)
+최근 변경 이력: [CHANGELOG_2026-06-04](../archive/changelogs/CHANGELOG_2026-06-04.md)
+(M3-3 v1-α LRU streaming + memory-budget auto-size · atlas thrashing 진단 + WARN) ·
+[06-02](../archive/changelogs/CHANGELOG_2026-06-02.md)
 (M3-3 v0 + M4 v1 양 백엔드 검증 · EMSDK env 전파 트랩 · OccUBO bind size 미동기화 트랩) ·
 [05-27](../archive/changelogs/CHANGELOG_2026-05-27.md)
 (D2 스레드 풀 · D3-0a/0b 장애물 해소 · D3-1/2 셰도우 캐스케이드 병렬 기록 · D4 측정·종결) ·

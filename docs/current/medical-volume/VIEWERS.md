@@ -186,17 +186,53 @@ PT 모드 진입 시 자동으로 progressive 누적이 시작된다. **카메�
 
 각 쌍은 같은 UBO 레이아웃과 의미를 공유 (CLAUDE.md §8: 두 사본 항상 동기화).
 
-### Brick atlas 핵심 수치 (M3-3 v0)
+### Brick atlas 핵심 수치 (M3-3 v0 + v1-α)
 
 - Brick size: 64³ interior + 1-voxel halo 양면 = 66³ stored
-- atlas 크기 자동 산정 (Step C): `min(pageGrid, (8,8,8))` per axis. 작은
-  볼륨은 페이지 그리드만큼만(메모리 최소), 큰 볼륨은 (8,8,8) = 512 slots
-  ~= 292MB로 cap. 호출자가 `loadFromFloatData(..., atlasGridOverride)`로
-  명시 가능
-- 자동 cap 초과 시 `build()`가 atlas-full 로그에 **권장 atlasGrid 값과
-  메모리 추정치**를 함께 출력 → 호출자가 즉시 오버라이드 조정
+- **atlas 크기 자동 산정 (v1-α)**: `axisGuess = ceil(cbrt(nonEmpty))` 시작점,
+  pageGrid axis별 clamp, `kAutoAtlasBudgetBytes = 512MB` 안에 맞도록 longest
+  axis shrink. 사용자가 `--atlas-cap N`으로 명시 override 가능
 - Page table: `u32` per virtual brick, `0xFFFFFFFF` = "air" (sentinel)
-- 압축률 예: 1024³ × 10% non-empty → 2GB → ~200MB
+- 압축률 예: 1024³ default (304 non-empty) → atlas (7,7,7) = 343 slots = 188MB
+  (1 GB → 81.6% 절감)
+
+### 모드: Static vs Streaming (v1-α)
+
+| 케이스 | 모드 결정 | 동작 |
+| --- | --- | --- |
+| nonEmpty ≤ atlas slots | **Static** | 로드 시 atlas 통째 packing, 매 프레임 무비용 |
+| nonEmpty > atlas slots | **Streaming** | atlas 비어있게 시작 + WARN 로그, 매 프레임 visible brick K=8개씩 paging |
+
+Streaming 모드 진입 시 콘솔에 권장 atlasGrid + 메모리 추정 WARN 출력 — visible
+set이 atlas 초과하면 시각 hole 발생함을 안내.
+
+### Streaming 동작 (v1-α)
+
+매 프레임 viewer가 `updateBrickStreaming(view, proj, frameIdx)` 호출:
+
+1. CPU frustum culling (page grid 단위) → visible brick list
+2. visible 중 resident인 slot 의 `lastFrameUsed` bump
+3. visible 중 missing 최대 K=8개 → empty slot 또는 LRU evict로 자리 확보 →
+   CPU에서 brick 추출 후 `copyBufferToTexture`
+4. page table buffer push (전체 mirror)
+
+**핵심 정책**: 같은 프레임에 bumped된 slot (현재 보고 있는 brick)은 **절대
+evict하지 않음**. 가시 brick 보호로 churn 방지.
+
+### CLI 플래그: `--atlas-cap N`
+
+`(N, N, N)` 으로 atlasGrid 강제. 주 용도:
+
+- Streaming 동작 stress test (default volume에서 streaming 트리거)
+- 메모리 한계 환경에서 explicit 사이즈 설정
+- 권장 — 일반 사용에서는 auto-size 신뢰
+
+예:
+
+```powershell
+.\volume_viewer.exe test_1024.nii --atlas-cap 2   # 8 slots = 4.4 MB, Streaming
+.\volume_viewer.exe test_1024.nii --atlas-cap 14  # 2744 slots, dense 1024³를 Static으로
+```
 
 ### Path tracer (M4)
 

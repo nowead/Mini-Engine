@@ -1,7 +1,9 @@
 # M3-3 v1-α — Brick Streaming 계획서
 
 **작성일**: 2026-06-03
-**상태**: 미진입 (이 문서는 코드 작업 전 설계 합의용)
+**상태**: **v1-α 완료** (2026-06-04, 커밋 `d748814` + `f6f1561`). 결과:
+[BASELINE_2026-06-04_V1_ALPHA.md](BASELINE_2026-06-04_V1_ALPHA.md) ·
+[CHANGELOG 2026-06-04](../../archive/changelogs/CHANGELOG_2026-06-04.md).
 **기준 baseline**: [BASELINE_2026-06-03.md](BASELINE_2026-06-03.md)
 **전제 구조**: M3-3 v0 (brick atlas + page table) + M4 v1 (progressive 누적)
 **결정 묶음**: B / A / B / A — 아래 §2 참조
@@ -397,3 +399,30 @@ Streaming은 page table 내용을 동적으로 갱신할 뿐, 구조는 동일.
 이 계획서를 사용자가 승인하면 **v1-1부터 atomic 단계로 진입**. 각 단계 종료
 시점에 빌드 + 검증 + 커밋 + 다음 단계 진입 확인. 중간 어디서든 일시 정지하고
 방향 재조정 가능.
+
+---
+
+## 12. 완료 기록 (2026-06-04)
+
+| 단계 | 커밋 | 결과 |
+| --- | --- | --- |
+| v1-1 frustum cull diagnostic | `5df02c2` | visible/visibleNonEmpty 카운팅, 시각 영향 0 |
+| v1-2 streaming mode auto-entry | `6d9c3f9` | 모드 분기 + 빈 atlas + source 보관, 의도된 검정 임시 상태 |
+| v1-3 LRU + incremental upload | `d748814` | 본체 + auto-size 재작성 + WARN. 양 백엔드 클린 |
+| v1-4 baseline + changelog | `f6f1561` | 3-case 측정 + 디버깅 여정 기록 |
+| v1-4 docs sync | (이 커밋) | VIEWERS + learning + plan + roadmap + README 갱신 |
+
+**v1-α 핵심 성과**:
+
+- 1024³ default: atlas 280.8 → 188.1 MB (-33%), 시각·성능 회귀 0
+- 2 GB dense 자동 streaming 진입 (v0에서 atlas-full 실패하던 케이스)
+- LOG_WARN으로 streaming의 적합·부적합 케이스 안내
+
+**v1-β 분리 후보** (별도 트랙):
+
+- CPU brick pack 최적화 (row-memcpy + SIMD, 10× 가능)
+- LOD (multi-resolution brick) — visible >> atlas 케이스 본질 해결
+- 디스크 페이징 (4 GB+ 임상 데이터)
+- Predictive prefetch (카메라 속도 기반)
+
+각각 별도 마일스톤. v1-β 시기 미정.
