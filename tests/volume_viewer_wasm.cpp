@@ -97,6 +97,8 @@ public:
     double atlasMBAlloc() const { return m_volume ? (m_volume->getAtlasBytesAllocated() / 1048576.0) : 0.0; }
     double denseMB()      const { return m_volume ? (m_volume->getDenseBytes() / 1048576.0) : 0.0; }
     float lastRenderMs() const { return m_lastRenderCpuMs; }
+    uint32_t visibleBricks()   const { return m_lastStreamStats.visibleBricks; }
+    uint32_t visibleNonEmpty() const { return m_lastStreamStats.visibleNonEmpty; }
 
 private:
     GLFWwindow* m_window = nullptr;
@@ -122,6 +124,9 @@ private:
 
     // D3 wall-clock: CPU time spent inside render(), EMA-smoothed for readout.
     float m_lastRenderCpuMs = 0.0f;
+
+    // v1-1 streaming stats from the last frame's cull pass.
+    rendering::BrickedVolume::StreamUpdateStats m_lastStreamStats{};
 
     void initWindow() {
         glfwInit();
@@ -266,6 +271,10 @@ private:
                             glm::inverse(m_camera.getProjectionMatrix()),
                             m_camera.getPosition());
 
+        m_lastStreamStats = m_volume->updateBrickStreaming(
+            m_camera.getViewMatrix(), m_camera.getProjectionMatrix(),
+            static_cast<uint64_t>(m_frame));
+
         // ---- Pass 1: path-trace into the ping-pong accumulation (PT mode only). ----
         if (pathTrace && m_volume->isEnabled()) {
             rhi::RenderPassColorAttachment ptCa{};
@@ -371,6 +380,8 @@ EMSCRIPTEN_BINDINGS(volume_viewer) {
     emscripten::function("atlasMBAlloc", +[]() -> double { return g_viewer ? g_viewer->atlasMBAlloc() : 0.0; });
     emscripten::function("denseMB",      +[]() -> double { return g_viewer ? g_viewer->denseMB() : 0.0; });
     emscripten::function("lastRenderMs", +[]() -> float { return g_viewer ? g_viewer->lastRenderMs() : 0.0f; });
+    emscripten::function("visibleBricks",   +[]() -> unsigned { return g_viewer ? g_viewer->visibleBricks() : 0u; });
+    emscripten::function("visibleNonEmpty", +[]() -> unsigned { return g_viewer ? g_viewer->visibleNonEmpty() : 0u; });
 }
 
 int main() {

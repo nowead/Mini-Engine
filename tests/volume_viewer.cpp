@@ -108,6 +108,9 @@ private:
     // EMA-smoothed so the ImGui readout doesn't flicker frame to frame.
     float     m_lastRenderCpuMs = 0.0f;
 
+    // v1-1 streaming stats from the last frame's cull pass.
+    rendering::BrickedVolume::StreamUpdateStats m_lastStreamStats{};
+
     static bool endsWith(const std::string& s, const std::string& suffix) {
         return s.size() >= suffix.size() &&
                s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
@@ -377,6 +380,11 @@ private:
         ImGui::Text("Atlas memory: %.1f / %.1f MB (live / allocated)", usedB / mb, allocB / mb);
         const double saved = denseB > 0 ? (100.0 * (1.0 - static_cast<double>(allocB) / denseB)) : 0.0;
         ImGui::Text("Sparse saving vs dense: %.1f%%", saved);
+        // v1-1 streaming counters (diagnostic): visible total / non-empty.
+        // Other fields (uploaded, evicted, missing) light up in v1-3.
+        ImGui::Text("Frustum-visible bricks: %u (%u non-empty)",
+                    m_lastStreamStats.visibleBricks,
+                    m_lastStreamStats.visibleNonEmpty);
 
         const bool customTF = (m_preset == 0);
         ImGui::BeginDisabled(!customTF);
@@ -475,6 +483,13 @@ private:
                             glm::inverse(m_camera.getViewMatrix()),
                             glm::inverse(m_camera.getProjectionMatrix()),
                             m_camera.getPosition());
+
+        // v1-1: count which page-grid bricks the camera will see. Diagnostic
+        // only -- atlas content is unchanged. v1-3 will use these counts to
+        // drive LRU + incremental upload.
+        m_lastStreamStats = m_volume->updateBrickStreaming(
+            m_camera.getViewMatrix(), m_camera.getProjectionMatrix(),
+            static_cast<uint64_t>(m_frameIndex));
 
         // ---- Path-trace mode: pass 1 renders into the ping-pong accumulation. ----
         if (pathTrace && m_volume->isEnabled()) {

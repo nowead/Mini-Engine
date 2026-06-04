@@ -946,4 +946,98 @@ void VolumeRenderer::updateUBO(uint32_t frameIndex, const glm::mat4& invView,
     m_uniformBuffers[fi]->write(&ubo, sizeof(VolumeUBO));
 }
 
+// ---------------------------------------------------------------------------
+// v1-1 brick streaming -- frustum-vs-brick visibility test on the CPU
+// ---------------------------------------------------------------------------
+namespace {
+
+// Pack a clip-space plane (a*x + b*y + c*z + d >= 0 = inside).
+struct Plane { float a, b, c, d; };
+
+// Extract 6 frustum planes from a combined view-projection matrix in clip
+// space. WebGPU/Vulkan use NDC z = [0, 1], so the near-plane derivation is
+// row(2) on its own (vs OpenGL's row(2)+row(3)).
+inline std::array<Plane, 6> extractFrustumPlanes(const glm::mat4& vp) {
+    // Row-major access: glm matrices are column-major in storage, vp[col][row].
+    auto rowEq = [&](int row) -> glm::vec4 {
+        return glm::vec4(vp[0][row], vp[1][row], vp[2][row], vp[3][row]);
+    };
+    const glm::vec4 r0 = rowEq(0);
+    const glm::vec4 r1 = rowEq(1);
+    const glm::vec4 r2 = rowEq(2);
+    const glm::vec4 r3 = rowEq(3);
+    std::array<Plane, 6> p;
+    auto setPlane = [&](Plane& dst, const glm::vec4& v) {
+        // Normalise so the AABB test below stays in linear units.
+        const float n = std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+        const float inv = (n > 1e-6f) ? (1.0f / n) : 0.0f;
+        dst = { v.x * inv, v.y * inv, v.z * inv, v.w * inv };
+    };
+    setPlane(p[0], r3 + r0);   // left
+    setPlane(p[1], r3 - r0);   // right
+    setPlane(p[2], r3 + r1);   // bottom
+    setPlane(p[3], r3 - r1);   // top
+    setPlane(p[4], r2);        // near (NDC z >= 0)
+    setPlane(p[5], r3 - r2);   // far  (NDC z <= 1)
+    return p;
+}
+
+// Conservative AABB-vs-frustum: returns true if any portion of the AABB
+// can be inside the frustum. Uses the p-vertex (most positive along plane
+// normal) trick -- if the p-vertex is below a plane, the whole AABB is
+// outside that plane and we cull. Misses no visible boxes; may keep some
+// just-outside ones (acceptable for streaming -- a one-frame extra brick
+// resident costs negligible).
+inline bool aabbIntersectsFrustum(const std::array<Plane, 6>& planes,
+                                  const glm::vec3& mn, const glm::vec3& mx) {
+    for (const Plane& p : planes) {
+        const float px = (p.a >= 0.0f) ? mx.x : mn.x;
+        const float py = (p.b >= 0.0f) ? mx.y : mn.y;
+        const float pz = (p.c >= 0.0f) ? mx.z : mn.z;
+        if (p.a * px + p.b * py + p.c * pz + p.d < 0.0f) return false;
+    }
+    return true;
+}
+
+} // namespace
+
+BrickedVolume::StreamUpdateStats
+VolumeRenderer::updateBrickStreaming(const glm::mat4& view,
+                                      const glm::mat4& proj,
+                                      uint64_t /*frameIdx*/) {
+    BrickedVolume::StreamUpdateStats stats{};
+    const glm::uvec3 pg = m_brick.pageGrid();
+    if (pg.x == 0 || pg.y == 0 || pg.z == 0) return stats;
+
+    const std::array<Plane, 6> planes = extractFrustumPlanes(proj * view);
+    const glm::vec3 boxSize = m_aabbMax - m_aabbMin;
+    const glm::vec3 brickSize(boxSize.x / static_cast<float>(pg.x),
+                              boxSize.y / static_cast<float>(pg.y),
+                              boxSize.z / static_cast<float>(pg.z));
+
+    // Empty entries cost the same cull arithmetic as occupied ones; we count
+    // them separately so the panel can show both "frustum hits" and "actual
+    // data brick hits". The non-empty filter is what v1-3 streaming will use
+    // to decide what to upload.
+    const auto& pageHost = m_brick.pageTableHost();
+    const bool haveHost = !pageHost.empty();
+
+    for (uint32_t bz = 0; bz < pg.z; ++bz) {
+        for (uint32_t by = 0; by < pg.y; ++by) {
+            for (uint32_t bx = 0; bx < pg.x; ++bx) {
+                const glm::vec3 mn = m_aabbMin + glm::vec3(bx, by, bz) * brickSize;
+                const glm::vec3 mx = mn + brickSize;
+                if (!aabbIntersectsFrustum(planes, mn, mx)) continue;
+                ++stats.visibleBricks;
+                if (haveHost) {
+                    const uint32_t idx = (bz * pg.y + by) * pg.x + bx;
+                    if (pageHost[idx] != BrickedVolume::kEmptySlot)
+                        ++stats.visibleNonEmpty;
+                }
+            }
+        }
+    }
+    return stats;
+}
+
 } // namespace rendering

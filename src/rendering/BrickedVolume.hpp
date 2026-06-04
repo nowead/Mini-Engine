@@ -40,6 +40,18 @@ public:
     static constexpr uint32_t kBrickStored = kBrickSize + 2; // 66, with 1-voxel halo
     static constexpr uint32_t kEmptySlot   = 0xFFFFFFFFu;   // page table sentinel
 
+    // v1-alpha streaming per-frame counters. v1-1 only populates visibleBricks;
+    // bricksUploaded / bricksEvicted / visibleResident / visibleMissing fill
+    // in v1-3 once the LRU + incremental upload path lands.
+    struct StreamUpdateStats {
+        uint32_t visibleBricks    = 0;   // total page-grid bricks intersecting frustum (incl. empty)
+        uint32_t visibleNonEmpty  = 0;   // subset that has data in the source volume
+        uint32_t bricksUploaded   = 0;
+        uint32_t bricksEvicted    = 0;
+        uint32_t visibleResident  = 0;
+        uint32_t visibleMissing   = 0;
+    };
+
     // Auto-size cap per axis. (8,8,8) = 512 slots * 66^3 * 2B ~= 292 MB, the
     // upper bound we're willing to allocate from a load-time decision. Larger
     // volumes either get truncated (caller passes a bigger override) or fail
@@ -64,6 +76,12 @@ public:
                uint32_t w, uint32_t h, uint32_t d,
                uint16_t emptyValueHalf,
                glm::uvec3 atlasGrid = glm::uvec3(0));
+
+    // v1-1 CPU-side page table mirror (per virtual brick, atlas slot or
+    // kEmptySlot). v0 build copies its local pageTable here at end of build
+    // so frustum-cull code can ask "is this page non-empty?" without a GPU
+    // readback. v1-3 streaming will rewrite entries as bricks page in/out.
+    const std::vector<uint32_t>& pageTableHost() const { return m_pageTableHost; }
 
     rhi::RHITextureView* atlasView()    const { return m_atlasView.get(); }
     rhi::RHIBuffer*      pageTable()    const { return m_pageTable.get(); }
@@ -98,6 +116,7 @@ private:
     std::unique_ptr<rhi::RHITexture>     m_atlasTex;
     std::unique_ptr<rhi::RHITextureView> m_atlasView;
     std::unique_ptr<rhi::RHIBuffer>      m_pageTable;
+    std::vector<uint32_t>                m_pageTableHost;  // v1-1 CPU mirror
     glm::uvec3 m_volSize{0};
     glm::uvec3 m_pageGrid{0};
     glm::uvec3 m_atlasGrid{0};

@@ -288,6 +288,11 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
         auto cmd = enc->finish();
         queue->submit(cmd.get());
         queue->waitIdle();
+
+        // v1-1: keep a CPU mirror so the frustum-cull pass can query per-page
+        // non-empty status without a GPU readback. v1-3 streaming will mutate
+        // this in place as bricks page in/out.
+        m_pageTableHost = std::move(pageTable);
     }
 
     LOG_INFO("BrickedVolume") << "built " << w << "x" << h << "x" << d

@@ -116,6 +116,16 @@ public:
     void updateUBO(uint32_t frameIndex, const glm::mat4& invView,
                    const glm::mat4& invProj, const glm::vec3& cameraPos);
 
+    // v1-1: per-frame brick streaming update. Takes the camera view/proj
+    // (NOT inverses), extracts the 6 frustum planes, walks the page grid and
+    // counts which bricks intersect. Returns per-frame counters for the stats
+    // panel. In v1-1 this only COUNTS -- it does not change the atlas. The
+    // actual eviction + upload lands in v1-3. Safe to call every frame;
+    // expected cost < 0.1 ms on a 16x16x8 page grid.
+    BrickedVolume::StreamUpdateStats updateBrickStreaming(const glm::mat4& view,
+                                                          const glm::mat4& proj,
+                                                          uint64_t frameIdx);
+
     bool isInitialized() const { return m_initialized; }
     bool isPipelineReady() const { return m_pipeline != nullptr; }
 
