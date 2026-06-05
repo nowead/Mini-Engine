@@ -51,6 +51,11 @@ public:
         uint32_t bricksEvicted    = 0;
         uint32_t visibleResident  = 0;
         uint32_t visibleMissing   = 0;
+        // v1-beta beta-3: LOD distribution across visible non-empty bricks.
+        // lodCounts[lv] = how many of the visible-non-empty bricks would be
+        // sampled at LOD lv if the streaming respected the selection. Recorded
+        // for the stats panel only in beta-3; beta-4 wires it into uploads.
+        uint32_t lodCounts[4] = {0, 0, 0, 0};
     };
 
     // v1-2 mode: Static = atlas fully populated at load time (v0 behavior);
@@ -101,6 +106,16 @@ public:
 
     Mode mode()         const { return m_mode; }
     bool isStreaming()  const { return m_mode == Mode::Streaming; }
+
+    // v1-beta beta-3: write the selected LOD for a virtual brick. beta-4
+    // streaming will read these values when picking which atlas (and which
+    // mipData level) to upload from. No-op in Static mode.
+    void setBrickLod(uint32_t pageIdx, uint8_t lod) {
+        if (pageIdx < m_lodTableHost.size()) m_lodTableHost[pageIdx] = lod;
+    }
+    uint8_t brickLod(uint32_t pageIdx) const {
+        return (pageIdx < m_lodTableHost.size()) ? m_lodTableHost[pageIdx] : 0u;
+    }
 
     // v1-beta LOD: per-level downsampled source volume, generated at build
     // time in Streaming mode only. Level 0 is m_originalHalfData (not in this

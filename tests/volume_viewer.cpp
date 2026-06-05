@@ -404,6 +404,11 @@ private:
             ImGui::Text("  this frame: +%u uploaded / -%u evicted",
                         m_lastStreamStats.bricksUploaded,
                         m_lastStreamStats.bricksEvicted);
+            ImGui::Text("  LOD distribution: L0=%u  L1=%u  L2=%u  L3=%u",
+                        m_lastStreamStats.lodCounts[0],
+                        m_lastStreamStats.lodCounts[1],
+                        m_lastStreamStats.lodCounts[2],
+                        m_lastStreamStats.lodCounts[3]);
         }
 
         const bool customTF = (m_preset == 0);

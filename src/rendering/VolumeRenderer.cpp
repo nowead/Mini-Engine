@@ -1048,6 +1048,29 @@ VolumeRenderer::updateBrickStreaming(const glm::mat4& view,
                               boxSize.y / static_cast<float>(pg.y),
                               boxSize.z / static_cast<float>(pg.z));
 
+    // v1-beta beta-3 LOD selection prep. Camera position in world space is
+    // the inverse-view origin. brickWorldExtent is the largest axis of the
+    // brick in world units -- the LOD picker uses (distance / extent) so
+    // anisotropic spacing doesn't trip the thresholds.
+    const glm::vec3 cameraPos = glm::vec3(glm::inverse(view) * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
+    const float brickWorldExtent = std::max({brickSize.x, brickSize.y, brickSize.z});
+    const bool streaming = m_brick.isStreaming();
+    // Threshold ratios for L0 / L1 / L2 boundaries (distance / brick-extent);
+    // >= the last value falls to L3. Calibrated so the camera's min distance of
+    // 1.0 puts a 1024^3-dense brick (extent ~0.125 world units) at ratio 8 = L0,
+    // the default 3.5 distance lands ratio 28 = L1, and a zoom-out to distance
+    // 10 lands ratio 80 = L3. Future tuning could compute these from fov +
+    // screen height for screen-pixel-aware selection.
+    constexpr float kLodRatios[3] = {10.0f, 30.0f, 70.0f};
+    auto pickLod = [&](const glm::vec3& brickCenter) -> uint8_t {
+        const float dist = glm::length(brickCenter - cameraPos);
+        const float ratio = (brickWorldExtent > 1e-6f) ? (dist / brickWorldExtent) : 0.0f;
+        if (ratio < kLodRatios[0]) return 0u;
+        if (ratio < kLodRatios[1]) return 1u;
+        if (ratio < kLodRatios[2]) return 2u;
+        return 3u;
+    };
+
     // Two queries per visible brick:
     //   pageHasData(idx): does the source brick contain non-air voxels?
     //   pageTableHost[idx] != kEmptySlot: is that brick currently in the atlas?
@@ -1055,7 +1078,6 @@ VolumeRenderer::updateBrickStreaming(const glm::mat4& view,
     // Streaming mode: pageTableHost flips as v1-3 pages bricks in/out.
     const auto& pageHost = m_brick.pageTableHost();
     const bool haveHost = !pageHost.empty();
-    const bool streaming = m_brick.isStreaming();
 
     // Collect visible page indices for v1-3 streaming. In Static mode we
     // skip this allocation -- updateStreaming would be a no-op anyway.
@@ -1071,6 +1093,13 @@ VolumeRenderer::updateBrickStreaming(const glm::mat4& view,
                 ++stats.visibleBricks;
                 const uint32_t idx = (bz * pg.y + by) * pg.x + bx;
                 if (m_brick.pageHasData(idx)) {
+                    // Record LOD selection for this visible non-empty brick;
+                    // beta-4 streaming will read it back to decide uploads.
+                    if (streaming) {
+                        const uint8_t lod = pickLod(0.5f * (mn + mx));
+                        m_brick.setBrickLod(idx, lod);
+                        ++stats.lodCounts[lod];
+                    }
                     ++stats.visibleNonEmpty;
                     if (haveHost && pageHost[idx] != BrickedVolume::kEmptySlot)
                         ++stats.visibleResident;

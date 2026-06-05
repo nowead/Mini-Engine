@@ -204,6 +204,8 @@
                 if (streaming) {
                     line += '\n  resident: ' + Module.visibleResident() + '   missing: ' + Module.visibleMissing();
                     line += '\n  this frame: +' + Module.bricksUploaded() + ' uploaded / -' + Module.bricksEvicted() + ' evicted';
+                    line += '\n  LOD: L0=' + Module.lodCount(0) + '  L1=' + Module.lodCount(1)
+                          + '  L2=' + Module.lodCount(2) + '  L3=' + Module.lodCount(3);
                 }
                 statsEl.textContent =
                     'Volume: ' + vw + 'x' + vh + 'x' + vd + '  (' + denseMB.toFixed(1) + ' MB dense)\n' +

@@ -103,6 +103,9 @@ public:
     uint32_t visibleMissing()  const { return m_lastStreamStats.visibleMissing; }
     uint32_t bricksUploaded()  const { return m_lastStreamStats.bricksUploaded; }
     uint32_t bricksEvicted()   const { return m_lastStreamStats.bricksEvicted; }
+    uint32_t lodCount(int lod) const {
+        return (lod >= 0 && lod < 4) ? m_lastStreamStats.lodCounts[lod] : 0u;
+    }
     bool     isStreaming()     const { return m_volume && m_volume->getBrickedVolume().isStreaming(); }
 
 private:
@@ -391,6 +394,7 @@ EMSCRIPTEN_BINDINGS(volume_viewer) {
     emscripten::function("visibleMissing",  +[]() -> unsigned { return g_viewer ? g_viewer->visibleMissing() : 0u; });
     emscripten::function("bricksUploaded",  +[]() -> unsigned { return g_viewer ? g_viewer->bricksUploaded() : 0u; });
     emscripten::function("bricksEvicted",   +[]() -> unsigned { return g_viewer ? g_viewer->bricksEvicted() : 0u; });
+    emscripten::function("lodCount",        +[](int lv) -> unsigned { return g_viewer ? g_viewer->lodCount(lv) : 0u; });
     emscripten::function("isStreaming",     +[]() -> bool     { return g_viewer ? g_viewer->isStreaming() : false; });
 }
 
