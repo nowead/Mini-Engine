@@ -24,8 +24,11 @@ fn fetchVoxel(v: vec3<u32>) -> f32 {
     let brickIdx = v / 64u;
     let local    = v - brickIdx * 64u;   // [0, 63]
     let pageIdx = (brickIdx.z * ubo.pageGrid.y + brickIdx.y) * ubo.pageGrid.x + brickIdx.x;
-    let slot    = pageSlots[pageIdx];
-    if (slot == 0xFFFFFFFFu) { return 0.0; }
+    let page    = pageSlots[pageIdx];
+    if (page == 0xFFFFFFFFu) { return 0.0; }
+    // beta-5: page packs (lod<<30)|slot. Occupancy runs at load time when only
+    // L0 is populated, so we only handle the L0 atlas here.
+    let slot = page & 0x3FFFFFFFu;
     let sx = slot % ubo.atlasGrid.x;
     let sy = (slot / ubo.atlasGrid.x) % ubo.atlasGrid.y;
     let sz =  slot / (ubo.atlasGrid.x * ubo.atlasGrid.y);

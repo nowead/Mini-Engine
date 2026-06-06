@@ -30,32 +30,47 @@ struct VolumeUBO {
 
 @group(0) @binding(0) var<uniform> ubo: VolumeUBO;
 @group(0) @binding(1) var depthTex:      texture_depth_2d;
-@group(0) @binding(2) var volumeTex:     texture_3d<f32>;    // M3-3 brick atlas (R16Float)
+@group(0) @binding(2) var volumeTex0:    texture_3d<f32>;    // brick atlas L0
 @group(0) @binding(3) var volumeSampler: sampler;
 @group(0) @binding(4) var tfLUT:         texture_2d<f32>;    // 256x1 density -> (rgb, opacity)
 @group(0) @binding(5) var<storage, read> occCells:  array<vec2<f32>>;  // per cell (min,max) for skipping
-@group(0) @binding(6) var<storage, read> pageSlots: array<u32>;        // M3-3 page table: brick -> atlas slot or 0xFFFFFFFF
+@group(0) @binding(6) var<storage, read> pageSlots: array<u32>;        // page table: (lod<<30)|slot or 0xFFFFFFFF
+@group(0) @binding(7) var volumeTex1:    texture_3d<f32>;    // brick atlas L1 (beta-5)
+@group(0) @binding(8) var volumeTex2:    texture_3d<f32>;    // brick atlas L2 (beta-5)
+@group(0) @binding(9) var volumeTex3:    texture_3d<f32>;    // brick atlas L3 (beta-5)
 
-// M3-3 brick sampling: page-table indirection from [0,1]^3 volume UV to a
-// linearly-filtered density sample in the brick atlas. Empty bricks return 0.
-// kBrickSize = 64 (interior), kBrickStored = 66 (1-voxel halo each side).
+// beta-5: page entry packs (lod<<30)|slot. Decode + sample the chosen LOD's
+// atlas. brickStored(lod) = (64>>lod)+2 = 66/34/18/10. The local position
+// inside the source brick is in [0, 64); divide by (1<<lod) for the
+// downsampled brick's interior.
 fn sampleVolume(uvw: vec3<f32>) -> f32 {
     let vp = clamp(uvw, vec3<f32>(0.0), vec3<f32>(0.999999)) * ubo.volSize.xyz;
     let brickIdx = vec3<i32>(vp) / 64;
-    let localF   = vp - vec3<f32>(brickIdx * 64);   // [0, 64) inside brick
+    let localF   = vp - vec3<f32>(brickIdx * 64);   // [0, 64) in L0 source voxels
     let pageGrid = vec3<i32>((ubo.volSize.xyz + 63.0) / 64.0);
     let pageIdx  = (brickIdx.z * pageGrid.y + brickIdx.y) * pageGrid.x + brickIdx.x;
-    let slot     = pageSlots[pageIdx];
-    if (slot == 0xFFFFFFFFu) { return 0.0; }
+    let page     = pageSlots[pageIdx];
+    if (page == 0xFFFFFFFFu) { return 0.0; }
 
-    let atlasG = vec3<i32>(ubo.atlasGrid.xyz);
+    let slot = page & 0x3FFFFFFFu;
+    let lod  = page >> 30u;
+
+    let atlasG      = vec3<i32>(ubo.atlasGrid.xyz);
+    let brickStored = i32(64u >> lod) + 2;
     let sx = i32(slot) % atlasG.x;
     let sy = (i32(slot) / atlasG.x) % atlasG.y;
     let sz = i32(slot) / (atlasG.x * atlasG.y);
-    let slotOrigin = vec3<f32>(f32(sx * 66 + 1), f32(sy * 66 + 1), f32(sz * 66 + 1));
-    let atlasVox = slotOrigin + localF;
-    let atlasUvw = (atlasVox + vec3<f32>(0.5)) / vec3<f32>(atlasG * 66);
-    return textureSampleLevel(volumeTex, volumeSampler, atlasUvw, 0.0).r;
+    let slotOrigin  = vec3<f32>(f32(sx * brickStored + 1),
+                                f32(sy * brickStored + 1),
+                                f32(sz * brickStored + 1));
+    let localFlod   = localF / f32(1u << lod);
+    let atlasVox    = slotOrigin + localFlod;
+    let atlasUvw    = (atlasVox + vec3<f32>(0.5)) / vec3<f32>(atlasG * brickStored);
+
+    if (lod == 0u) { return textureSampleLevel(volumeTex0, volumeSampler, atlasUvw, 0.0).r; }
+    if (lod == 1u) { return textureSampleLevel(volumeTex1, volumeSampler, atlasUvw, 0.0).r; }
+    if (lod == 2u) { return textureSampleLevel(volumeTex2, volumeSampler, atlasUvw, 0.0).r; }
+    return                  textureSampleLevel(volumeTex3, volumeSampler, atlasUvw, 0.0).r;
 }
 
 struct VSOut {

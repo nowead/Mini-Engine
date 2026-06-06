@@ -41,6 +41,16 @@ public:
     static constexpr uint32_t kBrickStored = kBrickSize + 2; // 66, with 1-voxel halo
     static constexpr uint32_t kEmptySlot   = 0xFFFFFFFFu;   // page table sentinel
 
+    // v1-beta beta-5 page-table encoding: high 2 bits = LOD (0..3), low 30 bits
+    // = atlas slot index. Sentinel 0xFFFFFFFF keeps its meaning (shaders MUST
+    // check page == kEmptySlot before decoding -- decoded sentinel would look
+    // like a valid L3 slot otherwise).
+    static constexpr uint32_t kPageLodShift = 30;
+    static constexpr uint32_t kPageSlotMask = 0x3FFFFFFFu;
+    static constexpr uint32_t encodePage(uint32_t slot, uint8_t lod) {
+        return (uint32_t(lod) << kPageLodShift) | (slot & kPageSlotMask);
+    }
+
     // v1-alpha streaming per-frame counters. v1-1 populates visibleBricks +
     // visibleNonEmpty; v1-2 adds visibleMissing for streaming-mode volumes;
     // bricksUploaded / bricksEvicted / visibleResident light up in v1-3.
@@ -67,7 +77,7 @@ public:
     // v1-3 streaming: how many brick uploads we'll execute in one frame.
     // Per-frame staging pool is sized at this. Best-effort -- if more bricks
     // need to come in than this budget, the remainder waits a frame.
-    static constexpr uint32_t kStreamUploadsPerFrame = 8;
+    static constexpr uint32_t kStreamUploadsPerFrame = 64;
     static constexpr uint32_t kStreamingFramesInFlight = 2;
 
     // v1-3 alpha auto-sizing budget. The build picks the smallest balanced
@@ -160,10 +170,15 @@ public:
     }
 
     // L0 (full-resolution) atlas view used by the existing shader bindings.
-    // beta-5 will add per-LOD bindings via atlasViewLod(level).
+    // beta-5 adds per-LOD bindings via atlasViewLod(level). In Static mode only
+    // L0 is allocated (the other slots are unused by the encoded page table),
+    // so fall back to L0 when callers ask for a higher level -- WebGPU bind
+    // groups reject nullptr entries, but the shader never reads these atlases
+    // for a Static-mode volume so the duplicate binding is harmless.
     rhi::RHITextureView* atlasView()         const { return m_atlasViews[0].get(); }
     rhi::RHITextureView* atlasViewLod(uint32_t level) const {
-        return (level < kLodLevels) ? m_atlasViews[level].get() : nullptr;
+        if (level >= kLodLevels) return nullptr;
+        return m_atlasViews[level] ? m_atlasViews[level].get() : m_atlasViews[0].get();
     }
     // Brick voxel extent per LOD: L0=66, L1=34, L2=18, L3=10 (kBrickSize >> L + 2).
     static constexpr uint32_t kBrickStoredAtLod(uint32_t level) {
@@ -178,19 +193,31 @@ public:
     glm::uvec3 pageGrid()   const { return m_pageGrid; }
     glm::uvec3 atlasGrid()  const { return m_atlasGrid; }
     glm::uvec3 atlasVoxels() const { return m_atlasGrid * kBrickStored; }
-    uint32_t   usedSlots()  const { return m_usedSlots; }
+    uint32_t   usedSlots()  const {
+        return m_usedSlotsPerLod[0] + m_usedSlotsPerLod[1]
+             + m_usedSlotsPerLod[2] + m_usedSlotsPerLod[3];
+    }
+    uint32_t   usedSlotsAtLod(uint32_t lod) const {
+        return (lod < kLodLevels) ? m_usedSlotsPerLod[lod] : 0u;
+    }
     uint32_t   totalSlots() const { return m_atlasGrid.x * m_atlasGrid.y * m_atlasGrid.z; }
 
     // Memory used by the atlas texture in bytes (R16Float = 2 B per voxel).
     // Used slots only — empty slots cost the same VRAM since the texture is
     // allocated dense, but this is the "live data" footprint that matters for
-    // M3-3 v1 streaming budgets.
+    // M3-3 v1 streaming budgets. v1-beta beta-4: sums over all LODs, weighting
+    // each LOD by its (smaller) brick storage size.
     uint64_t atlasBytesAllocated() const {
         const glm::uvec3 v = atlasVoxels();
         return static_cast<uint64_t>(v.x) * v.y * v.z * 2;
     }
     uint64_t atlasBytesUsed() const {
-        return static_cast<uint64_t>(m_usedSlots) * kBrickStored * kBrickStored * kBrickStored * 2;
+        uint64_t total = 0;
+        for (uint32_t lv = 0; lv < kLodLevels; ++lv) {
+            const uint64_t stored = kBrickStoredAtLod(lv);
+            total += static_cast<uint64_t>(m_usedSlotsPerLod[lv]) * stored * stored * stored * 2;
+        }
+        return total;
     }
     // Equivalent dense-volume bytes (the storage we'd need without bricking).
     uint64_t denseBytes() const {
@@ -211,7 +238,6 @@ private:
     glm::uvec3 m_volSize{0};
     glm::uvec3 m_pageGrid{0};
     glm::uvec3 m_atlasGrid{0};
-    uint32_t   m_usedSlots = 0;
 
     // v1-2 streaming-mode state. Empty / default-constructed in Static mode.
     Mode m_mode = Mode::StaticFullyLoaded;
@@ -224,8 +250,16 @@ private:
         uint32_t residentLod     = 0;          // v1-beta: which LOD this slot holds
         uint64_t lastFrameUsed   = 0;          // LRU key (monotonically increasing)
     };
-    std::vector<AtlasSlotState> m_slotStates;  // sized to totalSlots() in streaming mode
-    std::unordered_map<uint32_t, uint32_t> m_pageToSlot;  // page index -> slot index
+    // v1-beta beta-4: one slot-state vector per LOD. Each LOD atlas has its
+    // own (independent) slot space sized to atlasGrid total. Slot at LOD lv
+    // is stored in m_atlasTexes[lv][m_slotStates[lv][slot].residentPageIdx].
+    std::array<std::vector<AtlasSlotState>, kLodLevels> m_slotStates;
+    // page index -> (slot, lod). A brick is at exactly one slot at one LOD
+    // at any given time; the streaming update may migrate it as the camera
+    // moves (LRU drops the old LOD slot, a new upload lands at the new LOD).
+    std::unordered_map<uint32_t, std::pair<uint32_t, uint8_t>> m_pageToSlot;
+    // Per-LOD used-slot counter -- usedSlots() returns the sum.
+    std::array<uint32_t, kLodLevels> m_usedSlotsPerLod = {0, 0, 0, 0};
     // v1-beta beta-2: CPU mirror of "which LOD this virtual brick is currently
     // resident at". One byte per virtual brick, defaults to 0. beta-3 writes
     // selection, beta-4 streaming respects it, beta-5 shader reads via a GPU

@@ -447,26 +447,35 @@ bool VolumeRenderer::createPipeline(rhi::RHITextureView* depthView, void* native
     rhi::BindGroupLayoutDesc layoutDesc;
 #ifdef __EMSCRIPTEN__
     // WebGPU: depth is texture_depth_2d read via textureLoad (no sampler).
+    // beta-5 adds L1/L2/L3 atlas bindings at 7/8/9 so the shader can sample the
+    // chosen LOD's atlas instead of L0-only.
     layoutDesc.entries = {
         entry(0, S::Fragment, T::UniformBuffer),
         entry(1, S::Fragment, T::DepthTexture,   D::View2D),  // scene depth (textureLoad)
-        entry(2, S::Fragment, T::SampledTexture, D::View3D),  // brick atlas
+        entry(2, S::Fragment, T::SampledTexture, D::View3D),  // brick atlas L0
         entry(3, S::Fragment, T::Sampler),                    // atlas + LUT sampler (linear)
         entry(4, S::Fragment, T::SampledTexture, D::View2D),  // transfer-function LUT (256x1)
         rhi::BindGroupLayoutEntry(5, S::Fragment, T::ReadOnlyStorageBuffer),  // occupancy grid
         rhi::BindGroupLayoutEntry(6, S::Fragment, T::ReadOnlyStorageBuffer),  // brick page table
+        entry(7, S::Fragment, T::SampledTexture, D::View3D),  // brick atlas L1
+        entry(8, S::Fragment, T::SampledTexture, D::View3D),  // brick atlas L2
+        entry(9, S::Fragment, T::SampledTexture, D::View3D),  // brick atlas L3
     };
 #else
     // Vulkan: GLSL texelFetch(sampler2D(depth, sampler)) needs a depth sampler.
+    // beta-5 adds L1/L2/L3 atlas bindings at 8/9/10.
     layoutDesc.entries = {
         entry(0, S::Fragment, T::UniformBuffer),
         entry(1, S::Fragment, T::SampledTexture, D::View2D),  // scene depth
         entry(2, S::Fragment, T::Sampler),                    // depth sampler (nearest)
-        entry(3, S::Fragment, T::SampledTexture, D::View3D),  // brick atlas
+        entry(3, S::Fragment, T::SampledTexture, D::View3D),  // brick atlas L0
         entry(4, S::Fragment, T::Sampler),                    // atlas + LUT sampler (linear)
         entry(5, S::Fragment, T::SampledTexture, D::View2D),  // transfer-function LUT (256x1)
         rhi::BindGroupLayoutEntry(6, S::Fragment, T::ReadOnlyStorageBuffer),  // occupancy grid
         rhi::BindGroupLayoutEntry(7, S::Fragment, T::ReadOnlyStorageBuffer),  // brick page table
+        entry(8,  S::Fragment, T::SampledTexture, D::View3D), // brick atlas L1
+        entry(9,  S::Fragment, T::SampledTexture, D::View3D), // brick atlas L2
+        entry(10, S::Fragment, T::SampledTexture, D::View3D), // brick atlas L3
     };
 #endif
     layoutDesc.label = "VolumeBGLayout";
@@ -526,22 +535,28 @@ bool VolumeRenderer::createBindGroups(rhi::RHITextureView* depthView) {
         desc.entries = {
             rhi::BindGroupEntry::Buffer(0, m_uniformBuffers[i].get(), 0, sizeof(VolumeUBO)),
             rhi::BindGroupEntry::TextureView(1, depthView),
-            rhi::BindGroupEntry::TextureView(2, m_brick.atlasView()),
+            rhi::BindGroupEntry::TextureView(2, m_brick.atlasViewLod(0)),
             rhi::BindGroupEntry::Sampler(3, m_sampler.get()),
             rhi::BindGroupEntry::TextureView(4, m_lutView.get()),
             rhi::BindGroupEntry::Buffer(5, m_occBuffer.get(), 0, occBytes),
             rhi::BindGroupEntry::Buffer(6, m_brick.pageTable(), 0, pageBytes),
+            rhi::BindGroupEntry::TextureView(7, m_brick.atlasViewLod(1)),
+            rhi::BindGroupEntry::TextureView(8, m_brick.atlasViewLod(2)),
+            rhi::BindGroupEntry::TextureView(9, m_brick.atlasViewLod(3)),
         };
 #else
         desc.entries = {
             rhi::BindGroupEntry::Buffer(0, m_uniformBuffers[i].get(), 0, sizeof(VolumeUBO)),
             rhi::BindGroupEntry::TextureView(1, depthView),
             rhi::BindGroupEntry::Sampler(2, m_depthSampler.get()),
-            rhi::BindGroupEntry::TextureView(3, m_brick.atlasView()),
+            rhi::BindGroupEntry::TextureView(3, m_brick.atlasViewLod(0)),
             rhi::BindGroupEntry::Sampler(4, m_sampler.get()),
             rhi::BindGroupEntry::TextureView(5, m_lutView.get()),
             rhi::BindGroupEntry::Buffer(6, m_occBuffer.get(), 0, occBytes),
             rhi::BindGroupEntry::Buffer(7, m_brick.pageTable(), 0, pageBytes),
+            rhi::BindGroupEntry::TextureView(8,  m_brick.atlasViewLod(1)),
+            rhi::BindGroupEntry::TextureView(9,  m_brick.atlasViewLod(2)),
+            rhi::BindGroupEntry::TextureView(10, m_brick.atlasViewLod(3)),
         };
 #endif
         desc.label = "VolumeBindGroup";
@@ -639,11 +654,14 @@ bool VolumeRenderer::createAccumulationResources(uint32_t width, uint32_t height
         rhi::BindGroupLayoutDesc ld;
         ld.entries = {
             entry(0, S::Fragment, T::UniformBuffer),
-            entry(1, S::Fragment, T::SampledTexture, D::View3D),  // brick atlas
+            entry(1, S::Fragment, T::SampledTexture, D::View3D),  // brick atlas L0
             entry(2, S::Fragment, T::Sampler),                    // atlas + LUT sampler
             entry(3, S::Fragment, T::SampledTexture, D::View2D),  // TF LUT
             entry(4, S::Fragment, T::SampledTexture, D::View2D),  // history (prev accumulation)
             rhi::BindGroupLayoutEntry(5, S::Fragment, T::ReadOnlyStorageBuffer), // brick page table
+            entry(6, S::Fragment, T::SampledTexture, D::View3D),  // brick atlas L1 (beta-5)
+            entry(7, S::Fragment, T::SampledTexture, D::View3D),  // brick atlas L2 (beta-5)
+            entry(8, S::Fragment, T::SampledTexture, D::View3D),  // brick atlas L3 (beta-5)
         };
         ld.label = "VolumePathBGLayout";
         m_pathBindGroupLayout = m_device->createBindGroupLayout(ld);
@@ -728,11 +746,14 @@ bool VolumeRenderer::createAccumulationResources(uint32_t width, uint32_t height
             desc.layout = m_pathBindGroupLayout.get();
             desc.entries = {
                 rhi::BindGroupEntry::Buffer(0, m_uniformBuffers[fi].get(), 0, sizeof(VolumeUBO)),
-                rhi::BindGroupEntry::TextureView(1, m_brick.atlasView()),
+                rhi::BindGroupEntry::TextureView(1, m_brick.atlasViewLod(0)),
                 rhi::BindGroupEntry::Sampler(2, m_sampler.get()),
                 rhi::BindGroupEntry::TextureView(3, m_lutView.get()),
                 rhi::BindGroupEntry::TextureView(4, m_accumViews[pp].get()),  // read from this ping-pong slot
                 rhi::BindGroupEntry::Buffer(5, m_brick.pageTable(), 0, pathPageBytes),
+                rhi::BindGroupEntry::TextureView(6, m_brick.atlasViewLod(1)),
+                rhi::BindGroupEntry::TextureView(7, m_brick.atlasViewLod(2)),
+                rhi::BindGroupEntry::TextureView(8, m_brick.atlasViewLod(3)),
             };
             desc.label = "VolumePathBindGroup";
             m_pathBindGroups[fi][pp] = m_device->createBindGroup(desc);
@@ -1048,19 +1069,17 @@ VolumeRenderer::updateBrickStreaming(const glm::mat4& view,
                               boxSize.y / static_cast<float>(pg.y),
                               boxSize.z / static_cast<float>(pg.z));
 
-    // v1-beta beta-3 LOD selection prep. Camera position in world space is
-    // the inverse-view origin. brickWorldExtent is the largest axis of the
-    // brick in world units -- the LOD picker uses (distance / extent) so
-    // anisotropic spacing doesn't trip the thresholds.
+    // v1-beta LOD selection: distance-ratio thresholds. ratio = dist / brickExtent;
+    // closer brick -> lower (higher-detail) LOD. Selection only steers NEW uploads;
+    // BrickedVolume::updateStreaming does not migrate residents, so once a brick
+    // is in the atlas it stays at its original LOD (slightly blurry rather than
+    // a hole, which matches the roadmap M3-3 v1-beta intent of "hole-less
+    // multi-resolution"). If the chosen LOD atlas is full, streaming falls back
+    // to a coarser LOD. Numbers calibrated for 1024^3 dense (brickExtent ~0.125):
+    // default zoom 3.5 -> ratio 28 (L1), max zoom-out 10 -> ratio 80 (L3).
     const glm::vec3 cameraPos = glm::vec3(glm::inverse(view) * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
     const float brickWorldExtent = std::max({brickSize.x, brickSize.y, brickSize.z});
     const bool streaming = m_brick.isStreaming();
-    // Threshold ratios for L0 / L1 / L2 boundaries (distance / brick-extent);
-    // >= the last value falls to L3. Calibrated so the camera's min distance of
-    // 1.0 puts a 1024^3-dense brick (extent ~0.125 world units) at ratio 8 = L0,
-    // the default 3.5 distance lands ratio 28 = L1, and a zoom-out to distance
-    // 10 lands ratio 80 = L3. Future tuning could compute these from fov +
-    // screen height for screen-pixel-aware selection.
     constexpr float kLodRatios[3] = {10.0f, 30.0f, 70.0f};
     auto pickLod = [&](const glm::vec3& brickCenter) -> uint8_t {
         const float dist = glm::length(brickCenter - cameraPos);
@@ -1075,12 +1094,10 @@ VolumeRenderer::updateBrickStreaming(const glm::mat4& view,
     //   pageHasData(idx): does the source brick contain non-air voxels?
     //   pageTableHost[idx] != kEmptySlot: is that brick currently in the atlas?
     // Static mode: those two agree -- non-empty bricks are always resident.
-    // Streaming mode: pageTableHost flips as v1-3 pages bricks in/out.
+    // Streaming mode: pageTableHost flips as the streaming update pages bricks in/out.
     const auto& pageHost = m_brick.pageTableHost();
     const bool haveHost = !pageHost.empty();
 
-    // Collect visible page indices for v1-3 streaming. In Static mode we
-    // skip this allocation -- updateStreaming would be a no-op anyway.
     std::vector<uint32_t> visibleList;
     if (streaming) visibleList.reserve(static_cast<size_t>(pg.x * pg.y * pg.z) / 4);
 
@@ -1093,8 +1110,6 @@ VolumeRenderer::updateBrickStreaming(const glm::mat4& view,
                 ++stats.visibleBricks;
                 const uint32_t idx = (bz * pg.y + by) * pg.x + bx;
                 if (m_brick.pageHasData(idx)) {
-                    // Record LOD selection for this visible non-empty brick;
-                    // beta-4 streaming will read it back to decide uploads.
                     if (streaming) {
                         const uint8_t lod = pickLod(0.5f * (mn + mx));
                         m_brick.setBrickLod(idx, lod);

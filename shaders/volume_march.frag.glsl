@@ -34,36 +34,50 @@ layout(set = 0, binding = 0) uniform VolumeUBO {
 
 layout(set = 0, binding = 1) uniform texture2D depthTex;
 layout(set = 0, binding = 2) uniform sampler   depthSampler;
-layout(set = 0, binding = 3) uniform texture3D volumeTex;     // M3-3 brick atlas (R16Float)
+layout(set = 0, binding = 3) uniform texture3D volumeTex0;    // brick atlas L0 (R16Float)
 layout(set = 0, binding = 4) uniform sampler   volumeSampler;
 layout(set = 0, binding = 5) uniform texture2D tfLUT;         // 256x1 density -> (rgb, opacity)
 layout(std430, set = 0, binding = 6) readonly buffer OccGrid {
     vec2 occCells[];   // per macrocell: (min, max) intensity, for empty-space skipping
 };
 layout(std430, set = 0, binding = 7) readonly buffer PageTable {
-    uint pageSlots[];  // M3-3 page table: per virtual brick, atlas slot index or 0xFFFFFFFF
+    uint pageSlots[];  // page table: per virtual brick, encoded (lod<<30)|slot or 0xFFFFFFFF
 };
+layout(set = 0, binding = 8)  uniform texture3D volumeTex1;   // brick atlas L1 (beta-5)
+layout(set = 0, binding = 9)  uniform texture3D volumeTex2;   // brick atlas L2 (beta-5)
+layout(set = 0, binding = 10) uniform texture3D volumeTex3;   // brick atlas L3 (beta-5)
 
-// M3-3 brick sampling: page-table indirection from [0,1]^3 volume UV to a
-// linearly-filtered density sample in the brick atlas. Empty bricks return 0.
-// kBrickSize = 64 (interior), kBrickStored = 66 (1-voxel halo each side).
+// beta-5: page entry packs (lod<<30)|slot. Decode + sample the chosen LOD's
+// atlas. brickStored(lod) = (64>>lod) + 2 = 66/34/18/10. The local position
+// inside the source brick is in [0, 64); divide by (1<<lod) to map into the
+// downsampled brick's interior.
 float sampleVolume(vec3 uvw) {
     vec3 vp = clamp(uvw, vec3(0.0), vec3(0.999999)) * ubo.volSize.xyz;
     ivec3 brickIdx = ivec3(vp) / 64;
-    vec3  localF   = vp - vec3(brickIdx * 64);   // [0, 64) inside the brick
+    vec3  localF   = vp - vec3(brickIdx * 64);   // [0, 64) in L0 source voxels
     ivec3 pageGrid = ivec3((ubo.volSize.xyz + 63.0) / 64.0);
     int pageIdx = (brickIdx.z * pageGrid.y + brickIdx.y) * pageGrid.x + brickIdx.x;
-    uint slot = pageSlots[pageIdx];
-    if (slot == 0xFFFFFFFFu) return 0.0;
+    uint page = pageSlots[pageIdx];
+    if (page == 0xFFFFFFFFu) return 0.0;
 
-    ivec3 atlasG = ivec3(ubo.atlasGrid.xyz);
+    uint slot = page & 0x3FFFFFFFu;
+    uint lod  = page >> 30;
+
+    ivec3 atlasG     = ivec3(ubo.atlasGrid.xyz);
+    int   brickStored = int(64u >> lod) + 2;
     int sx = int(slot) % atlasG.x;
     int sy = (int(slot) / atlasG.x) % atlasG.y;
     int sz = int(slot) / (atlasG.x * atlasG.y);
-    // Interior of the brick starts at slot*66 + 1 (offset past the -1 halo).
-    vec3 atlasVox = vec3(float(sx * 66 + 1), float(sy * 66 + 1), float(sz * 66 + 1)) + localF;
-    vec3 atlasUvw = (atlasVox + 0.5) / vec3(atlasG * 66);
-    return texture(sampler3D(volumeTex, volumeSampler), atlasUvw).r;
+    vec3  localFlod   = localF / float(1u << lod);
+    vec3  atlasVox    = vec3(float(sx * brickStored + 1),
+                             float(sy * brickStored + 1),
+                             float(sz * brickStored + 1)) + localFlod;
+    vec3  atlasUvw    = (atlasVox + 0.5) / vec3(atlasG * brickStored);
+
+    if (lod == 0u) return texture(sampler3D(volumeTex0, volumeSampler), atlasUvw).r;
+    if (lod == 1u) return texture(sampler3D(volumeTex1, volumeSampler), atlasUvw).r;
+    if (lod == 2u) return texture(sampler3D(volumeTex2, volumeSampler), atlasUvw).r;
+    return                texture(sampler3D(volumeTex3, volumeSampler), atlasUvw).r;
 }
 
 // Ray-AABB slab test. Returns (tNear, tFar); tNear > tFar means miss.

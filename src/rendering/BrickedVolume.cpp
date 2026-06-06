@@ -244,7 +244,7 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
     // all-sentinel (the empty atlas the shader will sample until v1-3
     // pages bricks in).
     // ------------------------------------------------------------------
-    m_usedSlots = 0;
+    m_usedSlotsPerLod = {0, 0, 0, 0};
     if (m_mode == Mode::StaticFullyLoaded) {
         for (uint32_t bz = 0; bz < m_pageGrid.z; ++bz) {
             for (uint32_t by = 0; by < m_pageGrid.y; ++by) {
@@ -253,8 +253,8 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
                     const bool hasData = (m_pageOccupancy[pageIdx >> 3] >> (pageIdx & 7)) & 1u;
                     if (!hasData) continue;
 
-                    const uint32_t slot = m_usedSlots++;
-                    pageTable[pageIdx] = slot;
+                    const uint32_t slot = m_usedSlotsPerLod[0]++;
+                    pageTable[pageIdx] = encodePage(slot, 0);  // Static always L0
 
                     // Atlas slot origin (in voxels) for linear unpacking:
                     // slot = sx + sy*Ax + sz*Ax*Ay.
@@ -296,7 +296,7 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
     if (m_mode == Mode::Streaming) {
         m_originalHalfData = halfData;            // copy for v1-3 brick extraction
         m_emptyValueHalf   = emptyValueHalf;
-        m_slotStates.assign(totalSlots, AtlasSlotState{});
+        for (auto& states : m_slotStates) states.assign(totalSlots, AtlasSlotState{});
         m_pageToSlot.clear();
         m_pageToSlot.reserve(nonEmptyCount);      // upper bound for the lifetime
         m_lodTableHost.assign(totalPageEntries, 0);  // beta-3 writes; beta-4 uses
@@ -482,7 +482,7 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
     LOG_INFO("BrickedVolume") << "built " << w << "x" << h << "x" << d
         << " -> page " << m_pageGrid.x << "x" << m_pageGrid.y << "x" << m_pageGrid.z
         << " (" << nonEmptyCount << " non-empty), "
-        << m_usedSlots << "/" << totalSlots << " atlas slots, mode = "
+        << usedSlots() << "/" << totalSlots << " atlas slots, mode = "
         << (m_mode == Mode::Streaming ? "Streaming" : "Static")
         << " (atlas " << atlasVoxelsX << "x" << atlasVoxelsY << "x" << atlasVoxelsZ << ")";
     return true;
@@ -497,59 +497,60 @@ namespace {
 // requirement (see CLAUDE.md section 9). Returned values are used both at
 // staging-buffer allocation time and at copyBufferToTexture descriptor fill.
 struct BrickStagingLayout {
+    uint32_t brickStored      = 0;   // kBrickStored at this LOD (66/34/18/10)
     uint32_t paddedBytesPerRow = 0;
     uint64_t totalBytes        = 0;
 };
-inline BrickStagingLayout computeBrickLayout() {
-    const uint32_t tightRow = BrickedVolume::kBrickStored * 2;  // R16Float = 2 B
+inline BrickStagingLayout computeBrickLayout(uint32_t lod) {
+    const uint32_t stored = BrickedVolume::kBrickStoredAtLod(lod);
+    const uint32_t tightRow = stored * 2;  // R16Float = 2 B
 #ifdef __EMSCRIPTEN__
     const uint32_t paddedRow = (tightRow + 255u) & ~255u;
 #else
     const uint32_t paddedRow = tightRow;
 #endif
     BrickStagingLayout L;
+    L.brickStored       = stored;
     L.paddedBytesPerRow = paddedRow;
-    L.totalBytes = static_cast<uint64_t>(paddedRow)
-                 * BrickedVolume::kBrickStored
-                 * BrickedVolume::kBrickStored;
+    L.totalBytes        = static_cast<uint64_t>(paddedRow) * stored * stored;
     return L;
 }
 
-// Pack one virtual brick from the source CPU buffer into a freshly mapped
-// staging buffer with the WebGPU-aligned row stride. Mirrors the per-brick
-// copy inside the original build() pack loop.
+// Pack one virtual brick at a given LOD from the source CPU buffer (m_originalHalfData
+// for L0, m_mipChain[lod-1] for L1..L3) into a freshly mapped staging buffer
+// with the WebGPU-aligned row stride. brickSizeLod = kBrickSize >> lod (64,32,
+// 16,8) and brickStoredLod = brickSizeLod + 2 set the per-brick voxel extents
+// at this LOD; the source volume dimensions follow mipDims(lod).
 void packBrickToStaging(const std::vector<uint16_t>& src,
                         uint32_t srcW, uint32_t srcH, uint32_t srcD,
                         uint32_t bx, uint32_t by, uint32_t bz,
+                        uint32_t brickSizeLod,
+                        uint32_t brickStoredLod,
                         uint8_t* mapped,
                         uint32_t paddedBytesPerRow) {
-    using BV = BrickedVolume;
-    const int srcX0 = static_cast<int>(bx * BV::kBrickSize) - 1;
-    const int srcY0 = static_cast<int>(by * BV::kBrickSize) - 1;
-    const int srcZ0 = static_cast<int>(bz * BV::kBrickSize) - 1;
+    const int srcX0 = static_cast<int>(bx * brickSizeLod) - 1;
+    const int srcY0 = static_cast<int>(by * brickSizeLod) - 1;
+    const int srcZ0 = static_cast<int>(bz * brickSizeLod) - 1;
 
-    // Interior fast path: the entire 66^3 brick (halo included) lies inside
-    // the source volume, so no clamping is needed and each row is a contiguous
-    // 132-byte run -- memcpy crushes the per-voxel branchy loop. For 1024^3
-    // default-sphere data this hits ~90% of bricks (only the page-grid edge
-    // ring is boundary), and the streaming CPU time on Case C drops about
-    // an order of magnitude. memcpy already SIMD-vectorises via libc.
+    // Interior fast path: the entire brick (halo included) lies inside the
+    // source volume, so no clamping is needed and each row is a contiguous
+    // memcpy of brickStoredLod * 2 bytes. Most non-edge bricks hit this.
     const bool interior =
         srcX0 >= 0 && srcY0 >= 0 && srcZ0 >= 0 &&
-        srcX0 + static_cast<int>(BV::kBrickStored) <= static_cast<int>(srcW) &&
-        srcY0 + static_cast<int>(BV::kBrickStored) <= static_cast<int>(srcH) &&
-        srcZ0 + static_cast<int>(BV::kBrickStored) <= static_cast<int>(srcD);
+        srcX0 + static_cast<int>(brickStoredLod) <= static_cast<int>(srcW) &&
+        srcY0 + static_cast<int>(brickStoredLod) <= static_cast<int>(srcH) &&
+        srcZ0 + static_cast<int>(brickStoredLod) <= static_cast<int>(srcD);
 
     if (interior) {
-        const size_t rowBytes = static_cast<size_t>(BV::kBrickStored) * sizeof(uint16_t);
-        for (uint32_t lz = 0; lz < BV::kBrickStored; ++lz) {
+        const size_t rowBytes = static_cast<size_t>(brickStoredLod) * sizeof(uint16_t);
+        for (uint32_t lz = 0; lz < brickStoredLod; ++lz) {
             const size_t srcZIdx = static_cast<size_t>(srcZ0 + static_cast<int>(lz));
-            for (uint32_t ly = 0; ly < BV::kBrickStored; ++ly) {
+            for (uint32_t ly = 0; ly < brickStoredLod; ++ly) {
                 const size_t srcYIdx = static_cast<size_t>(srcY0 + static_cast<int>(ly));
                 const uint16_t* srcRow =
                     src.data() + (srcZIdx * srcH + srcYIdx) * srcW + static_cast<size_t>(srcX0);
                 uint8_t* dstRow =
-                    mapped + (static_cast<uint64_t>(lz) * BV::kBrickStored + ly) * paddedBytesPerRow;
+                    mapped + (static_cast<uint64_t>(lz) * brickStoredLod + ly) * paddedBytesPerRow;
                 std::memcpy(dstRow, srcRow, rowBytes);
             }
         }
@@ -564,13 +565,13 @@ void packBrickToStaging(const std::vector<uint16_t>& src,
         z = std::clamp(z, 0, static_cast<int>(srcD) - 1);
         return src[(static_cast<size_t>(z) * srcH + y) * srcW + x];
     };
-    for (uint32_t lz = 0; lz < BV::kBrickStored; ++lz) {
-        for (uint32_t ly = 0; ly < BV::kBrickStored; ++ly) {
+    for (uint32_t lz = 0; lz < brickStoredLod; ++lz) {
+        for (uint32_t ly = 0; ly < brickStoredLod; ++ly) {
             uint16_t* dstRow = reinterpret_cast<uint16_t*>(
-                mapped + (static_cast<uint64_t>(lz) * BV::kBrickStored + ly) * paddedBytesPerRow);
+                mapped + (static_cast<uint64_t>(lz) * brickStoredLod + ly) * paddedBytesPerRow);
             const int srcZ = srcZ0 + static_cast<int>(lz);
             const int srcY = srcY0 + static_cast<int>(ly);
-            for (uint32_t lx = 0; lx < BV::kBrickStored; ++lx) {
+            for (uint32_t lx = 0; lx < brickStoredLod; ++lx) {
                 dstRow[lx] = srcVoxel(srcX0 + static_cast<int>(lx), srcY, srcZ);
             }
         }
@@ -587,91 +588,137 @@ BrickedVolume::updateStreaming(const std::vector<uint32_t>& visiblePageIndices,
     if (!m_device || !m_queue) return stats;
 
     // ------------------------------------------------------------------
-    // 1. Walk the visible set once: bump LRU on residents, collect missing.
+    // 1. Walk the visible set once. For each non-empty visible brick:
+    //    - resident at ANY LOD -> bump lastFrameUsed (no migration)
+    //    - not resident -> queue an upload at the desired LOD
+    // No migration: once a brick is in the atlas it stays at its original LOD
+    // until LRU evicts it (only when not visible). This keeps the visual
+    // stable while the camera moves -- selection only steers NEW uploads.
+    // Stale-LOD residents render slightly blurry rather than as holes.
     // ------------------------------------------------------------------
-    std::vector<uint32_t> newlyNeeded;
+    struct NewlyNeeded { uint32_t pageIdx; uint8_t lod; };
+    std::vector<NewlyNeeded> newlyNeeded;
     newlyNeeded.reserve(std::min<size_t>(visiblePageIndices.size(),
                                           kStreamUploadsPerFrame * 4u));
     for (uint32_t pageIdx : visiblePageIndices) {
-        if (!pageHasData(pageIdx)) continue;  // empty source brick, never needs upload
+        if (!pageHasData(pageIdx)) continue;
         auto it = m_pageToSlot.find(pageIdx);
         if (it != m_pageToSlot.end()) {
-            m_slotStates[it->second].lastFrameUsed = frameIdx;
-        } else {
-            newlyNeeded.push_back(pageIdx);
+            const uint32_t residentSlot = it->second.first;
+            const uint8_t  residentLod  = it->second.second;
+            m_slotStates[residentLod][residentSlot].lastFrameUsed = frameIdx;
+            continue;
         }
+        newlyNeeded.push_back({pageIdx, m_lodTableHost[pageIdx]});
     }
     if (newlyNeeded.empty()) return stats;
+
+    // v1-beta beta-4: prioritise lower LOD (closer / higher detail) so the
+    // K-per-frame budget spends on bricks the viewer most needs to see first.
+    // Without this the iteration order in the cull (bz->by->bx) puts the
+    // far-side L3 bricks before the central L0 bricks, and central detail
+    // (e.g. the bone core of a CT phantom) takes many frames to migrate in.
+    std::sort(newlyNeeded.begin(), newlyNeeded.end(),
+              [](const NewlyNeeded& a, const NewlyNeeded& b) {
+                  return a.lod < b.lod;
+              });
 
     const uint32_t totalSlots = m_atlasGrid.x * m_atlasGrid.y * m_atlasGrid.z;
     const uint32_t budget = std::min<uint32_t>(static_cast<uint32_t>(newlyNeeded.size()),
                                                 kStreamUploadsPerFrame);
 
     // ------------------------------------------------------------------
-    // 2. Pick target slots. Prefer empty slots; LRU-evict otherwise. We
-    //    skip slots whose lastFrameUsed == frameIdx (they hold visible
-    //    bricks we just bumped) so we never thrash residents we still
-    //    need this frame.
+    // 2. For each newly-needed brick, pick a target slot AT THE CHOSEN LOD,
+    //    falling back to coarser LODs (lod+1, lod+2, ...) if that atlas has
+    //    no free or LRU-evictable slot. Together with "no migration" this
+    //    means every visible brick gets *some* LOD as long as the union of
+    //    L0..L3 atlases has space, so the shader never returns the sentinel
+    //    for a brick that should be visible.
+    //    Each LOD has its own slot space (m_slotStates[lod] has totalSlots
+    //    entries). Preference: empty slot; else LRU-evict from non-visible
+    //    residents (lastFrameUsed != frameIdx). Visible-this-frame slots are
+    //    never evicted.
     // ------------------------------------------------------------------
-    std::vector<uint32_t> targets;
+    struct UploadTarget { uint32_t pageIdx; uint32_t slot; uint8_t lod; };
+    std::vector<UploadTarget> targets;
     targets.reserve(budget);
-    for (uint32_t s = 0; s < totalSlots && targets.size() < budget; ++s) {
-        if (m_slotStates[s].residentPageIdx == kEmptySlot)
-            targets.push_back(s);
-    }
-    if (targets.size() < budget) {
-        std::vector<uint32_t> evictable;
-        evictable.reserve(totalSlots);
+
+    auto pickSlotForLod = [&](uint8_t lod) -> uint32_t {
+        auto& states = m_slotStates[lod];
         for (uint32_t s = 0; s < totalSlots; ++s) {
-            if (m_slotStates[s].residentPageIdx != kEmptySlot &&
-                m_slotStates[s].lastFrameUsed != frameIdx) {
-                evictable.push_back(s);
+            if (states[s].residentPageIdx == kEmptySlot) return s;
+        }
+        uint64_t bestFrame = UINT64_MAX;
+        uint32_t bestSlot  = kEmptySlot;
+        for (uint32_t s = 0; s < totalSlots; ++s) {
+            if (states[s].residentPageIdx != kEmptySlot &&
+                states[s].lastFrameUsed != frameIdx &&
+                states[s].lastFrameUsed < bestFrame) {
+                bestFrame = states[s].lastFrameUsed;
+                bestSlot  = s;
             }
         }
-        std::sort(evictable.begin(), evictable.end(),
-                  [&](uint32_t a, uint32_t b) {
-                      return m_slotStates[a].lastFrameUsed
-                           < m_slotStates[b].lastFrameUsed;
-                  });
-        const size_t need = budget - targets.size();
-        const size_t take = std::min(need, evictable.size());
-        for (size_t i = 0; i < take; ++i) targets.push_back(evictable[i]);
+        return bestSlot;
+    };
+
+    for (uint32_t i = 0; i < budget; ++i) {
+        const uint32_t pageIdx = newlyNeeded[i].pageIdx;
+        uint32_t pickedSlot = kEmptySlot;
+        uint8_t  pickedLod  = newlyNeeded[i].lod;
+        for (uint8_t lod = newlyNeeded[i].lod; lod < kLodLevels; ++lod) {
+            pickedSlot = pickSlotForLod(lod);
+            if (pickedSlot != kEmptySlot) { pickedLod = lod; break; }
+        }
+        if (pickedSlot == kEmptySlot) continue;  // every LOD atlas full of visible bricks
+        targets.push_back({pageIdx, pickedSlot, pickedLod});
     }
 
-    const uint32_t uploads = std::min<uint32_t>(budget, static_cast<uint32_t>(targets.size()));
+    const uint32_t uploads = static_cast<uint32_t>(targets.size());
     if (uploads == 0) return stats;
 
     // ------------------------------------------------------------------
-    // 3. Record the upload pass: transition atlas to CopyDst, do K
-    //    copyBufferToTexture calls, transition back.
+    // 3. Record the upload pass. With multi-LOD destinations we transition
+    //    each LOD atlas once (only LODs that actually receive an upload).
     // ------------------------------------------------------------------
     const uint32_t frameSlot = static_cast<uint32_t>(frameIdx % kStreamingFramesInFlight);
-    const BrickStagingLayout L = computeBrickLayout();
+
+    std::array<bool, kLodLevels> lodTouched = {false, false, false, false};
+    for (const auto& t : targets) lodTouched[t.lod] = true;
 
     auto enc = m_device->createCommandEncoder();
-    enc->transitionTextureLayout(m_atlasTexes[0].get(),
-                                 rhi::TextureLayout::ShaderReadOnly,
-                                 rhi::TextureLayout::TransferDst);
+    for (uint32_t lv = 0; lv < kLodLevels; ++lv) {
+        if (lodTouched[lv]) {
+            enc->transitionTextureLayout(m_atlasTexes[lv].get(),
+                                         rhi::TextureLayout::ShaderReadOnly,
+                                         rhi::TextureLayout::TransferDst);
+        }
+    }
 
     for (uint32_t i = 0; i < uploads; ++i) {
-        const uint32_t pageIdx = newlyNeeded[i];
-        const uint32_t slot    = targets[i];
+        const uint32_t pageIdx = targets[i].pageIdx;
+        const uint32_t slot    = targets[i].slot;
+        const uint8_t  lod     = targets[i].lod;
+        auto& states = m_slotStates[lod];
+        const BrickStagingLayout L = computeBrickLayout(lod);
+        const uint32_t brickSizeLod = kBrickSize >> lod;
 
-        // Evict previous resident of this slot, if any.
-        const uint32_t prevPage = m_slotStates[slot].residentPageIdx;
+        // Evict previous resident of this slot at this LOD, if any.
+        const uint32_t prevPage = states[slot].residentPageIdx;
         if (prevPage != kEmptySlot) {
             m_pageToSlot.erase(prevPage);
             m_pageTableHost[prevPage] = kEmptySlot;
             ++stats.bricksEvicted;
         } else {
-            ++m_usedSlots;  // claiming a previously-empty slot
+            ++m_usedSlotsPerLod[lod];
         }
 
-        // Lazy-alloc this staging slot on first use.
+        // Lazy-alloc the staging slot at L0 size (largest LOD); smaller LODs
+        // just write a prefix. Slots are indexed by frame + upload index.
         auto& stagingPtr = m_brickStaging[frameSlot][i];
         if (!stagingPtr) {
+            const BrickStagingLayout L0 = computeBrickLayout(0);
             rhi::BufferDesc bd{};
-            bd.size  = L.totalBytes;
+            bd.size  = L0.totalBytes;  // sized for the largest LOD's brick
             bd.usage = rhi::BufferUsage::CopySrc | rhi::BufferUsage::MapWrite;
             bd.label = "BrickStreamStaging";
             stagingPtr = m_device->createBuffer(bd);
@@ -681,18 +728,21 @@ BrickedVolume::updateStreaming(const std::vector<uint32_t>& visiblePageIndices,
             }
         }
 
-        // Decompose pageIdx into brick coords.
+        // Decompose pageIdx into virtual-brick coords.
         const uint32_t bx = pageIdx % m_pageGrid.x;
         const uint32_t by = (pageIdx / m_pageGrid.x) % m_pageGrid.y;
         const uint32_t bz =  pageIdx / (m_pageGrid.x * m_pageGrid.y);
 
-        // CPU-pack the brick into staging.
+        // CPU-pack from the LOD's mip data.
+        const std::vector<uint16_t>& srcData = mipData(lod);
+        const glm::uvec3 srcDims = mipDims(lod);
         uint8_t* mapped = static_cast<uint8_t*>(stagingPtr->map());
-        packBrickToStaging(m_originalHalfData, m_volSize.x, m_volSize.y, m_volSize.z,
-                           bx, by, bz, mapped, L.paddedBytesPerRow);
+        packBrickToStaging(srcData, srcDims.x, srcDims.y, srcDims.z,
+                           bx, by, bz, brickSizeLod, L.brickStored,
+                           mapped, L.paddedBytesPerRow);
         stagingPtr->unmap();
 
-        // Atlas slot origin in voxels.
+        // Atlas slot origin in voxels (LOD-specific stride).
         const uint32_t sx = slot % m_atlasGrid.x;
         const uint32_t sy = (slot / m_atlasGrid.x) % m_atlasGrid.y;
         const uint32_t sz =  slot / (m_atlasGrid.x * m_atlasGrid.y);
@@ -702,31 +752,38 @@ BrickedVolume::updateStreaming(const std::vector<uint32_t>& visiblePageIndices,
         bc.offset = 0;
 #ifdef __EMSCRIPTEN__
         bc.bytesPerRow  = L.paddedBytesPerRow;
-        bc.rowsPerImage = kBrickStored;
+        bc.rowsPerImage = L.brickStored;
 #else
-        bc.bytesPerRow  = 0;  // tightly packed (Vulkan reads this as texels)
+        bc.bytesPerRow  = 0;
         bc.rowsPerImage = 0;
 #endif
         rhi::TextureCopyInfo tc{};
-        tc.texture  = m_atlasTexes[0].get();
+        tc.texture  = m_atlasTexes[lod].get();
         tc.mipLevel = 0;
-        tc.origin   = {static_cast<int32_t>(sx * kBrickStored),
-                       static_cast<int32_t>(sy * kBrickStored),
-                       static_cast<int32_t>(sz * kBrickStored)};
+        tc.origin   = {static_cast<int32_t>(sx * L.brickStored),
+                       static_cast<int32_t>(sy * L.brickStored),
+                       static_cast<int32_t>(sz * L.brickStored)};
         tc.aspect   = 0;
         enc->copyBufferToTexture(bc, tc,
-            rhi::Extent3D{kBrickStored, kBrickStored, kBrickStored});
+            rhi::Extent3D{L.brickStored, L.brickStored, L.brickStored});
 
-        // Update CPU mirror.
-        m_slotStates[slot] = AtlasSlotState{pageIdx, /*residentLod=*/0u, frameIdx};
-        m_pageToSlot[pageIdx] = slot;
-        m_pageTableHost[pageIdx] = slot;
+        // Update CPU mirrors. m_pageTableHost only reflects L0 residents; the
+        // current shader only knows about L0, so non-L0 bricks read as
+        // sentinel and appear as holes until beta-5 makes the shader sample
+        // the chosen LOD's atlas.
+        states[slot] = AtlasSlotState{pageIdx, lod, frameIdx};
+        m_pageToSlot[pageIdx] = {slot, lod};
+        m_pageTableHost[pageIdx] = encodePage(slot, lod);
         ++stats.bricksUploaded;
     }
 
-    enc->transitionTextureLayout(m_atlasTexes[0].get(),
-                                 rhi::TextureLayout::TransferDst,
-                                 rhi::TextureLayout::ShaderReadOnly);
+    for (uint32_t lv = 0; lv < kLodLevels; ++lv) {
+        if (lodTouched[lv]) {
+            enc->transitionTextureLayout(m_atlasTexes[lv].get(),
+                                         rhi::TextureLayout::TransferDst,
+                                         rhi::TextureLayout::ShaderReadOnly);
+        }
+    }
 
     // ------------------------------------------------------------------
     // 4. Push the page-table mirror to the GPU. Full re-upload: at typical
