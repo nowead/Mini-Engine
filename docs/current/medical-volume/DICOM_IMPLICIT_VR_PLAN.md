@@ -38,6 +38,7 @@ VR LE. 즉 transfer syntax UID는 Explicit VR로 읽고, 그 이후 dataset만 �
 ### Step 2 — 파서 리팩토링 (file meta vs dataset 분리)
 
 `parseSlice`를 둘로 분할:
+
 - `parseFileMeta(buf, size, off)` → TransferSyntaxUID 읽고 dataset 시작 offset 반환
 - `parseExplicitDataset(...)` → 현재 본문 그대로
 - `parseImplicitDataset(...)` → 신규 (Step 4)
@@ -77,6 +78,7 @@ VR LE. 즉 transfer syntax UID는 Explicit VR로 읽고, 그 이후 dataset만 �
 ### Step 4 — Implicit VR Dataset Parser
 
 `parseImplicitDataset`:
+
 - 8-byte element header (tag 4B + len 4B)
 - Tag dictionary에서 VR 룩업
 - VR 기반 파싱 (`US` → 2B int, `DS` → string parse 등)
@@ -142,3 +144,44 @@ VR LE. 즉 transfer syntax UID는 Explicit VR로 읽고, 그 이후 dataset만 �
 
 Step 1부터 atomic 진행. 각 단계 끝에 커밋. 최종 통합 커밋 1회 또는
 단계별 ~5 커밋 (사용자 선호).
+
+---
+
+## 8. 검증 결과 (2026-06-07, 구현 후)
+
+### 합성 데이터
+
+| 코퍼스 | 크기 | 결과 |
+| --- | --- | --- |
+| 32×32×8 Explicit | 1.2 KB/file × 8 | `[INFO][Dicom] loaded ... range [-1000,800]` |
+| 32×32×8 Implicit | 1.2 KB/file × 8 | `[INFO][Dicom] loaded ... range [-1000,800]` — Explicit와 voxel 동일 |
+| **256×256×128 Implicit** | **17 MB total** | 정상 로드 — 임상 스케일 동작 |
+
+### 실제 Implicit VR LE 임상 파일 (pydicom 테스트 데이터)
+
+공개 코퍼스에서 16비트 image-bearing Implicit VR LE는 드물다 (TCIA 다수가 그렇지만
+NBIA 인증 다운로드 필요). pydicom 메인 저장소엔 **RT (radiotherapy) 파일**이 있어
+파서 dispatch 자체는 실 임상 파일에서 검증 가능:
+
+| 파일 | TS | 파서 결과 | 의미 |
+| --- | --- | --- | --- |
+| `rtplan.dcm` | Implicit VR LE | `[ERROR] no PixelData` | 파서가 끝까지 walk 후 정상 reject |
+| `rtdose.dcm` | Implicit VR LE | `[ERROR] unsupported bitsAllocated 32` | **dictionary 룩업 + uint16 read 정확** |
+| `rtstruct.dcm` | Implicit VR LE | `[ERROR] missing DICM magic` | 일부 RT 파일은 preamble 없음 (별 이슈) |
+
+`rtdose.dcm`의 `bitsAllocated 32` 감지가 핵심 신호 — 파서가:
+
+1. file meta 읽고 Implicit VR LE 인식 ✓
+2. Implicit walker로 dispatch ✓
+3. tag (0028,0100) → US를 dictionary에서 룩업 ✓
+4. 2-byte uint16 값 `32` 디코드 ✓
+
+### 미해결 갭
+
+**16비트 이미지 + Implicit VR LE 공개 샘플 미확보**. 다음 옵션:
+
+- TCIA NBIA tool로 1-2 시리즈 수동 다운로드 (인증 필요, ~수십 MB)
+- 합성 데이터 + 실 RT dispatch 검증으로 갈음 (현재 상태)
+- 향후 사용자가 PACS 출력 받으면 실측 가능
+
+본 작업 범위에서는 **합성 256³ 통과 + 실 RT 파일 dispatch 정확성**으로 마감.
