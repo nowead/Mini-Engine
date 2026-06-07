@@ -92,9 +92,21 @@ public:
     uint32_t atlasY() const { return m_volume ? m_volume->getAtlasGrid().y : 0u; }
     uint32_t atlasZ() const { return m_volume ? m_volume->getAtlasGrid().z : 0u; }
     uint32_t slotsUsed()  const { return m_volume ? m_volume->getUsedSlots() : 0u; }
-    uint32_t slotsTotal() const { return m_volume ? m_volume->getTotalSlots() : 0u; }
+    // Streaming allocates kLodLevels atlases side-by-side; slotsUsed sums across
+    // them so the denominator must too (else "used / total" can show >100%).
+    uint32_t slotsTotal() const {
+        if (!m_volume) return 0u;
+        const uint32_t one = m_volume->getTotalSlots();
+        return m_volume->getBrickedVolume().isStreaming()
+            ? one * rendering::BrickedVolume::kLodLevels : one;
+    }
     double atlasMBUsed()  const { return m_volume ? (m_volume->getAtlasBytesUsed() / 1048576.0) : 0.0; }
-    double atlasMBAlloc() const { return m_volume ? (m_volume->getAtlasBytesAllocated() / 1048576.0) : 0.0; }
+    double atlasMBAlloc() const {
+        if (!m_volume) return 0.0;
+        const double l0 = m_volume->getAtlasBytesAllocated() / 1048576.0;
+        // Multi-LOD storage ratio = 1 + 1/8 + 1/64 + 1/512 ~= 1.16 of L0.
+        return m_volume->getBrickedVolume().isStreaming() ? l0 * 1.16 : l0;
+    }
     double denseMB()      const { return m_volume ? (m_volume->getDenseBytes() / 1048576.0) : 0.0; }
     float lastRenderMs() const { return m_lastRenderCpuMs; }
     uint32_t visibleBricks()   const { return m_lastStreamStats.visibleBricks; }

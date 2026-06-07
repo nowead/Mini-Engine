@@ -385,11 +385,23 @@ private:
         const uint64_t allocB = m_volume->getAtlasBytesAllocated();
         const uint64_t usedB  = m_volume->getAtlasBytesUsed();
         const double mb = 1024.0 * 1024.0;
+        const bool streamingMode = m_volume->getBrickedVolume().isStreaming();
+        // In Streaming mode 4 atlases live side-by-side (L0..L3), each with the
+        // same slot grid; the per-LOD storage ratio is 1 + 1/8 + 1/64 + 1/512 ~=
+        // 1.16x of L0. usedSlots() / atlasBytesUsed() already sum across LODs,
+        // so the denominators must too -- otherwise "used / total" can print
+        // >100 % even when no atlas overflows.
+        const uint32_t totalAcrossLods = streamingMode ? total * rendering::BrickedVolume::kLodLevels : total;
+        const uint64_t allocBAcrossLods = streamingMode
+            ? static_cast<uint64_t>(static_cast<double>(allocB) * 1.16)
+            : allocB;
         ImGui::Text("Volume: %ux%ux%u (%.1f MB dense)", vol.x, vol.y, vol.z, denseB / mb);
         ImGui::Text("Page grid: %ux%ux%u (%u virtual bricks)", pg.x, pg.y, pg.z, pg.x * pg.y * pg.z);
         ImGui::Text("Atlas: %ux%ux%u, %u/%u slots (%.1f%%)", ag.x, ag.y, ag.z,
-                    used, total, total > 0 ? (100.0f * used / total) : 0.0f);
-        ImGui::Text("Atlas memory: %.1f / %.1f MB (live / allocated)", usedB / mb, allocB / mb);
+                    used, totalAcrossLods,
+                    totalAcrossLods > 0 ? (100.0f * used / totalAcrossLods) : 0.0f);
+        ImGui::Text("Atlas memory: %.1f / %.1f MB (live / allocated)",
+                    usedB / mb, allocBAcrossLods / mb);
         const double saved = denseB > 0 ? (100.0 * (1.0 - static_cast<double>(allocB) / denseB)) : 0.0;
         ImGui::Text("Sparse saving vs dense: %.1f%%", saved);
         const bool streaming = m_volume->getBrickedVolume().isStreaming();

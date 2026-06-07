@@ -273,6 +273,16 @@ CAREER_ROADMAP의 "수치화가 전부다" 원칙 계승. 마일스톤별 정량
   GLSL `texelFetch`는 sampler 필요 → display 바인딩이 백엔드별로 갈림. 네이티브
   뷰어는 카메라+파라미터 비교로 reset, WASM 뷰어는 JS-bound setter마다 reset 호출
   + 카메라 매트릭스 비교(JS 훅 없음).
+- **M3-3 v1-β LOD multi-resolution** (2026-06-07): mip chain CPU build →
+  per-LOD atlas allocation → distance-based per-brick LOD selection →
+  multi-LOD streaming(no migration + LOD fallback when chosen LOD full +
+  K=8→64 upload budget) → 셰이더(`sampleVolume`)가 page table에 인코딩된
+  `(lod<<30)|slot`을 디코드해서 4 LOD atlas 중 선택된 것을 샘플링. Case C
+  (1024³ dense): missing brick 2320 → 326 (~21% hole, -86%) ; atlas memory
+  L0 단독 493.5 MB → 4 LOD 합 ~572 MB (+16%, 1.16× ratio from 1/8+1/64+1/512).
+  알려진 한계: LOD 경계 seam(인접 brick LOD 다를 때 sampling 불연속), no-migration
+  결정으로 stale-LOD blur 일부 (시각 안정성 trade-off). 베이스라인:
+  [BASELINE_2026-06-07_V1_BETA.md](BASELINE_2026-06-07_V1_BETA.md).
 - **M3-3 v1-α streaming** (2026-06-04): LRU + incremental upload + memory-budget
   auto-size. Atlas 자동 산정 재작성 — `ceil(cbrt(nonEmpty))` 시작점에서 pageGrid
   clamp + 512MB budget 안에 longest axis shrink. nonEmpty > slots면 자동 Streaming
@@ -280,7 +290,7 @@ CAREER_ROADMAP의 "수치화가 전부다" 원칙 계승. 마일스톤별 정량
   visible bumped slot 보호 (churn 방지). Streaming 진입 시 LOG_WARN으로 권장
   atlasGrid + "visible-set << atlas 가정" 명시. 1024³ default: atlas 280→188 MB
   (-33%), Static 유지. 2 GB dense 자동 streaming(493 MB). 한계: 가시 brick >
-  atlas slots면 시각 hole (의료영상 줌아웃 워크플로는 v1-β LOD가 본질 해결).
+  atlas slots면 시각 hole (v1-β LOD가 본질 해결).
 - **M3-3 v0 bricked storage** (2026-06-02): 단일 dense 3D 텍스처 → brick atlas
   (64³ interior + 1-voxel halo = 66³ stored) + page table(storage buffer of uint32
   slot indices, 0xFFFFFFFF = "air") 간접 참조로 교체. 모든 density read가 셰이더
@@ -302,15 +312,15 @@ CAREER_ROADMAP의 "수치화가 전부다" 원칙 계승. 마일스톤별 정량
   (2026-05-31). CPU 직관과 반대 — 원본 per-sample 체크는 cache가 read를 무료화해
   더 빠름. 셰이더 주석에 기록.
 
-**다음 진입 작업**: **M3-3 v1-β LOD** 또는 **DICOM Implicit VR LE 지원**.
-v1-α(frustum cull + LRU + memory-budget auto-size)까지 완료. v1-β는 streaming의
-정직한 한계(가시 brick > atlas slots = 시각 hole)를 multi-resolution brick으로
-본질 해결.
+**다음 진입 작업**: **LOD 경계 seam 완화** 또는 **CPU pack 최적화** 또는
+**DICOM Implicit VR LE 지원**. v1-β까지 완료(다중 해상도 brick + LOD 선택 +
+shader 다중 LOD 샘플링). 정직한 잔여 한계: LOD 경계 seam, stale-LOD blur, 그리고
+v1-α부터 이어지는 CPU pack 비용(Case C ~50-70 ms/frame).
 
 **남은 후보**:
 
-- **M3-3 v1-β LOD** — multi-resolution brick (먼 brick 1/8 다운샘플)로
-  visible >> atlas 케이스를 hole 없이. v1-α 가장 큰 한계(줌아웃 전체보기) 해결.
+- **LOD 경계 seam 완화** — dual-LOD blending(±2배 비용) 또는 region-based selection.
+  현재 v1-β의 가장 거슬리는 시각 아티팩트.
 - **M3-3 v1-β CPU pack 최적화** — row-memcpy + SIMD로 ~10× 가능 (현재 ~10 ms/brick).
   Case C 12.6 FPS의 본질.
 - **M3-3 v1-β 디스크 페이징** — 4 GB+ 임상 데이터(CPU RAM 한계 초과).
