@@ -19,6 +19,7 @@ namespace fs = std::filesystem;
 namespace {
 
 constexpr const char* EXPLICIT_VR_LE = "1.2.840.10008.1.2.1";
+constexpr const char* IMPLICIT_VR_LE = "1.2.840.10008.1.2";
 
 // Long VRs use a 4-byte length (with 2 reserved bytes); all others use 2-byte.
 bool isLongVR(const char* vr) {
@@ -27,6 +28,48 @@ bool isLongVR(const char* vr) {
         if (vr[0] == v[0] && vr[1] == v[1]) return true;
     }
     return false;
+}
+
+// ---------------------------------------------------------------------------
+// Implicit VR LE tag -> VR dictionary.
+// In Implicit VR LE the element header is just (tag 4B + length 4B) with no VR
+// bytes, so the parser must know the VR a priori to interpret the value. We
+// only need entries for the tags parseSlice actually reads (plus a few SQ tags
+// so undefined-length sequence handling works). Anything not in the table is
+// treated as VR=UN: 4-byte length, value skipped.
+// ---------------------------------------------------------------------------
+struct ImplicitVrEntry { uint16_t group; uint16_t element; const char* vr; };
+constexpr ImplicitVrEntry kImplicitVrTable[] = {
+    // Tags parseSlice consumes
+    {0x0018, 0x0050, "DS"}, // SliceThickness
+    {0x0020, 0x000E, "UI"}, // SeriesInstanceUID
+    {0x0020, 0x0013, "IS"}, // InstanceNumber
+    {0x0020, 0x0032, "DS"}, // ImagePositionPatient
+    {0x0028, 0x0008, "IS"}, // NumberOfFrames
+    {0x0028, 0x0010, "US"}, // Rows
+    {0x0028, 0x0011, "US"}, // Columns
+    {0x0028, 0x0030, "DS"}, // PixelSpacing
+    {0x0028, 0x0100, "US"}, // BitsAllocated
+    {0x0028, 0x0103, "US"}, // PixelRepresentation
+    {0x0028, 0x1052, "DS"}, // RescaleIntercept
+    {0x0028, 0x1053, "DS"}, // RescaleSlope
+    {0x7FE0, 0x0010, "OW"}, // PixelData
+    // Common SQ tags so undefined-length sequence handling still works
+    // (Implicit VR LE has no VR on the wire to spot SQ; we recognise the few
+    // that show up in single-frame CT/MR datasets).
+    {0x0008, 0x1110, "SQ"}, // ReferencedStudySequence
+    {0x0008, 0x1115, "SQ"}, // ReferencedSeriesSequence
+    {0x0008, 0x1140, "SQ"}, // ReferencedImageSequence
+    {0x0008, 0x2218, "SQ"}, // AnatomicRegionSequence
+    {0x0008, 0x9215, "SQ"}, // DerivationCodeSequence
+    {0x0040, 0x0275, "SQ"}, // RequestAttributesSequence
+};
+
+const char* lookupImplicitVR(uint16_t group, uint16_t element) {
+    for (const auto& e : kImplicitVrTable) {
+        if (e.group == group && e.element == element) return e.vr;
+    }
+    return "UN";  // unknown -> 4-byte length, skipped
 }
 
 // Trim trailing NUL / space padding from a DICOM string value.
@@ -134,8 +177,148 @@ struct Slice {
     size_t         pixelBytes = 0;
 };
 
+// Dispatch one parsed (tag, value) pair into the Slice fields. Shared between
+// Explicit and Implicit VR LE dataset walks (the value bytes are identical, only
+// the element header encoding differs).
+void applyElement(uint16_t group, uint16_t element,
+                  const uint8_t* v, uint32_t valueLen, Slice& out) {
+    if (group == 0x0002 && element == 0x0010) {
+        out.transferSyntaxUid = trimDicomString(v, valueLen);
+    } else if (group == 0x0018 && element == 0x0050) {
+        out.sliceThickness = parseDsAsDouble(v, valueLen);
+    } else if (group == 0x0020 && element == 0x000E) {
+        out.seriesUid = trimDicomString(v, valueLen);
+    } else if (group == 0x0020 && element == 0x0013) {
+        try { out.instanceNumber = std::stoi(trimDicomString(v, valueLen)); } catch (...) {}
+    } else if (group == 0x0020 && element == 0x0032) {
+        auto xyz = parseDsList(v, valueLen);
+        if (xyz.size() >= 3) out.imagePosZ = xyz[2];
+    } else if (group == 0x0028 && element == 0x0008) {
+        try { out.numberOfFrames = std::max(1, std::stoi(trimDicomString(v, valueLen))); } catch (...) {}
+    } else if (group == 0x0028 && element == 0x0010) {
+        out.rows = rd<uint16_t>(v);
+    } else if (group == 0x0028 && element == 0x0011) {
+        out.cols = rd<uint16_t>(v);
+    } else if (group == 0x0028 && element == 0x0030) {
+        auto ps = parseDsList(v, valueLen);
+        if (ps.size() >= 2) { out.pixelSpacingY = ps[0]; out.pixelSpacingX = ps[1]; }
+    } else if (group == 0x0028 && element == 0x0100) {
+        out.bitsAllocated = rd<uint16_t>(v);
+    } else if (group == 0x0028 && element == 0x0103) {
+        out.signedPixels = (rd<uint16_t>(v) == 1);
+    } else if (group == 0x0028 && element == 0x1052) {
+        out.rescaleIntercept = parseDsAsDouble(v, valueLen);
+    } else if (group == 0x0028 && element == 0x1053) {
+        out.rescaleSlope = parseDsAsDouble(v, valueLen);
+    }
+}
+
+// Walk an Explicit VR LE dataset starting at `off`, populating `out` and
+// returning true once PixelData (7FE0,0010) is consumed (or the buffer ends).
+bool walkExplicitDataset(const std::string& path, const uint8_t* buf, size_t size,
+                         size_t off, Slice& out) {
+    while (off + 8 <= size) {
+        const uint16_t group   = rd<uint16_t>(buf + off + 0);
+        const uint16_t element = rd<uint16_t>(buf + off + 2);
+        const char* vr = reinterpret_cast<const char*>(buf + off + 4);
+        size_t   valueOff;
+        uint32_t valueLen;
+        if (isLongVR(vr)) {
+            if (off + 12 > size) break;
+            valueLen = rd<uint32_t>(buf + off + 8);
+            valueOff = off + 12;
+        } else {
+            valueLen = rd<uint16_t>(buf + off + 6);
+            valueOff = off + 8;
+        }
+        if (valueLen == 0xFFFFFFFFu) {
+            if (group == 0x7FE0 && element == 0x0010) {
+                LOG_ERROR("Dicom") << path << ": encapsulated (compressed) pixel data not supported";
+                return false;
+            }
+            const size_t skipped = skipUndefSeq(buf, size, valueOff);
+            if (skipped >= size) {
+                LOG_ERROR("Dicom") << path << ": malformed undefined-length sequence";
+                return false;
+            }
+            off = skipped;
+            continue;
+        }
+        if (valueOff + valueLen > size) {
+            LOG_ERROR("Dicom") << path << ": element truncated";
+            return false;
+        }
+        const uint8_t* v = buf + valueOff;
+        if (group == 0x7FE0 && element == 0x0010) {
+            out.pixelData  = v;
+            out.pixelBytes = valueLen;
+            return true;
+        }
+        applyElement(group, element, v, valueLen, out);
+        off = valueOff + valueLen;
+    }
+    return true;  // ran off the end without hitting PixelData -- caller validates
+}
+
+// Walk an Implicit VR LE dataset. Same shape as Explicit but each element is
+// just (tag 4B + length 4B); VR comes from the kImplicitVrTable lookup.
+bool walkImplicitDataset(const std::string& path, const uint8_t* buf, size_t size,
+                         size_t off, Slice& out) {
+    while (off + 8 <= size) {
+        const uint16_t group   = rd<uint16_t>(buf + off + 0);
+        const uint16_t element = rd<uint16_t>(buf + off + 2);
+        const uint32_t valueLen = rd<uint32_t>(buf + off + 4);
+        const size_t   valueOff = off + 8;
+        const char* vr = lookupImplicitVR(group, element);
+
+        if (valueLen == 0xFFFFFFFFu) {
+            if (group == 0x7FE0 && element == 0x0010) {
+                LOG_ERROR("Dicom") << path << ": encapsulated (compressed) pixel data not supported";
+                return false;
+            }
+            // Undefined-length sequence/item -- same skip logic. The walk
+            // helpers inside still use Explicit VR rules for the items they
+            // encounter (because items wrap their content in Explicit-VR shape
+            // when the outer transfer syntax is Implicit? No -- inside is also
+            // Implicit). For simplicity we treat everything we skip as raw and
+            // stop at the matching FFFE delimiter, which is what the existing
+            // skipUndefSeq does -- it only reads (group, element) and length,
+            // not VR. That works for both transfer syntaxes.
+            const size_t skipped = skipUndefSeq(buf, size, valueOff);
+            if (skipped >= size) {
+                LOG_ERROR("Dicom") << path << ": malformed undefined-length sequence (implicit)";
+                return false;
+            }
+            off = skipped;
+            continue;
+        }
+        if (valueOff + valueLen > size) {
+            LOG_ERROR("Dicom") << path << ": element truncated (implicit)";
+            return false;
+        }
+        const uint8_t* v = buf + valueOff;
+        if (group == 0x7FE0 && element == 0x0010) {
+            out.pixelData  = v;
+            out.pixelBytes = valueLen;
+            return true;
+        }
+        // SQ in Implicit VR with defined length: skip the whole thing (we don't
+        // need any tag inside a sequence for this loader).
+        if (vr[0] == 'S' && vr[1] == 'Q') {
+            off = valueOff + valueLen;
+            continue;
+        }
+        applyElement(group, element, v, valueLen, out);
+        off = valueOff + valueLen;
+    }
+    return true;
+}
+
 // Parse one .dcm file. `fileBuf` owns the file bytes; `out.pixelData` is a view
 // into it so the caller keeps `fileBuf` alive while assembling the series.
+// The DICOM file meta header (group 0002) is ALWAYS Explicit VR LE per the
+// standard. We walk it with the Explicit reader to grab TransferSyntaxUID, then
+// switch to either Explicit or Implicit for the dataset that follows.
 bool parseSlice(const std::string& path, std::vector<uint8_t>& fileBuf, Slice& out) {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
     if (!f.is_open()) return false;
@@ -150,10 +333,14 @@ bool parseSlice(const std::string& path, std::vector<uint8_t>& fileBuf, Slice& o
         return false;
     }
 
+    // Walk only the file meta (group 0002) with Explicit VR; stop when we leave
+    // group 0002 so we know where the dataset starts.
     size_t off = 132;
     while (off + 8 <= size) {
         const uint16_t group   = rd<uint16_t>(fileBuf.data() + off + 0);
         const uint16_t element = rd<uint16_t>(fileBuf.data() + off + 2);
+        if (group != 0x0002) break;  // dataset begins here
+
         const char* vr = reinterpret_cast<const char*>(fileBuf.data() + off + 4);
         size_t   valueOff;
         uint32_t valueLen;
@@ -165,74 +352,30 @@ bool parseSlice(const std::string& path, std::vector<uint8_t>& fileBuf, Slice& o
             valueLen = rd<uint16_t>(fileBuf.data() + off + 6);
             valueOff = off + 8;
         }
-        if (valueLen == 0xFFFFFFFFu) {
-            // Two cases share this encoding:
-            //   - Sequence (SQ) with undefined length: skip forward to the Sequence
-            //     Delimitation Item (FFFE,E0DD). Common in real-world DICOM written
-            //     by tools like GDCM / dcmtk.
-            //   - Encapsulated (compressed) pixel data on (7FE0,0010): we genuinely
-            //     don't decompress and must fail.
-            if (group == 0x7FE0 && element == 0x0010) {
-                LOG_ERROR("Dicom") << path << ": encapsulated (compressed) pixel data not supported";
-                return false;
-            }
-            const size_t skipped = skipUndefSeq(fileBuf.data(), size, valueOff);
-            if (skipped >= size) {
-                LOG_ERROR("Dicom") << path << ": malformed undefined-length sequence";
-                return false;
-            }
-            off = skipped;
-            continue;   // resume top-of-loop walk past the SQ
-        }
         if (valueOff + valueLen > size) {
-            LOG_ERROR("Dicom") << path << ": element truncated";
+            LOG_ERROR("Dicom") << path << ": file meta truncated";
             return false;
         }
-        const uint8_t* v = fileBuf.data() + valueOff;
-
-        if (group == 0x0002 && element == 0x0010) {
-            out.transferSyntaxUid = trimDicomString(v, valueLen);
-        } else if (group == 0x0018 && element == 0x0050) {
-            out.sliceThickness = parseDsAsDouble(v, valueLen);
-        } else if (group == 0x0020 && element == 0x000E) {
-            out.seriesUid = trimDicomString(v, valueLen);
-        } else if (group == 0x0020 && element == 0x0013) {
-            try { out.instanceNumber = std::stoi(trimDicomString(v, valueLen)); } catch (...) {}
-        } else if (group == 0x0020 && element == 0x0032) {
-            auto xyz = parseDsList(v, valueLen);
-            if (xyz.size() >= 3) out.imagePosZ = xyz[2];
-        } else if (group == 0x0028 && element == 0x0008) {
-            try { out.numberOfFrames = std::max(1, std::stoi(trimDicomString(v, valueLen))); } catch (...) {}
-        } else if (group == 0x0028 && element == 0x0010) {
-            out.rows = rd<uint16_t>(v);
-        } else if (group == 0x0028 && element == 0x0011) {
-            out.cols = rd<uint16_t>(v);
-        } else if (group == 0x0028 && element == 0x0030) {
-            auto ps = parseDsList(v, valueLen);
-            if (ps.size() >= 2) { out.pixelSpacingY = ps[0]; out.pixelSpacingX = ps[1]; }
-        } else if (group == 0x0028 && element == 0x0100) {
-            out.bitsAllocated = rd<uint16_t>(v);
-        } else if (group == 0x0028 && element == 0x0103) {
-            out.signedPixels = (rd<uint16_t>(v) == 1);
-        } else if (group == 0x0028 && element == 0x1052) {
-            out.rescaleIntercept = parseDsAsDouble(v, valueLen);
-        } else if (group == 0x0028 && element == 0x1053) {
-            out.rescaleSlope = parseDsAsDouble(v, valueLen);
-        } else if (group == 0x7FE0 && element == 0x0010) {
-            out.pixelData  = v;
-            out.pixelBytes = valueLen;
-            break;   // PixelData is the last thing we need
+        if (element == 0x0010) {
+            out.transferSyntaxUid = trimDicomString(fileBuf.data() + valueOff, valueLen);
         }
-
         off = valueOff + valueLen;
     }
 
-    if (!out.pixelData) { LOG_ERROR("Dicom") << path << ": no PixelData"; return false; }
-    if (out.transferSyntaxUid != EXPLICIT_VR_LE) {
+    bool ok;
+    if (out.transferSyntaxUid == EXPLICIT_VR_LE) {
+        ok = walkExplicitDataset(path, fileBuf.data(), size, off, out);
+    } else if (out.transferSyntaxUid == IMPLICIT_VR_LE) {
+        ok = walkImplicitDataset(path, fileBuf.data(), size, off, out);
+    } else {
         LOG_ERROR("Dicom") << path << ": unsupported transfer syntax '"
-                           << out.transferSyntaxUid << "' (only Explicit VR LE)";
+                           << out.transferSyntaxUid
+                           << "' (only Explicit VR LE and Implicit VR LE)";
         return false;
     }
+    if (!ok) return false;
+
+    if (!out.pixelData) { LOG_ERROR("Dicom") << path << ": no PixelData"; return false; }
     if (out.bitsAllocated != 16) {
         LOG_ERROR("Dicom") << path << ": unsupported bitsAllocated " << out.bitsAllocated;
         return false;

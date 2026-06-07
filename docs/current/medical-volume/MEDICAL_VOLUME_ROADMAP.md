@@ -312,21 +312,29 @@ CAREER_ROADMAP의 "수치화가 전부다" 원칙 계승. 마일스톤별 정량
   (2026-05-31). CPU 직관과 반대 — 원본 per-sample 체크는 cache가 read를 무료화해
   더 빠름. 셰이더 주석에 기록.
 
-**다음 진입 작업**: **LOD 경계 seam 완화** 또는 **CPU pack 최적화** 또는
-**DICOM Implicit VR LE 지원**. v1-β까지 완료(다중 해상도 brick + LOD 선택 +
-shader 다중 LOD 샘플링). 정직한 잔여 한계: LOD 경계 seam, stale-LOD blur, 그리고
-v1-α부터 이어지는 CPU pack 비용(Case C ~50-70 ms/frame).
+**다음 진입 작업**: **DICOM Implicit VR LE 지원** (2026-06-07 결정). 로드맵 §0
+"대용량 실데이터" 차별화에 직접 기여 + §3 미해결 헤드라인("1GB 60fps 실 CT") 측정
+가능해짐. 계획서: [DICOM_IMPLICIT_VR_PLAN.md](DICOM_IMPLICIT_VR_PLAN.md).
 
-**남은 후보**:
+**남은 후보 — 로드맵 정렬 (차별화 직접 기여)**:
 
-- **LOD 경계 seam 완화** — dual-LOD blending(±2배 비용) 또는 region-based selection.
-  현재 v1-β의 가장 거슬리는 시각 아티팩트.
-- **M3-3 v1-β CPU pack 최적화** — row-memcpy + SIMD로 ~10× 가능 (현재 ~10 ms/brick).
-  Case C 12.6 FPS의 본질.
-- **M3-3 v1-β 디스크 페이징** — 4 GB+ 임상 데이터(CPU RAM 한계 초과).
-- **DICOM Implicit VR LE 지원** — 임상 PACS의 기본 transfer syntax. 엔진 변경
-  없이 파서만.
+- **DICOM Implicit VR LE 지원** — 임상 PACS의 기본 transfer syntax. 엔진 변경 없이
+  파서만. **다음 작업 결정됨**.
 - **DICOM 압축 transfer syntax**(JPEG/JPEG2000/RLE) — libjpeg 등 외부 의존 필요.
+- **M3-3 v1-β 디스크 페이징** — 4 GB+ 임상 데이터(CPU RAM 한계 초과).
+
+**즉흥 폴리시 후보 (로드맵 명시 안 됨, 후순위)** — v1-β 작업 중 발견된 개선점.
+차별화 핵심 아니므로 위 차별화 후보가 마무리된 뒤 시각 만족도/성능에 따라 선택:
+
+- **LOD 경계 seam 완화** — v1-β 가장 거슬리는 시각 아티팩트. dual-LOD blending(±2배
+  성능 비용) 또는 region-based selection으로 인접 brick 같은 LOD 강제.
+- **Async CPU pack (B-3)** — `V1_BETA_AND_MR_PLAN §4`의 deferred 항목. main thread
+  frame 시간 단축. 현재 K=64 budget으로 Case C zoom-in 72 ms / zoom-out 39 ms 차지.
+- **Adaptive K budget** — 정착 후 K↓로 FPS 향상. ~2-3시간.
+- **Screen-pixel-aware LOD selection** — 현재 distance 임계값을 fov + height 기반
+  스크린 픽셀당 voxel 비율로 정밀화 (계획서 §4 LOD β-6 표현).
+- **CPU pack SIMD (B-2)** — interior memcpy는 컴파일러가 이미 vectorize함. boundary
+  brick의 clamp 경로만 남는데 비중 작음 → 후보 우선순위 가장 낮음.
 
 **다음 세션 진입점**: 이 문서 §2 마일스톤 상세 + 위 후보 목록. 사용자
 인터페이스 / 빌드 / 조작은 [VIEWERS.md](VIEWERS.md) 참조. 코드 진입은

@@ -3,16 +3,23 @@
 // ============================================================================
 // Application-layer DICOM series loader (NOT engine core).
 //
-// Reads a directory of .dcm files (one slice per file), parses Explicit VR Little
-// Endian uncompressed CT/MR pixel data, applies RescaleSlope/Intercept (HU for
-// CT), sorts slices by ImagePositionPatient, and assembles them into the generic
-// Volume3D consumed by the engine (loadFromFloatData).
+// Reads a directory of .dcm files (one slice per file), parses uncompressed
+// CT/MR pixel data, applies RescaleSlope/Intercept (HU for CT), sorts slices
+// by ImagePositionPatient, and assembles them into the generic Volume3D
+// consumed by the engine (loadFromFloatData).
 //
-// Scope of this first cut:
-//   - Transfer syntax: Explicit VR Little Endian ("1.2.840.10008.1.2.1") only.
-//   - Pixel data: 16-bit signed (CT) / unsigned (some MR), single-frame per file.
-//   - Multi-frame DICOM, JPEG / JPEG2000 / RLE encapsulated pixel data, and the
-//     Implicit-VR transfer syntax are unsupported and logged as errors.
+// Supported transfer syntaxes:
+//   - Explicit VR Little Endian ("1.2.840.10008.1.2.1")
+//   - Implicit VR Little Endian ("1.2.840.10008.1.2") -- clinical PACS default
+//
+// The file meta header (group 0002) is ALWAYS Explicit VR LE per the DICOM
+// standard regardless of the dataset transfer syntax, so the parser switches
+// encodings at the group boundary.
+//
+// Out of scope (return false + LOG_ERROR):
+//   - Compressed pixel data (JPEG / JPEG2000 / RLE encapsulated)
+//   - Big Endian transfer syntaxes
+//   - Pixel data wider than 16-bit
 // ============================================================================
 
 #include "NiftiFile.hpp"   // Volume3D
