@@ -272,7 +272,7 @@ CAREER_ROADMAP의 "수치화가 전부다" 원칙 계승. 마일스톤별 정량
   layout — depth/occupancy 제거, history 추가. WebGPU `textureLoad`는 sampler 미사용,
   GLSL `texelFetch`는 sampler 필요 → display 바인딩이 백엔드별로 갈림. 네이티브
   뷰어는 카메라+파라미터 비교로 reset, WASM 뷰어는 JS-bound setter마다 reset 호출
-  + 카메라 매트릭스 비교(JS 훅 없음).
+  및 카메라 매트릭스 비교(JS 훅 없음).
 - **M3-3 v1-β LOD multi-resolution** (2026-06-07): mip chain CPU build →
   per-LOD atlas allocation → distance-based per-brick LOD selection →
   multi-LOD streaming(no migration + LOD fallback when chosen LOD full +
@@ -312,16 +312,21 @@ CAREER_ROADMAP의 "수치화가 전부다" 원칙 계승. 마일스톤별 정량
   (2026-05-31). CPU 직관과 반대 — 원본 per-sample 체크는 cache가 read를 무료화해
   더 빠름. 셰이더 주석에 기록.
 
-**다음 진입 작업**: **DICOM Implicit VR LE 지원** (2026-06-07 결정). 로드맵 §0
-"대용량 실데이터" 차별화에 직접 기여 + §3 미해결 헤드라인("1GB 60fps 실 CT") 측정
-가능해짐. 계획서: [DICOM_IMPLICIT_VR_PLAN.md](DICOM_IMPLICIT_VR_PLAN.md).
+**다음 진입 작업**: 사용자 결정 — Step 5+ disk paging (mmap'd int16 → on-demand
+brick conversion, 진짜 4 GB+ 지원) 또는 WASM openjpeg 빌드 또는 즉흥 폴리시.
+v1-β LOD + DICOM (Implicit VR + 압축) + Disk paging Steps 1-3 까지가 한 마디.
 
-**남은 후보 — 로드맵 정렬 (차별화 직접 기여)**:
+**완료된 로드맵 후보**:
 
-- **DICOM Implicit VR LE 지원** — 임상 PACS의 기본 transfer syntax. 엔진 변경 없이
-  파서만. **다음 작업 결정됨**.
-- **DICOM 압축 transfer syntax**(JPEG/JPEG2000/RLE) — libjpeg 등 외부 의존 필요.
-- **M3-3 v1-β 디스크 페이징** — 4 GB+ 임상 데이터(CPU RAM 한계 초과).
+- **DICOM Implicit VR LE 지원** (`5ea4577`, `6df12a2`, `d328afe`) — 임상 PACS 기본
+  transfer syntax. 합성 + 실 RT 파일 dispatch 검증.
+- **DICOM 압축 transfer syntax** (`ce26dcb` → `5a2f8ce`, 4 step) — RLE Lossless
+  (in-tree PackBits) + JPEG 2000 (openjpeg vcpkg). 비트 동일성 + lossy decode
+  검증.
+- **M3-3 v1-β 디스크 페이징 Step 1-3** (`32eb364` → `b9fda20`) — voxel source
+  추상화 + NIfTI mmap + on-the-fly LOD 박스 필터. 1024³ 정착 working set
+  -11%. 베이스라인: [BASELINE_2026-06-07_DISK_PAGING.md](BASELINE_2026-06-07_DISK_PAGING.md).
+  4 GB+ 임상 데이터 full unlock은 Step 5+가 본질.
 
 **즉흥 폴리시 후보 (로드맵 명시 안 됨, 후순위)** — v1-β 작업 중 발견된 개선점.
 차별화 핵심 아니므로 위 차별화 후보가 마무리된 뒤 시각 만족도/성능에 따라 선택:

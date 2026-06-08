@@ -22,6 +22,7 @@
 ```
 
 병목:
+
 - 1024³ R16 = 2.1 GB raw + mip 280 MB = **2.4 GB 최소 RAM**
 - 4096³ → 137 GB raw → **불가능** (32GB RAM 한계 초과)
 - 2048³ → 17 GB raw → 32GB RAM에 빠듯, mip 빌드 시 OOM 위험
@@ -45,6 +46,7 @@ L1+L2+L3 mip chain은 currently `packBrickToStaging` 호출 전에 전체 빌드
 볼륨에서는 mip 자체가 RAM 초과 (4096³ → L1 17GB, L2 2GB).
 
 옵션:
+
 1. **Mip을 디스크에 사이드카로 저장** — `volume.nii` 옆에 `volume.nii.mip` 파일 생성
    (첫 로드 시), 이후 mmap. 동일 mmap 전략.
 2. **Mip을 필요 시 brick 단위로 즉석 계산** — 다운샘플은 박스 필터 평균 → 빠름,
@@ -68,6 +70,7 @@ DICOM 압축 (RLE, JPEG 2000)은 mmap만으로 안 됨 — 디코드 결과를 �
 ### Step 1 — Voxel source abstraction (~3-4h)
 
 `m_originalHalfData` 직접 접근을 추상화. 두 백엔드:
+
 - `OwnedHalfData` — `std::vector<uint16_t>` (현재 동작 유지)
 - `MmappedHalfData` — POSIX `mmap` / Windows `MapViewOfFile` (Phase A 진입점)
 
@@ -79,6 +82,7 @@ DICOM 압축 (RLE, JPEG 2000)은 mmap만으로 안 됨 — 디코드 결과를 �
 ### Step 2 — NIfTI mmap 로더 (~3-4h)
 
 `assets::NiftiFile`에서 `--mmap` 옵션 또는 자동 (파일 > 임계) 으로 mmap 경로 사용.
+
 - 헤더만 fread (작음)
 - voxel 영역은 mmap, span으로 노출
 - 엔디안 변환 필요 시 deferred (page-level)
@@ -89,6 +93,7 @@ DICOM 압축 (RLE, JPEG 2000)은 mmap만으로 안 됨 — 디코드 결과를 �
 
 `mipData(lod)` 호출 제거하거나 lazy. 대신 `packBrickToStaging`이 LOD 파라미터를
 받고 즉석에서 다운샘플:
+
 - L0: 직접 voxel copy
 - L1+: 2^lod 박스 필터 평균 (소스 voxel 8/64/512개 합산 ÷ 8/64/512)
 
@@ -144,3 +149,24 @@ v1-β LOD 동작 무회귀 (시각 결과 비트 동일).
 ## 7. 다음 진입점
 
 Step 1 (voxel source 추상화) 부터 진행. 각 단계 끝에 커밋.
+
+---
+
+## 8. 진행 기록 (2026-06-07)
+
+- **Step 1 (`32eb364`)**: HalfDataView 추상화 + `packBrickToStaging` signature
+  변경. 무회귀.
+- **Step 2 (`d338e81`)**: `utils::MmappedFile` portable wrapper + NIfTI 로더가
+  mmap 사용. 파일 본문 working set 회계에서 분리 (~2.1 GB on 1024³).
+- **Step 3 (`b9fda20`)**: `m_mipChain` + standalone box filter helper 제거,
+  pack 시점에 LOD 박스 필터. 정착 working set -280 MB (1024³).
+- **Step 4 (baseline doc)**: `BASELINE_2026-06-07_DISK_PAGING.md` —
+  1024³ dense 측정, 정착 2.69 GB → 2.38 GB (-11%), 피크 6.57 GB.
+
+**미달 항목**: 4 GB+ 임상 데이터 (16 GB RAM)는 float intermediate가 여전히 피크
+지배. **Step 5+ (가칭)** 가 본질 해결: mmap'd int16 원본 → brick pack 시점에
+직접 box-filter + half pack → m_originalHalfData 자체를 안 만듦. 본 계획서 §2
+"Phase B" 옵션 2의 확장이지만 그 대신 m_originalHalfData를 mmap-backed 또는
+chunk-streamed로.
+
+이 계획서는 Step 1-3로 일단 마감. Step 5는 사용자 결정 후 별도 계획서로.
