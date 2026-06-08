@@ -50,40 +50,9 @@ bool isInteriorEmpty(const std::vector<uint16_t>& src,
     return true;
 }
 
-// v1-beta beta-1 mip helper: 2x box-filter downsample of a half-float volume.
-// For each destination voxel, average the 8 source voxels in the 2x2x2
-// neighbourhood (clamping at the source-volume edges so odd source dimensions
-// degrade gracefully). Pure scalar; ~60 ns per output voxel, dominated by the
-// half<->float conversion. Future optimisation: SIMD pack/unpack via AVX2's
-// F16C intrinsics could 8x this.
-void downsampleHalfBoxFilter(const uint16_t* src, glm::uvec3 srcDims,
-                             uint16_t* dst, glm::uvec3 dstDims) {
-    const int sw = static_cast<int>(srcDims.x);
-    const int sh = static_cast<int>(srcDims.y);
-    const int sd = static_cast<int>(srcDims.z);
-    auto sample = [&](int x, int y, int z) -> float {
-        x = std::clamp(x, 0, sw - 1);
-        y = std::clamp(y, 0, sh - 1);
-        z = std::clamp(z, 0, sd - 1);
-        return glm::unpackHalf1x16(src[(static_cast<size_t>(z) * sh + y) * sw + x]);
-    };
-    for (uint32_t z = 0; z < dstDims.z; ++z) {
-        const int sz = static_cast<int>(z) * 2;
-        for (uint32_t y = 0; y < dstDims.y; ++y) {
-            const int sy = static_cast<int>(y) * 2;
-            uint16_t* dstRow = dst + (static_cast<size_t>(z) * dstDims.y + y) * dstDims.x;
-            for (uint32_t x = 0; x < dstDims.x; ++x) {
-                const int sx = static_cast<int>(x) * 2;
-                const float sum =
-                    sample(sx,     sy,     sz)     + sample(sx + 1, sy,     sz)     +
-                    sample(sx,     sy + 1, sz)     + sample(sx + 1, sy + 1, sz)     +
-                    sample(sx,     sy,     sz + 1) + sample(sx + 1, sy,     sz + 1) +
-                    sample(sx,     sy + 1, sz + 1) + sample(sx + 1, sy + 1, sz + 1);
-                dstRow[x] = glm::packHalf1x16(sum * (1.0f / 8.0f));
-            }
-        }
-    }
-}
+// (Disk paging Step 3) The standalone box-filter helper used to build the
+// L1..L3 mip chain at load time is gone -- packBrickToStaging now does the
+// downsample on the fly per brick from the L0 source.
 
 } // namespace
 
@@ -301,32 +270,9 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
         m_pageToSlot.reserve(nonEmptyCount);      // upper bound for the lifetime
         m_lodTableHost.assign(totalPageEntries, 0);  // beta-3 writes; beta-4 uses
 
-        // v1-beta beta-1: build the mip chain L1..L3 (2x box-filter each step).
-        // Skipped in Static mode -- the atlas already holds everything at L0.
-        // 1024^3 source takes ~7-10s to generate the chain on a single thread;
-        // the cost is paid once at load. v1-beta-2+ will use these levels in
-        // the LOD-aware streaming path; this commit just builds and logs them.
-        glm::uvec3 srcDims = m_volSize;
-        const uint16_t* srcPtr = m_originalHalfData.data();
-        for (uint32_t lv = 0; lv < kMipChainSize; ++lv) {
-            const glm::uvec3 dstDims(std::max(1u, srcDims.x >> 1),
-                                     std::max(1u, srcDims.y >> 1),
-                                     std::max(1u, srcDims.z >> 1));
-            const size_t dstCount = static_cast<size_t>(dstDims.x) * dstDims.y * dstDims.z;
-            m_mipChain[lv].resize(dstCount);
-            uint16_t* dstPtr = m_mipChain[lv].data();
-            downsampleHalfBoxFilter(srcPtr, srcDims, dstPtr, dstDims);
-            srcDims = dstDims;
-            srcPtr  = dstPtr;
-        }
-        const uint64_t mipBytes =
-            (m_mipChain[0].size() + m_mipChain[1].size() + m_mipChain[2].size()) * 2;
-        LOG_INFO("BrickedVolume") << "mip chain built: L1 "
-            << mipDims(1).x << "x" << mipDims(1).y << "x" << mipDims(1).z << ", L2 "
-            << mipDims(2).x << "x" << mipDims(2).y << "x" << mipDims(2).z << ", L3 "
-            << mipDims(3).x << "x" << mipDims(3).y << "x" << mipDims(3).z
-            << " (chain total " << (mipBytes >> 20) << " MB, "
-            << "+" << (100ull * mipBytes / (m_originalHalfData.size() * 2)) << "% over L0)";
+        // Disk paging Step 3: the mip chain L1..L3 is no longer materialised at
+        // load time. Each streamed brick at LOD > 0 is box-filter-downsampled
+        // from the L0 source inside packBrickToStaging.
     }
 
     // ------------------------------------------------------------------
@@ -516,32 +462,42 @@ inline BrickStagingLayout computeBrickLayout(uint32_t lod) {
     return L;
 }
 
-// Pack one virtual brick at a given LOD from the source CPU buffer (m_originalHalfData
-// for L0, m_mipChain[lod-1] for L1..L3) into a freshly mapped staging buffer
-// with the WebGPU-aligned row stride. brickSizeLod = kBrickSize >> lod (64,32,
-// 16,8) and brickStoredLod = brickSizeLod + 2 set the per-brick voxel extents
-// at this LOD; the source volume dimensions follow mipDims(lod).
+// Pack one virtual brick at the requested LOD from the L0 source buffer
+// (m_originalHalfData) into a freshly mapped staging buffer with the
+// WebGPU-aligned row stride. For lod == 0 the brick is a direct slab copy;
+// for lod > 0 each output voxel is the box-filter average of factor^3 L0
+// voxels (factor = 1 << lod). brickSizeLod = kBrickSize >> lod (64,32,16,8)
+// and brickStoredLod = brickSizeLod + 2 are the per-brick voxel extents.
+// Source dimensions are always the L0 volume size (srcW/srcH/srcD = m_volSize).
 void packBrickToStaging(const uint16_t* src,
                         uint32_t srcW, uint32_t srcH, uint32_t srcD,
                         uint32_t bx, uint32_t by, uint32_t bz,
-                        uint32_t brickSizeLod,
-                        uint32_t brickStoredLod,
+                        uint8_t lod,
                         uint8_t* mapped,
                         uint32_t paddedBytesPerRow) {
-    const int srcX0 = static_cast<int>(bx * brickSizeLod) - 1;
-    const int srcY0 = static_cast<int>(by * brickSizeLod) - 1;
-    const int srcZ0 = static_cast<int>(bz * brickSizeLod) - 1;
+    // L0 interior + halo size at this LOD. L0 brick interior is fixed at
+    // kBrickSize voxels per axis; each LOD-L output voxel covers `factor` L0
+    // voxels and the halo on each side is one LOD-L voxel = `factor` L0 voxels.
+    const uint32_t brickSizeLod   = BrickedVolume::kBrickSize >> lod;       // 64, 32, 16, 8
+    const uint32_t brickStoredLod = brickSizeLod + 2;                       // 66, 34, 18, 10
+    const uint32_t factor         = 1u << lod;                              // 1, 2, 4, 8
+    const int srcX0 = static_cast<int>(bx * BrickedVolume::kBrickSize) - static_cast<int>(factor);
+    const int srcY0 = static_cast<int>(by * BrickedVolume::kBrickSize) - static_cast<int>(factor);
+    const int srcZ0 = static_cast<int>(bz * BrickedVolume::kBrickSize) - static_cast<int>(factor);
+    const int srcSpan = static_cast<int>(brickStoredLod * factor);          // L0 voxels covered per axis
 
-    // Interior fast path: the entire brick (halo included) lies inside the
-    // source volume, so no clamping is needed and each row is a contiguous
-    // memcpy of brickStoredLod * 2 bytes. Most non-edge bricks hit this.
+    // Brick fully inside the source volume (halo included): no clamp needed
+    // along any face. Drives the L0 fast path and skips the per-voxel clamp
+    // branches in the LOD > 0 path.
     const bool interior =
         srcX0 >= 0 && srcY0 >= 0 && srcZ0 >= 0 &&
-        srcX0 + static_cast<int>(brickStoredLod) <= static_cast<int>(srcW) &&
-        srcY0 + static_cast<int>(brickStoredLod) <= static_cast<int>(srcH) &&
-        srcZ0 + static_cast<int>(brickStoredLod) <= static_cast<int>(srcD);
+        srcX0 + srcSpan <= static_cast<int>(srcW) &&
+        srcY0 + srcSpan <= static_cast<int>(srcH) &&
+        srcZ0 + srcSpan <= static_cast<int>(srcD);
 
-    if (interior) {
+    // L0 interior: contiguous row-memcpy, the same fast path
+    // commit 6c846fd introduced before the LOD work.
+    if (lod == 0 && interior) {
         const size_t rowBytes = static_cast<size_t>(brickStoredLod) * sizeof(uint16_t);
         for (uint32_t lz = 0; lz < brickStoredLod; ++lz) {
             const size_t srcZIdx = static_cast<size_t>(srcZ0 + static_cast<int>(lz));
@@ -557,22 +513,36 @@ void packBrickToStaging(const uint16_t* src,
         return;
     }
 
-    // Boundary brick: at least one halo row falls outside the source volume,
-    // so each voxel needs clamping. Same per-voxel loop as the original.
-    auto srcVoxel = [&](int x, int y, int z) -> uint16_t {
+    // LOD > 0 OR boundary brick: per-output-voxel walk. Each LOD-L output
+    // voxel averages factor^3 L0 source voxels (box filter). factor == 1
+    // for LOD 0 boundary, so this loop subsumes the previous boundary-clamp
+    // path with one extra multiply-by-1.
+    auto sampleHalf = [&](int x, int y, int z) -> float {
         x = std::clamp(x, 0, static_cast<int>(srcW) - 1);
         y = std::clamp(y, 0, static_cast<int>(srcH) - 1);
         z = std::clamp(z, 0, static_cast<int>(srcD) - 1);
-        return src[(static_cast<size_t>(z) * srcH + y) * srcW + x];
+        return glm::unpackHalf1x16(src[(static_cast<size_t>(z) * srcH + y) * srcW + x]);
     };
+    const float scale = 1.0f / static_cast<float>(factor * factor * factor);
     for (uint32_t lz = 0; lz < brickStoredLod; ++lz) {
+        const int srcZBase = srcZ0 + static_cast<int>(lz * factor);
         for (uint32_t ly = 0; ly < brickStoredLod; ++ly) {
+            const int srcYBase = srcY0 + static_cast<int>(ly * factor);
             uint16_t* dstRow = reinterpret_cast<uint16_t*>(
                 mapped + (static_cast<uint64_t>(lz) * brickStoredLod + ly) * paddedBytesPerRow);
-            const int srcZ = srcZ0 + static_cast<int>(lz);
-            const int srcY = srcY0 + static_cast<int>(ly);
             for (uint32_t lx = 0; lx < brickStoredLod; ++lx) {
-                dstRow[lx] = srcVoxel(srcX0 + static_cast<int>(lx), srcY, srcZ);
+                const int srcXBase = srcX0 + static_cast<int>(lx * factor);
+                float sum = 0.0f;
+                for (uint32_t dz = 0; dz < factor; ++dz) {
+                    for (uint32_t dy = 0; dy < factor; ++dy) {
+                        for (uint32_t dx = 0; dx < factor; ++dx) {
+                            sum += sampleHalf(srcXBase + static_cast<int>(dx),
+                                              srcYBase + static_cast<int>(dy),
+                                              srcZBase + static_cast<int>(dz));
+                        }
+                    }
+                }
+                dstRow[lx] = glm::packHalf1x16(sum * scale);
             }
         }
     }
@@ -700,7 +670,6 @@ BrickedVolume::updateStreaming(const std::vector<uint32_t>& visiblePageIndices,
         const uint8_t  lod     = targets[i].lod;
         auto& states = m_slotStates[lod];
         const BrickStagingLayout L = computeBrickLayout(lod);
-        const uint32_t brickSizeLod = kBrickSize >> lod;
 
         // Evict previous resident of this slot at this LOD, if any.
         const uint32_t prevPage = states[slot].residentPageIdx;
@@ -733,12 +702,12 @@ BrickedVolume::updateStreaming(const std::vector<uint32_t>& visiblePageIndices,
         const uint32_t by = (pageIdx / m_pageGrid.x) % m_pageGrid.y;
         const uint32_t bz =  pageIdx / (m_pageGrid.x * m_pageGrid.y);
 
-        // CPU-pack from the LOD's mip data.
-        const HalfDataView srcData = mipData(lod);
-        const glm::uvec3 srcDims = mipDims(lod);
+        // CPU-pack from the L0 source. For LOD > 0 the pack box-filters L0
+        // voxels down to the brick's stored resolution on the fly (Step 3).
+        const HalfDataView srcData = halfDataL0();
         uint8_t* mapped = static_cast<uint8_t*>(stagingPtr->map());
-        packBrickToStaging(srcData.data, srcDims.x, srcDims.y, srcDims.z,
-                           bx, by, bz, brickSizeLod, L.brickStored,
+        packBrickToStaging(srcData.data, m_volSize.x, m_volSize.y, m_volSize.z,
+                           bx, by, bz, lod,
                            mapped, L.paddedBytesPerRow);
         stagingPtr->unmap();
 

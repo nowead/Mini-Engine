@@ -127,31 +127,24 @@ public:
         return (pageIdx < m_lodTableHost.size()) ? m_lodTableHost[pageIdx] : 0u;
     }
 
-    // v1-beta LOD: per-level downsampled source volume, generated at build
-    // time in Streaming mode only. Level 0 is m_originalHalfData (not in this
-    // array). Levels 1..3 are 2x box-filtered each step: 1/8, 1/64, 1/512 the
-    // voxel count of L0. Used by future streaming uploads when a brick is
-    // chosen at LOD > 0; v1-beta beta-1 just builds and logs them.
-    static constexpr uint32_t kLodLevels = 4;        // L0 + 3 downsamples
-    static constexpr uint32_t kMipChainSize = kLodLevels - 1;  // L1..L3
+    // v1-beta LOD: bricks at LOD > 0 are box-filter-downsampled from the L0
+    // source on the fly during the streaming pack (disk paging Step 3). The
+    // previous m_mipChain[L1..L3] member is gone -- the chain typically took
+    // ~14% of L0's RAM on top of the source (~280 MB on 1024^3), which
+    // dominated the disk-paging story for big volumes.
+    static constexpr uint32_t kLodLevels = 4;        // L0 + 3 box-filter levels
 
-    // A non-owning view over a per-LOD voxel array. Decouples callers from the
-    // underlying storage so the disk-paging track can swap m_originalHalfData
-    // out for an mmap-backed region without touching pack / mip-build code.
+    // A non-owning view over the L0 half-float source data. Decouples callers
+    // from the underlying storage so the disk-paging track can swap
+    // m_originalHalfData out for an mmap-backed region without touching the
+    // pack / streaming code.
     struct HalfDataView {
         const uint16_t* data = nullptr;
         size_t          size = 0;
         bool empty() const noexcept { return size == 0; }
     };
-    HalfDataView mipData(uint32_t level) const {
-        if (level == 0) return {m_originalHalfData.data(), m_originalHalfData.size()};
-        const auto& v = m_mipChain[level - 1];
-        return {v.data(), v.size()};
-    }
-    glm::uvec3 mipDims(uint32_t level) const {
-        return glm::uvec3(std::max(1u, m_volSize.x >> level),
-                          std::max(1u, m_volSize.y >> level),
-                          std::max(1u, m_volSize.z >> level));
+    HalfDataView halfDataL0() const {
+        return {m_originalHalfData.data(), m_originalHalfData.size()};
     }
 
     // v1-3 streaming update. Given the list of virtual brick page indices
@@ -252,8 +245,6 @@ private:
     // v1-2 streaming-mode state. Empty / default-constructed in Static mode.
     Mode m_mode = Mode::StaticFullyLoaded;
     std::vector<uint16_t> m_originalHalfData;  // CPU mirror, indexed (z*H + y)*W + x
-    // v1-beta LOD chain (Streaming mode only): L1, L2, L3 box-filtered from L0.
-    std::array<std::vector<uint16_t>, kMipChainSize> m_mipChain;
     uint16_t m_emptyValueHalf = 0;             // for empty-slot init + halo padding
     struct AtlasSlotState {
         uint32_t residentPageIdx = kEmptySlot; // page index living in this slot, or kEmptySlot
