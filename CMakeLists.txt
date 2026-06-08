@@ -46,6 +46,11 @@ if(NOT EMSCRIPTEN)
     find_package(Stb REQUIRED)
     find_package(tinyobjloader REQUIRED)
     find_package(imgui CONFIG REQUIRED)
+    # OpenJPEG for DICOM JPEG 2000 transfer syntax decoding (volume_viewer only).
+    # WASM build skips this for now -- compressed DICOM in the browser is a
+    # follow-up track (see DICOM_COMPRESSED_PLAN.md). The vcpkg port exposes the
+    # OpenJPEG::openjp2 target via OpenJPEGConfig.cmake.
+    find_package(OpenJPEG CONFIG REQUIRED)
 
     # cgltf vcpkg port is header-only and ships no CMake config — exposed via
     # find_path and wrapped in an INTERFACE target so call sites match the
@@ -1261,7 +1266,7 @@ if(BUILD_TESTS)
         src/utils/Logger.hpp
     )
     configure_rhi_test(volume_viewer)
-    target_link_libraries(volume_viewer PRIVATE imgui::imgui)
+    target_link_libraries(volume_viewer PRIVATE imgui::imgui openjp2)
     add_dependencies(volume_viewer building_shaders)   # needs volume_march.*.spv
     endif()
 

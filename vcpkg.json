@@ -5,6 +5,7 @@
     "cgltf",
     "glfw3",
     "glm",
+    "openjpeg",
     "stb",
     "tinyobjloader",
     "volk",
