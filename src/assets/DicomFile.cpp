@@ -188,9 +188,14 @@ struct Slice {
     double   rescaleIntercept = 0.0;
     std::string seriesUid;
     std::string transferSyntaxUid;
-    const uint8_t* pixelData = nullptr;   // uncompressed path: raw bytes
+    const uint8_t* pixelData = nullptr;   // uncompressed path: view into file buffer
     size_t         pixelBytes = 0;
-    std::vector<EncapsulatedFrame> frames; // compressed path: per-frame ranges
+    std::vector<EncapsulatedFrame> frames; // compressed path: per-frame raw byte ranges
+    // For compressed transfer syntaxes the decoder writes its output here and
+    // points pixelData at it. Keeping the decoded buffer owned by the Slice
+    // lets all downstream code (frame indexing, pixel sample loop in
+    // loadDicomSeries) stay on the single uncompressed code path.
+    std::vector<uint8_t> decompressedBuffer;
 };
 
 // ---------------------------------------------------------------------------
@@ -230,6 +235,92 @@ bool walkEncapsulatedPixelData(const std::string& path,
     }
     LOG_ERROR("Dicom") << path << ": encapsulated pixel data: no sequence delimiter";
     return false;
+}
+
+// ---------------------------------------------------------------------------
+// PackBits decoder (DICOM Annex G.5 / Apple PackBits).
+// Control byte n:
+//   0..127     -> copy next (n+1) literal bytes
+//   -127..-1   -> replicate next byte (1 - n) times = 2..128
+//   -128 (NOP) -> no-op marker, skip
+// Returns true iff exactly dstSize bytes were produced.
+// ---------------------------------------------------------------------------
+bool unpackBits(const uint8_t* src, size_t srcSize, uint8_t* dst, size_t dstSize) {
+    // Loop until the output is filled; DICOM RLE may pad the encoded segment to
+    // an even byte boundary, so trailing src bytes past the meaningful PackBits
+    // content are normal and must be ignored once di == dstSize.
+    size_t si = 0, di = 0;
+    while (di < dstSize) {
+        if (si >= srcSize) return false;
+        const int8_t n = static_cast<int8_t>(src[si++]);
+        if (n == -128) {
+            continue;  // NOP
+        }
+        if (n >= 0) {
+            const size_t count = static_cast<size_t>(n) + 1;
+            if (si + count > srcSize || di + count > dstSize) return false;
+            std::memcpy(dst + di, src + si, count);
+            si += count;
+            di += count;
+        } else {
+            const size_t count = static_cast<size_t>(1 - n);
+            if (si >= srcSize || di + count > dstSize) return false;
+            std::memset(dst + di, src[si++], count);
+            di += count;
+        }
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Decode one RLE-encoded 16-bit monochrome DICOM frame into rows*cols
+// little-endian uint16 pixels (2 bytes each).
+//
+// DICOM PS3.5 Annex G.5 frame layout:
+//   - 64-byte header: 16 uint32 LE
+//       [0]   = number of segments
+//       [1..] = byte offsets to segment 0, 1, ... from the start of the frame
+//   - For 16-bit monochrome there are 2 segments: segment 0 holds the high
+//     byte (MSB) of each pixel in row-major order, segment 1 holds the low
+//     byte. Each segment is PackBits-encoded.
+// ---------------------------------------------------------------------------
+bool decodeRleFrame16(const std::string& path,
+                      const EncapsulatedFrame& frame,
+                      uint32_t rows, uint32_t cols,
+                      uint8_t* dst /* rows*cols*2 bytes */) {
+    if (frame.size < 64) {
+        LOG_ERROR("Dicom") << path << ": RLE frame header truncated";
+        return false;
+    }
+    const uint32_t numSegments = rd<uint32_t>(frame.data + 0);
+    if (numSegments != 2) {
+        LOG_ERROR("Dicom") << path << ": RLE expected 2 segments for 16-bit, got " << numSegments;
+        return false;
+    }
+    const uint32_t off0 = rd<uint32_t>(frame.data + 4);
+    const uint32_t off1 = rd<uint32_t>(frame.data + 8);
+    if (off0 < 64 || off1 < 64 || off0 > frame.size || off1 > frame.size || off0 >= off1) {
+        LOG_ERROR("Dicom") << path << ": RLE bad segment offsets " << off0 << "/" << off1;
+        return false;
+    }
+    const size_t plane = static_cast<size_t>(rows) * cols;
+    std::vector<uint8_t> msbPlane(plane);
+    std::vector<uint8_t> lsbPlane(plane);
+    if (!unpackBits(frame.data + off0, off1 - off0, msbPlane.data(), plane)) {
+        LOG_ERROR("Dicom") << path << ": RLE PackBits failed on segment 0 (MSB)";
+        return false;
+    }
+    if (!unpackBits(frame.data + off1, frame.size - off1, lsbPlane.data(), plane)) {
+        LOG_ERROR("Dicom") << path << ": RLE PackBits failed on segment 1 (LSB)";
+        return false;
+    }
+    // Combine MSB/LSB into little-endian uint16 = [lsb, msb] per pixel, which
+    // matches the byte layout the uncompressed path produces.
+    for (size_t i = 0; i < plane; ++i) {
+        dst[i * 2 + 0] = lsbPlane[i];
+        dst[i * 2 + 1] = msbPlane[i];
+    }
+    return true;
 }
 
 // Dispatch one parsed (tag, value) pair into the Slice fields. Shared between
@@ -465,14 +556,38 @@ bool parseSlice(const std::string& path, std::vector<uint8_t>& fileBuf, Slice& o
                                << "B (" << out.rows << "x" << out.cols << " x " << out.numberOfFrames << " frames)";
             return false;
         }
+        return true;
+    }
+
+    // Compressed path: decode each frame into out.decompressedBuffer laid out
+    // identically to the uncompressed multi-frame format (frame 0 bytes, frame 1
+    // bytes, ...), then point out.pixelData at it so the downstream pixel
+    // assembly stays on the single code path.
+    if (out.frames.size() != out.numberOfFrames) {
+        LOG_ERROR("Dicom") << path << ": encapsulated frame count " << out.frames.size()
+                           << " != NumberOfFrames " << out.numberOfFrames;
+        return false;
+    }
+    const size_t frameBytes = static_cast<size_t>(out.rows) * out.cols * 2;
+    out.decompressedBuffer.resize(frameBytes * out.numberOfFrames);
+
+    if (out.transferSyntaxUid == RLE_LOSSLESS) {
+        for (size_t i = 0; i < out.frames.size(); ++i) {
+            if (!decodeRleFrame16(path, out.frames[i], out.rows, out.cols,
+                                  out.decompressedBuffer.data() + i * frameBytes)) {
+                return false;
+            }
+        }
     } else {
-        // Step 1: structure parsed, decoder still to come (Step 2 RLE, Step 4 JPEG 2000).
+        // JPEG 2000 reaches here in Step 4 once openjpeg is wired up.
         LOG_ERROR("Dicom") << path << ": transfer syntax '" << out.transferSyntaxUid
                            << "' recognised (" << out.frames.size()
                            << " encapsulated frames, " << out.rows << "x" << out.cols
                            << ") -- decoder not yet implemented";
         return false;
     }
+    out.pixelData  = out.decompressedBuffer.data();
+    out.pixelBytes = out.decompressedBuffer.size();
     return true;
 }
 
