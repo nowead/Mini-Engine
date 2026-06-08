@@ -1,8 +1,8 @@
 #include "NiftiFile.hpp"
 #include "src/utils/Logger.hpp"
+#include "src/utils/MmappedFile.hpp"
 
 #include <cstring>
-#include <fstream>
 #include <limits>
 
 namespace assets {
@@ -17,45 +17,47 @@ T rd(const uint8_t* p, size_t off) {
 }  // namespace
 
 bool loadNifti(const std::string& path, Volume3D& out) {
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f.is_open()) return false;  // missing -> caller falls back to its default
-    const std::streamsize fileSize = f.tellg();
-    f.seekg(0, std::ios::beg);
-    if (fileSize < 352) { LOG_ERROR("Nifti") << path << ": file too small (" << fileSize << "B)"; return false; }
-
-    std::vector<uint8_t> buf(static_cast<size_t>(fileSize));
-    f.read(reinterpret_cast<char*>(buf.data()), fileSize);
-    f.close();
+    // Memory-map the file read-only. The OS pages voxel data in on demand
+    // during the per-voxel walk below, so even a multi-GB NIfTI does not need
+    // a transient std::ifstream buffer the size of the whole file.
+    utils::MmappedFile mapping;
+    if (!mapping.open(path)) return false;  // missing -> caller falls back to its default
+    const size_t fileSize = mapping.size();
+    if (fileSize < 352) {
+        LOG_ERROR("Nifti") << path << ": file too small (" << fileSize << "B)";
+        return false;
+    }
+    const uint8_t* buf = mapping.data();
 
     // sizeof_hdr == 348 only when read with the file's native endianness. A
     // byte-swapped value means a big-endian volume, which we don't handle yet.
-    const int32_t sizeofHdr = rd<int32_t>(buf.data(), 0);
+    const int32_t sizeofHdr = rd<int32_t>(buf, 0);
     if (sizeofHdr != 348) {
         LOG_ERROR("Nifti") << path << ": sizeof_hdr=" << sizeofHdr
                            << " (expected 348; big-endian NIfTI not supported yet)";
         return false;
     }
-    if (std::memcmp(buf.data() + 344, "n+1\0", 4) != 0) {
+    if (std::memcmp(buf + 344, "n+1\0", 4) != 0) {
         LOG_ERROR("Nifti") << path << ": magic is not 'n+1' (only single-file NIfTI-1 supported)";
         return false;
     }
 
-    const int16_t ndim = rd<int16_t>(buf.data(), 40);
-    const int16_t dx   = rd<int16_t>(buf.data(), 42);
-    const int16_t dy   = rd<int16_t>(buf.data(), 44);
-    const int16_t dz   = rd<int16_t>(buf.data(), 46);
+    const int16_t ndim = rd<int16_t>(buf, 40);
+    const int16_t dx   = rd<int16_t>(buf, 42);
+    const int16_t dy   = rd<int16_t>(buf, 44);
+    const int16_t dz   = rd<int16_t>(buf, 46);
     if (ndim < 3 || dx <= 0 || dy <= 0 || dz <= 0) {
         LOG_ERROR("Nifti") << path << ": bad dims (ndim=" << ndim << ", " << dx << "x" << dy << "x" << dz << ")";
         return false;
     }
 
-    const int16_t datatype = rd<int16_t>(buf.data(), 70);
-    const float   px        = rd<float>(buf.data(), 76 + 4 * 1);   // pixdim[1..3] = spacing
-    const float   py        = rd<float>(buf.data(), 76 + 4 * 2);
-    const float   pz        = rd<float>(buf.data(), 76 + 4 * 3);
-    const float   voxOffset = rd<float>(buf.data(), 108);
-    float         sclSlope  = rd<float>(buf.data(), 112);
-    const float   sclInter  = rd<float>(buf.data(), 116);
+    const int16_t datatype = rd<int16_t>(buf, 70);
+    const float   px        = rd<float>(buf, 76 + 4 * 1);   // pixdim[1..3] = spacing
+    const float   py        = rd<float>(buf, 76 + 4 * 2);
+    const float   pz        = rd<float>(buf, 76 + 4 * 3);
+    const float   voxOffset = rd<float>(buf, 108);
+    float         sclSlope  = rd<float>(buf, 112);
+    const float   sclInter  = rd<float>(buf, 116);
     if (sclSlope == 0.0f) sclSlope = 1.0f;   // NIfTI spec: slope 0 means no scaling
 
     const uint32_t w = static_cast<uint32_t>(dx);
@@ -74,9 +76,9 @@ bool loadNifti(const std::string& path, Volume3D& out) {
     }
 
     const size_t dataStart = static_cast<size_t>(voxOffset);
-    if (dataStart + voxels * bytesPer > buf.size()) {
+    if (dataStart + voxels * bytesPer > fileSize) {
         LOG_ERROR("Nifti") << path << ": voxel data truncated (need "
-                           << (dataStart + voxels * bytesPer) << "B, have " << buf.size() << "B)";
+                           << (dataStart + voxels * bytesPer) << "B, have " << fileSize << "B)";
         return false;
     }
 
@@ -86,7 +88,7 @@ bool loadNifti(const std::string& path, Volume3D& out) {
     out.spacingZ = (pz > 0.0f) ? pz : 1.0f;
     out.intensity.resize(voxels);
 
-    const uint8_t* dp = buf.data() + dataStart;
+    const uint8_t* dp = buf + dataStart;
     float mn = std::numeric_limits<float>::max();
     float mx = std::numeric_limits<float>::lowest();
     for (size_t i = 0; i < voxels; ++i) {

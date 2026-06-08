@@ -841,6 +841,8 @@ else()
         src/scene/Camera.hpp
         src/utils/FileUtils.hpp
         src/utils/Logger.hpp
+        src/utils/MmappedFile.cpp
+        src/utils/MmappedFile.hpp
     )
     target_include_directories(volume_viewer_wasm BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(volume_viewer_wasm PRIVATE glm::glm rhi::factory)
@@ -1264,6 +1266,8 @@ if(BUILD_TESTS)
         src/ui/ImGuiVulkanBackend.hpp
         src/utils/FileUtils.hpp
         src/utils/Logger.hpp
+        src/utils/MmappedFile.cpp
+        src/utils/MmappedFile.hpp
     )
     configure_rhi_test(volume_viewer)
     target_link_libraries(volume_viewer PRIVATE imgui::imgui openjp2)
