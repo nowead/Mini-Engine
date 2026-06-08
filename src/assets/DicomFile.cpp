@@ -21,6 +21,17 @@ namespace {
 constexpr const char* EXPLICIT_VR_LE = "1.2.840.10008.1.2.1";
 constexpr const char* IMPLICIT_VR_LE = "1.2.840.10008.1.2";
 
+// Compressed transfer syntaxes the parser will recognise. Step 1 collects the
+// encapsulated frame byte ranges and rejects with a "decoder not implemented"
+// message; later steps wire up RLE (no external dep) and JPEG 2000 (openjpeg).
+constexpr const char* RLE_LOSSLESS       = "1.2.840.10008.1.2.5";
+constexpr const char* JPEG2000_LOSSLESS  = "1.2.840.10008.1.2.4.90";
+constexpr const char* JPEG2000_LOSSY     = "1.2.840.10008.1.2.4.91";
+
+bool isCompressedTransferSyntax(const std::string& ts) {
+    return ts == RLE_LOSSLESS || ts == JPEG2000_LOSSLESS || ts == JPEG2000_LOSSY;
+}
+
 // Long VRs use a 4-byte length (with 2 reserved bytes); all others use 2-byte.
 bool isLongVR(const char* vr) {
     static const char* long_vrs[] = {"OB", "OW", "OF", "SQ", "UT", "UN"};
@@ -160,6 +171,10 @@ size_t skipUndefSeq(const uint8_t* buf, size_t size, size_t off) {
     return size;
 }
 
+// One compressed pixel-data item -- a single frame's encoded bytes living
+// inside the file buffer (no copy).
+struct EncapsulatedFrame { const uint8_t* data; uint32_t size; };
+
 struct Slice {
     uint32_t rows = 0, cols = 0;
     uint32_t numberOfFrames = 1;   // multi-frame DICOM packs many frames into one file
@@ -173,9 +188,49 @@ struct Slice {
     double   rescaleIntercept = 0.0;
     std::string seriesUid;
     std::string transferSyntaxUid;
-    const uint8_t* pixelData = nullptr;
+    const uint8_t* pixelData = nullptr;   // uncompressed path: raw bytes
     size_t         pixelBytes = 0;
+    std::vector<EncapsulatedFrame> frames; // compressed path: per-frame ranges
 };
+
+// ---------------------------------------------------------------------------
+// Walk encapsulated pixel data starting just past the (7FE0,0010) OB header
+// (i.e. at the first item tag). Items are (FFFE,E000) length-prefixed; the
+// first item is the Basic Offset Table (BOT) which we skip -- BOT length may
+// be 0 (offsets unknown) or contain per-frame offsets but pydicom-style
+// readers ignore it because the item walk is already cheap. Stops at the
+// Sequence Delimitation Item (FFFE,E0DD). Each non-BOT item becomes one
+// EncapsulatedFrame entry; for multi-frame DICOM the caller maps these to
+// NumberOfFrames z slices the same way the uncompressed path does.
+// ---------------------------------------------------------------------------
+bool walkEncapsulatedPixelData(const std::string& path,
+                               const uint8_t* buf, size_t size, size_t off,
+                               std::vector<EncapsulatedFrame>& out) {
+    bool sawBot = false;
+    while (off + 8 <= size) {
+        const uint16_t g = rd<uint16_t>(buf + off + 0);
+        const uint16_t e = rd<uint16_t>(buf + off + 2);
+        if (g == 0xFFFEu && e == 0xE0DDu) return true;  // Sequence Delimitation Item
+        if (g != 0xFFFEu || e != 0xE000u) {
+            LOG_ERROR("Dicom") << path << ": encapsulated pixel data: bad item tag";
+            return false;
+        }
+        const uint32_t itemLen = rd<uint32_t>(buf + off + 4);
+        const size_t   itemOff = off + 8;
+        if (itemOff + itemLen > size) {
+            LOG_ERROR("Dicom") << path << ": encapsulated pixel data: item overruns file";
+            return false;
+        }
+        if (!sawBot) {
+            sawBot = true;  // first item is BOT (may have length 0)
+        } else if (itemLen > 0) {
+            out.push_back({buf + itemOff, itemLen});
+        }
+        off = itemOff + itemLen;
+    }
+    LOG_ERROR("Dicom") << path << ": encapsulated pixel data: no sequence delimiter";
+    return false;
+}
 
 // Dispatch one parsed (tag, value) pair into the Slice fields. Shared between
 // Explicit and Implicit VR LE dataset walks (the value bytes are identical, only
@@ -233,8 +288,16 @@ bool walkExplicitDataset(const std::string& path, const uint8_t* buf, size_t siz
         }
         if (valueLen == 0xFFFFFFFFu) {
             if (group == 0x7FE0 && element == 0x0010) {
-                LOG_ERROR("Dicom") << path << ": encapsulated (compressed) pixel data not supported";
-                return false;
+                // Encapsulated pixel data -- valid only when the transfer syntax
+                // is one of the compressed ones. Walk the items here so the
+                // caller sees per-frame ranges; the actual decode comes later.
+                if (!isCompressedTransferSyntax(out.transferSyntaxUid)) {
+                    LOG_ERROR("Dicom") << path
+                        << ": encapsulated PixelData but transfer syntax '"
+                        << out.transferSyntaxUid << "' is uncompressed";
+                    return false;
+                }
+                return walkEncapsulatedPixelData(path, buf, size, valueOff, out.frames);
             }
             const size_t skipped = skipUndefSeq(buf, size, valueOff);
             if (skipped >= size) {
@@ -273,17 +336,17 @@ bool walkImplicitDataset(const std::string& path, const uint8_t* buf, size_t siz
 
         if (valueLen == 0xFFFFFFFFu) {
             if (group == 0x7FE0 && element == 0x0010) {
-                LOG_ERROR("Dicom") << path << ": encapsulated (compressed) pixel data not supported";
-                return false;
+                if (!isCompressedTransferSyntax(out.transferSyntaxUid)) {
+                    LOG_ERROR("Dicom") << path
+                        << ": encapsulated PixelData but transfer syntax '"
+                        << out.transferSyntaxUid << "' is uncompressed (implicit)";
+                    return false;
+                }
+                return walkEncapsulatedPixelData(path, buf, size, valueOff, out.frames);
             }
-            // Undefined-length sequence/item -- same skip logic. The walk
-            // helpers inside still use Explicit VR rules for the items they
-            // encounter (because items wrap their content in Explicit-VR shape
-            // when the outer transfer syntax is Implicit? No -- inside is also
-            // Implicit). For simplicity we treat everything we skip as raw and
-            // stop at the matching FFFE delimiter, which is what the existing
-            // skipUndefSeq does -- it only reads (group, element) and length,
-            // not VR. That works for both transfer syntaxes.
+            // Undefined-length sequence/item -- same skip logic for both
+            // Explicit and Implicit (skipUndefSeq only reads group/element/length,
+            // not VR, so it works either way).
             const size_t skipped = skipUndefSeq(buf, size, valueOff);
             if (skipped >= size) {
                 LOG_ERROR("Dicom") << path << ": malformed undefined-length sequence (implicit)";
@@ -362,29 +425,52 @@ bool parseSlice(const std::string& path, std::vector<uint8_t>& fileBuf, Slice& o
         off = valueOff + valueLen;
     }
 
+    // Per DICOM PS3.5 Annex A, all compressed transfer syntaxes encode the
+    // dataset itself in Explicit VR Little Endian and only the pixel data is
+    // encapsulated -- so we dispatch them to the Explicit walker, which calls
+    // walkEncapsulatedPixelData on hitting (7FE0,0010) with length 0xFFFFFFFF.
     bool ok;
-    if (out.transferSyntaxUid == EXPLICIT_VR_LE) {
+    if (out.transferSyntaxUid == EXPLICIT_VR_LE ||
+        isCompressedTransferSyntax(out.transferSyntaxUid)) {
         ok = walkExplicitDataset(path, fileBuf.data(), size, off, out);
     } else if (out.transferSyntaxUid == IMPLICIT_VR_LE) {
         ok = walkImplicitDataset(path, fileBuf.data(), size, off, out);
     } else {
         LOG_ERROR("Dicom") << path << ": unsupported transfer syntax '"
                            << out.transferSyntaxUid
-                           << "' (only Explicit VR LE and Implicit VR LE)";
+                           << "' (supported: Explicit VR LE, Implicit VR LE, "
+                           << "RLE Lossless, JPEG 2000)";
         return false;
     }
     if (!ok) return false;
 
-    if (!out.pixelData) { LOG_ERROR("Dicom") << path << ": no PixelData"; return false; }
+    const bool isCompressed = isCompressedTransferSyntax(out.transferSyntaxUid);
+    if (!isCompressed && !out.pixelData) {
+        LOG_ERROR("Dicom") << path << ": no PixelData";
+        return false;
+    }
+    if (isCompressed && out.frames.empty()) {
+        LOG_ERROR("Dicom") << path << ": compressed pixel data has no frames";
+        return false;
+    }
     if (out.bitsAllocated != 16) {
         LOG_ERROR("Dicom") << path << ": unsupported bitsAllocated " << out.bitsAllocated;
         return false;
     }
     if (out.rows == 0 || out.cols == 0) { LOG_ERROR("Dicom") << path << ": missing rows/cols"; return false; }
-    const size_t expected = static_cast<size_t>(out.rows) * out.cols * 2 * out.numberOfFrames;
-    if (out.pixelBytes < expected) {
-        LOG_ERROR("Dicom") << path << ": pixel data " << out.pixelBytes << "B < expected " << expected
-                           << "B (" << out.rows << "x" << out.cols << " x " << out.numberOfFrames << " frames)";
+    if (!isCompressed) {
+        const size_t expected = static_cast<size_t>(out.rows) * out.cols * 2 * out.numberOfFrames;
+        if (out.pixelBytes < expected) {
+            LOG_ERROR("Dicom") << path << ": pixel data " << out.pixelBytes << "B < expected " << expected
+                               << "B (" << out.rows << "x" << out.cols << " x " << out.numberOfFrames << " frames)";
+            return false;
+        }
+    } else {
+        // Step 1: structure parsed, decoder still to come (Step 2 RLE, Step 4 JPEG 2000).
+        LOG_ERROR("Dicom") << path << ": transfer syntax '" << out.transferSyntaxUid
+                           << "' recognised (" << out.frames.size()
+                           << " encapsulated frames, " << out.rows << "x" << out.cols
+                           << ") -- decoder not yet implemented";
         return false;
     }
     return true;
