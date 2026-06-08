@@ -134,9 +134,19 @@ public:
     // chosen at LOD > 0; v1-beta beta-1 just builds and logs them.
     static constexpr uint32_t kLodLevels = 4;        // L0 + 3 downsamples
     static constexpr uint32_t kMipChainSize = kLodLevels - 1;  // L1..L3
-    const std::vector<uint16_t>& mipData(uint32_t level) const {
-        // level 0 -> original, level 1..3 -> mip chain.
-        return (level == 0) ? m_originalHalfData : m_mipChain[level - 1];
+
+    // A non-owning view over a per-LOD voxel array. Decouples callers from the
+    // underlying storage so the disk-paging track can swap m_originalHalfData
+    // out for an mmap-backed region without touching pack / mip-build code.
+    struct HalfDataView {
+        const uint16_t* data = nullptr;
+        size_t          size = 0;
+        bool empty() const noexcept { return size == 0; }
+    };
+    HalfDataView mipData(uint32_t level) const {
+        if (level == 0) return {m_originalHalfData.data(), m_originalHalfData.size()};
+        const auto& v = m_mipChain[level - 1];
+        return {v.data(), v.size()};
     }
     glm::uvec3 mipDims(uint32_t level) const {
         return glm::uvec3(std::max(1u, m_volSize.x >> level),

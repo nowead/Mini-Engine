@@ -521,7 +521,7 @@ inline BrickStagingLayout computeBrickLayout(uint32_t lod) {
 // with the WebGPU-aligned row stride. brickSizeLod = kBrickSize >> lod (64,32,
 // 16,8) and brickStoredLod = brickSizeLod + 2 set the per-brick voxel extents
 // at this LOD; the source volume dimensions follow mipDims(lod).
-void packBrickToStaging(const std::vector<uint16_t>& src,
+void packBrickToStaging(const uint16_t* src,
                         uint32_t srcW, uint32_t srcH, uint32_t srcD,
                         uint32_t bx, uint32_t by, uint32_t bz,
                         uint32_t brickSizeLod,
@@ -548,7 +548,7 @@ void packBrickToStaging(const std::vector<uint16_t>& src,
             for (uint32_t ly = 0; ly < brickStoredLod; ++ly) {
                 const size_t srcYIdx = static_cast<size_t>(srcY0 + static_cast<int>(ly));
                 const uint16_t* srcRow =
-                    src.data() + (srcZIdx * srcH + srcYIdx) * srcW + static_cast<size_t>(srcX0);
+                    src + (srcZIdx * srcH + srcYIdx) * srcW + static_cast<size_t>(srcX0);
                 uint8_t* dstRow =
                     mapped + (static_cast<uint64_t>(lz) * brickStoredLod + ly) * paddedBytesPerRow;
                 std::memcpy(dstRow, srcRow, rowBytes);
@@ -734,10 +734,10 @@ BrickedVolume::updateStreaming(const std::vector<uint32_t>& visiblePageIndices,
         const uint32_t bz =  pageIdx / (m_pageGrid.x * m_pageGrid.y);
 
         // CPU-pack from the LOD's mip data.
-        const std::vector<uint16_t>& srcData = mipData(lod);
+        const HalfDataView srcData = mipData(lod);
         const glm::uvec3 srcDims = mipDims(lod);
         uint8_t* mapped = static_cast<uint8_t*>(stagingPtr->map());
-        packBrickToStaging(srcData, srcDims.x, srcDims.y, srcDims.z,
+        packBrickToStaging(srcData.data, srcDims.x, srcDims.y, srcDims.z,
                            bx, by, bz, brickSizeLod, L.brickStored,
                            mapped, L.paddedBytesPerRow);
         stagingPtr->unmap();
