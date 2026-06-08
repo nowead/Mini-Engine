@@ -59,6 +59,7 @@ DICOM 파일의 pixel data는 압축 방식에 따라 다른 UID로 식별. 임�
 ### Step 2 — RLE Lossless 디코더 (직접 구현)
 
 DICOM Annex G.5 RLE: PackBits 변종.
+
 - Header: 16-byte. Number of segments (uint32) + 15 segment offset (uint32).
 - Each segment: PackBits stream — control byte n:
   - 0..127 (n+1) literal bytes
@@ -136,3 +137,21 @@ DICOM Annex G.5 RLE: PackBits 변종.
 
 Step 1 (encapsulated walk + TS 인식) 부터 진행. 각 단계 끝에 커밋. 외부 의존
 추가(Step 3)는 별도 커밋으로 분리해 vcpkg.json/CMakeLists 변경을 명확히.
+
+---
+
+## 8. 진행 기록 (2026-06-07)
+
+- **Step 1 (`ce26dcb`)**: encapsulated walk + 3종 compressed TS UID 인식. 디코더
+  없이 reject (frames 수 보고). 회귀 무.
+- **Step 2 (`49478db`)**: RLE Lossless 디코더 (PackBits + segment 결합).
+  `MR_small_RLE.dcm` ↔ `MR_small.dcm` 비트 동일성 (range [127, 2145]) 검증.
+- **Step 3 (`5e14e42`)**: vcpkg.json + CMakeLists에 openjpeg 추가, 링크 검증.
+- **Step 4**: JPEG 2000 디코더 (openjpeg 메모리 스트림). pydicom `693_J2KI.dcm`
+  CT 512×512 JPEG 2000 lossy 로드 (range [-3995, 1812]). 회귀: Explicit / Implicit
+  VR LE, RLE 모두 무회귀.
+
+남은 항목 (이번 계획 밖):
+
+- WASM openjpeg 빌드 — Emscripten 포팅 작업, 별도 트랙
+- JPEG Lossless / JPEG-LS — libjpeg-turbo / charls 추가 의존, 후속 PACS 호환성

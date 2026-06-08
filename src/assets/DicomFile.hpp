@@ -11,9 +11,9 @@
 // Supported transfer syntaxes:
 //   - Explicit VR Little Endian ("1.2.840.10008.1.2.1")
 //   - Implicit VR Little Endian ("1.2.840.10008.1.2") -- clinical PACS default
-//   - RLE Lossless ("1.2.840.10008.1.2.5") -- structure parsed; decoder pending
-//   - JPEG 2000 Lossless ("1.2.840.10008.1.2.4.90") -- structure parsed
-//   - JPEG 2000 Lossy ("1.2.840.10008.1.2.4.91") -- structure parsed
+//   - RLE Lossless ("1.2.840.10008.1.2.5") -- DICOM PackBits, in-tree decoder
+//   - JPEG 2000 Lossless ("1.2.840.10008.1.2.4.90") -- via OpenJPEG
+//   - JPEG 2000 Lossy ("1.2.840.10008.1.2.4.91") -- via OpenJPEG
 //
 // The file meta header (group 0002) is ALWAYS Explicit VR LE per the DICOM
 // standard regardless of the dataset transfer syntax, so the parser switches
@@ -22,8 +22,6 @@
 // becomes encapsulated (one item per frame).
 //
 // Out of scope (return false + LOG_ERROR):
-//   - Compressed frame decoding (parsed as structure but reject until Step 2/4
-//     of DICOM_COMPRESSED_PLAN.md wires up RLE and JPEG 2000 decoders)
 //   - JPEG Baseline / Lossless / JPEG-LS transfer syntaxes
 //   - Big Endian transfer syntaxes
 //   - Pixel data wider than 16-bit

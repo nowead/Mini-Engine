@@ -1,6 +1,8 @@
 #include "DicomFile.hpp"
 #include "src/utils/Logger.hpp"
 
+#include <openjpeg.h>
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -323,6 +325,122 @@ bool decodeRleFrame16(const std::string& path,
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// JPEG 2000 frame decoder via OpenJPEG memory stream.
+//
+// Wraps the standard opj_create_decompress -> opj_read_header -> opj_decode
+// pipeline. The encoded frame bytes are fed through a custom memory stream
+// (so we don't write the encapsulated item to a temp file). The decoded
+// component data is stored as OPJ_INT32; we truncate to 16-bit LE pixels
+// because the downstream pixel loop in loadDicomSeries reads 16-bit and
+// interprets the sign via PixelRepresentation.
+// ---------------------------------------------------------------------------
+struct OpjMemStream { const uint8_t* data; size_t size; size_t pos; };
+
+OPJ_SIZE_T opjMemRead(void* buffer, OPJ_SIZE_T n, void* user_data) {
+    auto* ms = static_cast<OpjMemStream*>(user_data);
+    const size_t remaining = ms->size - ms->pos;
+    if (remaining == 0) return static_cast<OPJ_SIZE_T>(-1);
+    const size_t toRead = (n < remaining) ? n : remaining;
+    std::memcpy(buffer, ms->data + ms->pos, toRead);
+    ms->pos += toRead;
+    return toRead;
+}
+
+OPJ_OFF_T opjMemSkip(OPJ_OFF_T n, void* user_data) {
+    auto* ms = static_cast<OpjMemStream*>(user_data);
+    if (n <= 0) return 0;
+    const size_t remaining = ms->size - ms->pos;
+    const size_t want = static_cast<size_t>(n);
+    const size_t toSkip = (want < remaining) ? want : remaining;
+    ms->pos += toSkip;
+    return static_cast<OPJ_OFF_T>(toSkip);
+}
+
+OPJ_BOOL opjMemSeek(OPJ_OFF_T n, void* user_data) {
+    auto* ms = static_cast<OpjMemStream*>(user_data);
+    if (n < 0 || static_cast<size_t>(n) > ms->size) return OPJ_FALSE;
+    ms->pos = static_cast<size_t>(n);
+    return OPJ_TRUE;
+}
+
+// Silent error/warning handlers so a corrupt frame doesn't spam stderr; we
+// surface failures via LOG_ERROR with the file path context.
+void opjQuietMsg(const char*, void*) {}
+
+bool decodeJpeg2000Frame16(const std::string& path,
+                           const EncapsulatedFrame& frame,
+                           uint32_t rows, uint32_t cols,
+                           uint8_t* dst /* rows*cols*2 bytes LE */) {
+    OpjMemStream ms{frame.data, frame.size, 0};
+    opj_stream_t* stream = opj_stream_default_create(OPJ_TRUE /* is_read_stream */);
+    if (!stream) {
+        LOG_ERROR("Dicom") << path << ": JPEG2000 stream create failed";
+        return false;
+    }
+    opj_stream_set_read_function(stream, opjMemRead);
+    opj_stream_set_skip_function(stream, opjMemSkip);
+    opj_stream_set_seek_function(stream, opjMemSeek);
+    opj_stream_set_user_data(stream, &ms, nullptr);
+    opj_stream_set_user_data_length(stream, frame.size);
+
+    opj_codec_t* codec = opj_create_decompress(OPJ_CODEC_J2K);
+    if (!codec) {
+        opj_stream_destroy(stream);
+        LOG_ERROR("Dicom") << path << ": JPEG2000 codec create failed";
+        return false;
+    }
+    opj_set_info_handler(codec, opjQuietMsg, nullptr);
+    opj_set_warning_handler(codec, opjQuietMsg, nullptr);
+    opj_set_error_handler(codec, opjQuietMsg, nullptr);
+
+    opj_dparameters_t params;
+    opj_set_default_decoder_parameters(&params);
+    if (!opj_setup_decoder(codec, &params)) {
+        opj_destroy_codec(codec); opj_stream_destroy(stream);
+        LOG_ERROR("Dicom") << path << ": JPEG2000 decoder setup failed";
+        return false;
+    }
+
+    opj_image_t* image = nullptr;
+    if (!opj_read_header(stream, codec, &image)) {
+        if (image) opj_image_destroy(image);
+        opj_destroy_codec(codec); opj_stream_destroy(stream);
+        LOG_ERROR("Dicom") << path << ": JPEG2000 header read failed";
+        return false;
+    }
+    if (!opj_decode(codec, stream, image) ||
+        !opj_end_decompress(codec, stream)) {
+        opj_image_destroy(image);
+        opj_destroy_codec(codec); opj_stream_destroy(stream);
+        LOG_ERROR("Dicom") << path << ": JPEG2000 decode failed";
+        return false;
+    }
+
+    bool ok = true;
+    if (image->numcomps != 1) {
+        LOG_ERROR("Dicom") << path << ": JPEG2000 expected 1 component, got " << image->numcomps;
+        ok = false;
+    } else if (image->comps[0].w != cols || image->comps[0].h != rows) {
+        LOG_ERROR("Dicom") << path << ": JPEG2000 decoded "
+                           << image->comps[0].w << "x" << image->comps[0].h
+                           << " differs from header " << cols << "x" << rows;
+        ok = false;
+    } else {
+        const OPJ_INT32* src = image->comps[0].data;
+        const size_t plane = static_cast<size_t>(rows) * cols;
+        for (size_t i = 0; i < plane; ++i) {
+            const int16_t v = static_cast<int16_t>(src[i]);
+            dst[i * 2 + 0] = static_cast<uint8_t>(v & 0xFF);
+            dst[i * 2 + 1] = static_cast<uint8_t>((static_cast<uint16_t>(v) >> 8) & 0xFF);
+        }
+    }
+    opj_image_destroy(image);
+    opj_destroy_codec(codec);
+    opj_stream_destroy(stream);
+    return ok;
+}
+
 // Dispatch one parsed (tag, value) pair into the Slice fields. Shared between
 // Explicit and Implicit VR LE dataset walks (the value bytes are identical, only
 // the element header encoding differs).
@@ -578,12 +696,17 @@ bool parseSlice(const std::string& path, std::vector<uint8_t>& fileBuf, Slice& o
                 return false;
             }
         }
+    } else if (out.transferSyntaxUid == JPEG2000_LOSSLESS ||
+               out.transferSyntaxUid == JPEG2000_LOSSY) {
+        for (size_t i = 0; i < out.frames.size(); ++i) {
+            if (!decodeJpeg2000Frame16(path, out.frames[i], out.rows, out.cols,
+                                       out.decompressedBuffer.data() + i * frameBytes)) {
+                return false;
+            }
+        }
     } else {
-        // JPEG 2000 reaches here in Step 4 once openjpeg is wired up.
         LOG_ERROR("Dicom") << path << ": transfer syntax '" << out.transferSyntaxUid
-                           << "' recognised (" << out.frames.size()
-                           << " encapsulated frames, " << out.rows << "x" << out.cols
-                           << ") -- decoder not yet implemented";
+                           << "' recognised but no decoder bound";
         return false;
     }
     out.pixelData  = out.decompressedBuffer.data();
