@@ -462,22 +462,22 @@ inline BrickStagingLayout computeBrickLayout(uint32_t lod) {
     return L;
 }
 
-// Pack one virtual brick at the requested LOD from the L0 source buffer
-// (m_originalHalfData) into a freshly mapped staging buffer with the
-// WebGPU-aligned row stride. For lod == 0 the brick is a direct slab copy;
-// for lod > 0 each output voxel is the box-filter average of factor^3 L0
-// voxels (factor = 1 << lod). brickSizeLod = kBrickSize >> lod (64,32,16,8)
-// and brickStoredLod = brickSizeLod + 2 are the per-brick voxel extents.
-// Source dimensions are always the L0 volume size (srcW/srcH/srcD = m_volSize).
-void packBrickToStaging(const uint16_t* src,
+// Pack one virtual brick at the requested LOD from the L0 voxel source into a
+// freshly mapped staging buffer with the WebGPU-aligned row stride. For lod==0
+// + HalfFloat + interior the brick is a direct slab copy; otherwise each output
+// voxel is the box-filter average of factor^3 L0 voxels (factor = 1 << lod),
+// reading each via VoxelSource::read so int16 / uint16 sources (Step 5.2) flow
+// through the same loop with format dispatched at the per-voxel read.
+// brickSizeLod = kBrickSize >> lod (64,32,16,8) and brickStoredLod = brickSizeLod
+// + 2 are the per-brick voxel extents. srcW/srcH/srcD are always the L0 dims.
+void packBrickToStaging(const BrickedVolume::VoxelSource& src,
                         uint32_t srcW, uint32_t srcH, uint32_t srcD,
                         uint32_t bx, uint32_t by, uint32_t bz,
                         uint8_t lod,
                         uint8_t* mapped,
                         uint32_t paddedBytesPerRow) {
-    // L0 interior + halo size at this LOD. L0 brick interior is fixed at
-    // kBrickSize voxels per axis; each LOD-L output voxel covers `factor` L0
-    // voxels and the halo on each side is one LOD-L voxel = `factor` L0 voxels.
+    using Format = BrickedVolume::VoxelSource::Format;
+
     const uint32_t brickSizeLod   = BrickedVolume::kBrickSize >> lod;       // 64, 32, 16, 8
     const uint32_t brickStoredLod = brickSizeLod + 2;                       // 66, 34, 18, 10
     const uint32_t factor         = 1u << lod;                              // 1, 2, 4, 8
@@ -486,25 +486,24 @@ void packBrickToStaging(const uint16_t* src,
     const int srcZ0 = static_cast<int>(bz * BrickedVolume::kBrickSize) - static_cast<int>(factor);
     const int srcSpan = static_cast<int>(brickStoredLod * factor);          // L0 voxels covered per axis
 
-    // Brick fully inside the source volume (halo included): no clamp needed
-    // along any face. Drives the L0 fast path and skips the per-voxel clamp
-    // branches in the LOD > 0 path.
     const bool interior =
         srcX0 >= 0 && srcY0 >= 0 && srcZ0 >= 0 &&
         srcX0 + srcSpan <= static_cast<int>(srcW) &&
         srcY0 + srcSpan <= static_cast<int>(srcH) &&
         srcZ0 + srcSpan <= static_cast<int>(srcD);
 
-    // L0 interior: contiguous row-memcpy, the same fast path
-    // commit 6c846fd introduced before the LOD work.
-    if (lod == 0 && interior) {
+    // HalfFloat + LOD 0 + interior: contiguous row-memcpy of raw 16-bit half
+    // bytes -- the source bits are already in the destination wire format.
+    // The fast path from commit 6c846fd, gated on the format check.
+    if (lod == 0 && interior && src.format == Format::HalfFloat) {
+        const uint16_t* halfSrc = static_cast<const uint16_t*>(src.data);
         const size_t rowBytes = static_cast<size_t>(brickStoredLod) * sizeof(uint16_t);
         for (uint32_t lz = 0; lz < brickStoredLod; ++lz) {
             const size_t srcZIdx = static_cast<size_t>(srcZ0 + static_cast<int>(lz));
             for (uint32_t ly = 0; ly < brickStoredLod; ++ly) {
                 const size_t srcYIdx = static_cast<size_t>(srcY0 + static_cast<int>(ly));
                 const uint16_t* srcRow =
-                    src + (srcZIdx * srcH + srcYIdx) * srcW + static_cast<size_t>(srcX0);
+                    halfSrc + (srcZIdx * srcH + srcYIdx) * srcW + static_cast<size_t>(srcX0);
                 uint8_t* dstRow =
                     mapped + (static_cast<uint64_t>(lz) * brickStoredLod + ly) * paddedBytesPerRow;
                 std::memcpy(dstRow, srcRow, rowBytes);
@@ -513,15 +512,25 @@ void packBrickToStaging(const uint16_t* src,
         return;
     }
 
-    // LOD > 0 OR boundary brick: per-output-voxel walk. Each LOD-L output
-    // voxel averages factor^3 L0 source voxels (box filter). factor == 1
-    // for LOD 0 boundary, so this loop subsumes the previous boundary-clamp
-    // path with one extra multiply-by-1.
-    auto sampleHalf = [&](int x, int y, int z) -> float {
+    // Per-voxel path: LOD > 0 (any format), boundary brick, or non-HalfFloat
+    // source. read() returns the voxel in physical units (e.g. HU) regardless
+    // of format; we sum + average + pack to half here.
+    auto sample = [&](int x, int y, int z) -> float {
         x = std::clamp(x, 0, static_cast<int>(srcW) - 1);
         y = std::clamp(y, 0, static_cast<int>(srcH) - 1);
         z = std::clamp(z, 0, static_cast<int>(srcD) - 1);
-        return glm::unpackHalf1x16(src[(static_cast<size_t>(z) * srcH + y) * srcW + x]);
+        const size_t idx = (static_cast<size_t>(z) * srcH + y) * srcW + x;
+        switch (src.format) {
+        case Format::HalfFloat:
+            return glm::unpackHalf1x16(static_cast<const uint16_t*>(src.data)[idx]);
+        case Format::Int16:
+            return src.slope * static_cast<float>(static_cast<const int16_t*>(src.data)[idx])
+                 + src.intercept;
+        case Format::Uint16:
+            return src.slope * static_cast<float>(static_cast<const uint16_t*>(src.data)[idx])
+                 + src.intercept;
+        }
+        return 0.0f;
     };
     const float scale = 1.0f / static_cast<float>(factor * factor * factor);
     for (uint32_t lz = 0; lz < brickStoredLod; ++lz) {
@@ -536,9 +545,9 @@ void packBrickToStaging(const uint16_t* src,
                 for (uint32_t dz = 0; dz < factor; ++dz) {
                     for (uint32_t dy = 0; dy < factor; ++dy) {
                         for (uint32_t dx = 0; dx < factor; ++dx) {
-                            sum += sampleHalf(srcXBase + static_cast<int>(dx),
-                                              srcYBase + static_cast<int>(dy),
-                                              srcZBase + static_cast<int>(dz));
+                            sum += sample(srcXBase + static_cast<int>(dx),
+                                          srcYBase + static_cast<int>(dy),
+                                          srcZBase + static_cast<int>(dz));
                         }
                     }
                 }
@@ -702,11 +711,12 @@ BrickedVolume::updateStreaming(const std::vector<uint32_t>& visiblePageIndices,
         const uint32_t by = (pageIdx / m_pageGrid.x) % m_pageGrid.y;
         const uint32_t bz =  pageIdx / (m_pageGrid.x * m_pageGrid.y);
 
-        // CPU-pack from the L0 source. For LOD > 0 the pack box-filters L0
-        // voxels down to the brick's stored resolution on the fly (Step 3).
-        const HalfDataView srcData = halfDataL0();
+        // CPU-pack from the L0 voxel source. The VoxelSource carries the
+        // format (HalfFloat now; Int16 / Uint16 in Step 5.2) and the rescale
+        // slope/intercept; packBrickToStaging dispatches at the per-voxel read.
+        const VoxelSource srcData = voxelSourceL0();
         uint8_t* mapped = static_cast<uint8_t*>(stagingPtr->map());
-        packBrickToStaging(srcData.data, m_volSize.x, m_volSize.y, m_volSize.z,
+        packBrickToStaging(srcData, m_volSize.x, m_volSize.y, m_volSize.z,
                            bx, by, bz, lod,
                            mapped, L.paddedBytesPerRow);
         stagingPtr->unmap();

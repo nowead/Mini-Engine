@@ -134,17 +134,25 @@ public:
     // dominated the disk-paging story for big volumes.
     static constexpr uint32_t kLodLevels = 4;        // L0 + 3 box-filter levels
 
-    // A non-owning view over the L0 half-float source data. Decouples callers
-    // from the underlying storage so the disk-paging track can swap
-    // m_originalHalfData out for an mmap-backed region without touching the
-    // pack / streaming code.
-    struct HalfDataView {
-        const uint16_t* data = nullptr;
-        size_t          size = 0;
-        bool empty() const noexcept { return size == 0; }
+    // A non-owning view over the L0 source data. Decouples callers from the
+    // underlying storage (vector vs mmap) and from the wire format (half-float
+    // vs int16/uint16 + rescale -- Step 5.2 adds the integer formats). The
+    // single read(idx) accessor returns the voxel as a float in physical units
+    // (e.g. Hounsfield); pack / mip-build call sites stay format-agnostic.
+    struct VoxelSource {
+        enum class Format : uint8_t { HalfFloat, Int16, Uint16 };
+        const void* data      = nullptr;
+        size_t      count     = 0;
+        Format      format    = Format::HalfFloat;
+        float       slope     = 1.0f;   // physical = slope * raw + intercept
+        float       intercept = 0.0f;
+        bool empty() const noexcept { return count == 0; }
     };
-    HalfDataView halfDataL0() const {
-        return {m_originalHalfData.data(), m_originalHalfData.size()};
+    VoxelSource voxelSourceL0() const {
+        return {m_originalHalfData.data(),
+                m_originalHalfData.size(),
+                VoxelSource::Format::HalfFloat,
+                1.0f, 0.0f};
     }
 
     // v1-3 streaming update. Given the list of virtual brick page indices
