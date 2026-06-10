@@ -15,6 +15,7 @@
 #include "src/rendering/RendererBridge.hpp"
 #include "src/rendering/VolumeRenderer.hpp"
 #include "src/assets/NiftiFile.hpp"
+#include "src/assets/DicomFile.hpp"
 #include "src/scene/Camera.hpp"
 #include "src/utils/Logger.hpp"
 
@@ -226,7 +227,14 @@ private:
 
         glm::vec3 halfExtent(1.0f);
         assets::Volume3D vol;
-        if (assets::loadNifti("/synthetic_ct.nii", vol)) {
+        // Step W3: try the preloaded JPEG 2000 DICOM first so the OpenJPEG path
+        // is exercised on every browser load. Falls back to the synthetic NIfTI
+        // (already preloaded for the prior demo flow) if the DICOM is missing
+        // or unsupported.
+        const bool loaded =
+            assets::loadDicomSeries("/sample_dicom", vol) ||
+            assets::loadNifti("/synthetic_ct.nii", vol);
+        if (loaded) {
             m_volume->loadFromFloatData(vol.intensity, vol.w, vol.h, vol.d);
             glm::vec3 ext(vol.w * vol.spacingX, vol.h * vol.spacingY, vol.d * vol.spacingZ);
             const float m = std::max({ext.x, ext.y, ext.z});
@@ -240,7 +248,7 @@ private:
             EM_ASM({ Module._dataMin = $0; Module._dataMax = $1; },
                    m_volume->getDataMin(), m_volume->getDataMax());
         } else {
-            std::cerr << "[VolumeViewerWasm] /synthetic_ct.nii missing -> procedural\n";
+            std::cerr << "[VolumeViewerWasm] no DICOM / NIfTI preload -> procedural\n";
         }
 
         m_volume->setAABB(-halfExtent, halfExtent);

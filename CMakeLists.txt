@@ -900,7 +900,14 @@ else()
         COMMAND ${CMAKE_COMMAND} -E make_directory ${VV_ASSET_DIR}
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/make_synthetic_nii.py
                 ${VV_ASSET_DIR}/synthetic_ct.nii 96 96 48
-        COMMENT "Staging WGSL + synthetic CT for volume_viewer_wasm"
+        # Step W3: download a small JPEG 2000-encoded DICOM (pydicom's
+        # 693_J2KI.dcm) into vv_assets/sample_dicom/ so the browser viewer can
+        # exercise the OpenJPEG decode path end to end. Idempotent -- the
+        # script no-ops when the file is already cached.
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${VV_ASSET_DIR}/sample_dicom
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/fetch_wasm_dicom_sample.py
+                ${VV_ASSET_DIR}/sample_dicom/693_J2KI.dcm
+        COMMENT "Staging WGSL + synthetic CT + JPEG 2000 DICOM sample for volume_viewer_wasm"
     )
     set_target_properties(volume_viewer_wasm PROPERTIES
         LINK_DEPENDS "${VV_WGSL_SOURCES};${CMAKE_CURRENT_SOURCE_DIR}/tests/volume_viewer_shell.html"
@@ -929,6 +936,7 @@ else()
         "SHELL:--bind"
         "SHELL:--preload-file ${VV_SHADER_DIR}@/shaders"
         "SHELL:--preload-file ${VV_ASSET_DIR}/synthetic_ct.nii@/synthetic_ct.nii"
+        "SHELL:--preload-file ${VV_ASSET_DIR}/sample_dicom@/sample_dicom"
         "SHELL:--shell-file ${CMAKE_CURRENT_SOURCE_DIR}/tests/volume_viewer_shell.html"
     )
     target_compile_options(volume_viewer_wasm PRIVATE
