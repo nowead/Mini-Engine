@@ -76,7 +76,7 @@ make serve-wasm   # scripts\serve_nocache.py 사용 (브라우저 캐시 우회)
 | 포맷 | 네이티브 | WASM | 비고 |
 | --- | --- | --- | --- |
 | **NIfTI (.nii)** | ✅ (mmap) | ✅ (preload 1개) | 헤더에 dims·spacing·intensity 단위. 우선 권장 포맷. 네이티브는 `utils::MmappedFile`로 본문을 OS 페이지 캐시에 위임 (큰 파일 ingest의 transient 버퍼 제거) |
-| **DICOM 시리즈 (디렉토리)** | ✅ | ❌ | int16 CT/MR. Transfer syntax: Explicit VR LE, Implicit VR LE(임상 PACS 기본), RLE Lossless, JPEG 2000 Lossless/Lossy(openjpeg). 실 임상 코퍼스 검증: HU CT, 고해상도 MR, multi-frame MR, enhanced CT(Explicit) · pydicom RT(Implicit dispatch) · pydicom 693_J2KI(JPEG 2000 lossy) · pydicom MR_small_RLE(비트 동일성) |
+| **DICOM 시리즈 (디렉토리)** | ✅ | ✅ (preload, JPEG 2000 sample) | int16 CT/MR. Transfer syntax: Explicit VR LE, Implicit VR LE(임상 PACS 기본), RLE Lossless, JPEG 2000 Lossless/Lossy(openjpeg). 실 임상 코퍼스 검증: HU CT, 고해상도 MR, multi-frame MR, enhanced CT(Explicit) · pydicom RT(Implicit dispatch) · pydicom 693_J2KI(JPEG 2000 lossy, **네이티브 + WASM 브라우저**) · pydicom MR_small_RLE(비트 동일성). WASM 빌드는 OpenJPEG를 FetchContent로 컴파일 + 693_J2KI.dcm을 자동 다운로드 + preload |
 | **raw headerless** | ✅ | ❌ | dims·bpv를 CLI로 명시 |
 | **절차적 합성** | ✅ (인자 없음) | ❌ | 128³ 노이즈 볼륨, 첫 부팅용 |
 

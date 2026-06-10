@@ -19,6 +19,7 @@ WebGPU 기반 차세대 클라이언트 사이드 **의료 볼륨 렌더러**로
 | [DICOM_COMPRESSED_PLAN.md](medical-volume/DICOM_COMPRESSED_PLAN.md) | DICOM 압축 transfer syntax (RLE + JPEG 2000) 4 step 계획 + 검증 |
 | [DISK_PAGING_PLAN.md](medical-volume/DISK_PAGING_PLAN.md) | M3-3 v1-β 디스크 페이징 Steps 1-3 (voxel source 추상화 + mmap + on-the-fly mip) |
 | [DISK_PAGING_STEP5_PLAN.md](medical-volume/DISK_PAGING_STEP5_PLAN.md) | Disk paging Step 5 (mmap int16 → brick-pack 시 변환, 진짜 4 GB+ unlock) |
+| [WASM_OPENJPEG_PLAN.md](medical-volume/WASM_OPENJPEG_PLAN.md) | WASM OpenJPEG 빌드 (브라우저 JPEG 2000 DICOM 디코드) |
 | [BASELINE_2026-06-03.md](medical-volume/BASELINE_2026-06-03.md) | v0 + M4 v1 기준선 측정 |
 | [BASELINE_2026-06-04_V1_ALPHA.md](medical-volume/BASELINE_2026-06-04_V1_ALPHA.md) | v1-α 측정 (auto-size win + streaming 자동 진입 + 정직한 한계) |
 | [BASELINE_2026-06-07_V1_BETA.md](medical-volume/BASELINE_2026-06-07_V1_BETA.md) | v1-β LOD 측정 (missing brick 2320→326 -86%) + 알려진 한계 (LOD seam, stale-LOD blur) |
@@ -101,10 +102,19 @@ intermediate + halfData 변환 임시 버퍼 동시 존재가 지배. 베이스�
 float intermediate + halfData 변환 임시 + m_originalHalfData 세 항목 모두 제거.
 Static-fit 케이스는 자동 fallback. 베이스라인:
 [BASELINE_2026-06-10_DISK_PAGING_STEP5.md](medical-volume/BASELINE_2026-06-10_DISK_PAGING_STEP5.md).
+**WASM OpenJPEG 완료** (2026-06-10): Emscripten 빌드에 OpenJPEG FetchContent +
+DicomFile.cpp 연결 + pydicom `693_J2KI.dcm`(CT 512x512 JPEG 2000 lossy)
+build-time 다운로드 + preload. 브라우저(`volume_viewer_wasm`)에서 실 임상
+CT를 OpenJPEG로 디코드 + 렌더 검증. WASM payload 738 KB → 1.08 MB (+345 KB
+OpenJPEG 정적 링크). 부수 발견: WASM 뷰어 Streaming 모드 + ASYNCIFY + WebGPU
+swapchain "Destroyed texture used in a submit" 검증 spam — Static atlas
+워크어라운드 적용, 본질 해결은 후속 트랙. 계획서:
+[WASM_OPENJPEG_PLAN.md](medical-volume/WASM_OPENJPEG_PLAN.md).
 
-**다음 후보**: WASM OpenJPEG 빌드 (브라우저 압축 DICOM) · JPEG Baseline /
-Lossless (libjpeg-turbo) · DICOM mmap (Phase C: 슬라이스 어셈블 캐시) · 즉흥
-폴리시 (LOD seam 완화 / async pack / adaptive K / screen-pixel LOD selection).
+**다음 후보**: WASM Streaming + swapchain race 본질 해결 (별도 트랙) · JPEG
+Baseline / Lossless (libjpeg-turbo) · DICOM mmap (Phase C: 슬라이스 어셈블 캐시)
+· `<input type="file">` 런타임 DICOM 업로드 · 즉흥 폴리시 (LOD seam 완화 / async
+pack / adaptive K / screen-pixel LOD selection).
 
 **선행 완료**: 볼륨 렌더링 기초(3D 텍스처 + 레이마칭, Vulkan + WebGPU) ·
 TF 프리셋 · 독립 뷰어(네이티브 `volume_viewer` + 브라우저 `volume_viewer_wasm`).

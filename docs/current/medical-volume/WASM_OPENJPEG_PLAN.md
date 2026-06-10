@@ -141,3 +141,34 @@ volume_viewer_wasm DICOM 디스패치: ~2시간.
 ## 7. 다음 진입점
 
 Step W1 (OpenJPEG FetchContent + 링크 검증) 부터 진행.
+
+---
+
+## 8. 진행 기록 (2026-06-10)
+
+- **Step W1 (`90a4f38`)**: OpenJPEG v2.5.0 FetchContent + WASM 분기 빌드 옵션
+  (CODEC/DOC/TESTING/SHARED OFF). `target_include_directories`에 BUILD_INTERFACE
+  generator expression. OpenJPEG의 RUNTIME_OUTPUT_DIRECTORY 부작용 해소
+  (`set_target_properties` RUNTIME_OUTPUT_DIRECTORY override). `opj_version()`
+  링크 probe.
+- **Step W2 (`7dd1679`)**: DicomFile.cpp/hpp + `openjp2` 링크. 호출부 없음, DCE
+  유지 (WASM 738 KB 그대로).
+- **Step W3 (`38d2f3c`)**: `scripts/fetch_wasm_dicom_sample.py` (pydicom
+  693_J2KI.dcm 다운로드, idempotent). CMakeLists PRE_LINK + `--preload-file
+  vv_assets/sample_dicom@/sample_dicom`. `volume_viewer_wasm` dispatch: DICOM
+  먼저, NIfTI fallback. **WASM 738 KB → 1.08 MB (+345 KB OpenJPEG 디코더 실제
+  링크)**.
+- **Step W4 (브라우저 검증 + `f7f62a3` 워크어라운드)**: 브라우저에서
+  693_J2KI.dcm 디코드 + 렌더 성공. **별개 이슈 발견 + 임시 해결**: WASM 뷰어가
+  Streaming 모드 진입 시 `queue->waitIdle()` (ASYNCIFY suspend) 후 swapchain
+  texture가 invalid 되어 "Destroyed texture used in a submit" spam. 워크어라운드:
+  `loadFromFloatData`에 per-axis `atlasGridOverride = ceil(dim/64)` 강제 →
+  Static 모드 진입 → `waitIdle()` 미사용. 본 트랙 범위 밖의 WebGPU + ASYNCIFY
+  와 Streaming 상호작용은 별도 후속 항목으로 분리.
+
+본 계획 4 단계 완료. 후속:
+
+- WASM 뷰어가 Streaming 모드를 안전하게 다루도록 swapchain acquire 시점
+  재배치 (별도 트랙)
+- `<input type="file">` 런타임 업로드 (사용자 DICOM 선택)
+- 다중 슬라이스 DICOM 시리즈 WASM 지원
