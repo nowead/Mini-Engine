@@ -231,11 +231,27 @@ private:
         // is exercised on every browser load. Falls back to the synthetic NIfTI
         // (already preloaded for the prior demo flow) if the DICOM is missing
         // or unsupported.
-        const bool loaded =
-            assets::loadDicomSeries("/sample_dicom", vol) ||
-            assets::loadNifti("/synthetic_ct.nii", vol);
+        const bool loadedDicom = assets::loadDicomSeries("/sample_dicom", vol);
+        const bool loaded = loadedDicom || assets::loadNifti("/synthetic_ct.nii", vol);
         if (loaded) {
-            m_volume->loadFromFloatData(vol.intensity, vol.w, vol.h, vol.d);
+            // Force a Static-mode atlas in the browser viewer. Streaming mode
+            // pumps queue->waitIdle() (emscripten_sleep under ASYNCIFY) from
+            // inside drawFrame, which on WebGPU can return AFTER the surface
+            // texture acquired earlier in the frame has been destroyed by
+            // Chrome's swap-chain backing -- the queue submit then trips the
+            // "Destroyed texture used in a submit" validation spam. Single-
+            // slice DICOM (typical demo) and the synthetic NIfTI both fit a
+            // generous atlas, so a Static fit is the natural workaround.
+            // Atlas grid = ceil(dim / 64) per axis -- exactly the page grid.
+            // For a 512x512x1 single-slice DICOM that's (8, 8, 1) = 64 slots
+            // ~ 37 MB (L0) + 14% (L1+L2+L3) -- safely under the WebGPU
+            // 256 MB max buffer size cap. A uniform `glm::uvec3(8)` would
+            // produce (8, 8, 8) = 512 slots ~ 294 MB and trip CreateBuffer.
+            const glm::uvec3 atlasOverride(
+                (vol.w + 63) / 64,
+                (vol.h + 63) / 64,
+                (vol.d + 63) / 64);
+            m_volume->loadFromFloatData(vol.intensity, vol.w, vol.h, vol.d, atlasOverride);
             glm::vec3 ext(vol.w * vol.spacingX, vol.h * vol.spacingY, vol.d * vol.spacingZ);
             const float m = std::max({ext.x, ext.y, ext.z});
             halfExtent = (m > 0.0f) ? ext / m : glm::vec3(1.0f);
