@@ -269,6 +269,50 @@ bool VolumeRenderer::loadFromFloatData(const std::vector<float>& intensity,
     return true;
 }
 
+bool VolumeRenderer::loadFromMmappedNiftiSource(assets::MmappedNiftiSource&& src,
+                                                glm::uvec3 atlasGridOverride) {
+    if (!m_device || !m_graphicsQueue || src.w == 0 || src.h == 0 || src.d == 0) return false;
+    using Format = BrickedVolume::VoxelSource::Format;
+
+    m_dataMin = src.dataMin;
+    m_dataMax = src.dataMax;
+    m_windowCenter = 0.5f * (src.dataMin + src.dataMax);
+    m_windowWidth  = (src.dataMax > src.dataMin) ? (src.dataMax - src.dataMin) : 1.0f;
+
+    // Empty pattern: the raw 16-bit value that produces dataMin in physical
+    // units (typically "air" -- -1000 HU for CT). For Int16 we reinterpret the
+    // signed bits as unsigned for the bit-exact comparison; Uint16 passes
+    // through.
+    const uint16_t emptyValueRaw = src.isSigned
+        ? static_cast<uint16_t>(static_cast<int16_t>(src.rawMin))
+        : static_cast<uint16_t>(src.rawMin);
+    const uint16_t emptyValueHalf = glm::packHalf1x16(src.dataMin);
+
+    m_volW = src.w; m_volH = src.h; m_volD = src.d;
+    const uint32_t w = src.w, h = src.h, d = src.d;
+    const Format fmt = src.isSigned ? Format::Int16 : Format::Uint16;
+    const float slope = src.slope, intercept = src.intercept;
+    const size_t dataOffset = src.dataOffset;
+    if (!m_brick.buildFromMmappedSource(m_device, m_graphicsQueue,
+                                        std::move(src.mmap), dataOffset, fmt,
+                                        slope, intercept,
+                                        w, h, d,
+                                        emptyValueRaw, emptyValueHalf,
+                                        atlasGridOverride)) {
+        // Build refused the source (most commonly: volume fits Static atlas,
+        // and the caller is expected to retry through loadFromFloatData).
+        return false;
+    }
+    buildOccupancy();
+    if (m_bindGroupLayout && m_depthView) {
+        if (!createBindGroups(m_depthView)) return false;
+    }
+    LOG_INFO("VolumeRenderer") << "loaded mmapped Nifti volume " << w << "x" << h << "x" << d
+                               << " range [" << m_dataMin << "," << m_dataMax << "] ("
+                               << (fmt == Format::Int16 ? "Int16" : "Uint16") << ")";
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // M3: empty-space skipping -- compute-built min/max occupancy grid
 // ---------------------------------------------------------------------------

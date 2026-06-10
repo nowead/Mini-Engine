@@ -2,6 +2,7 @@
 #include "src/utils/Logger.hpp"
 #include "src/utils/MmappedFile.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <limits>
 
@@ -114,6 +115,89 @@ bool loadNifti(const std::string& path, Volume3D& out) {
     LOG_INFO("Nifti") << "loaded " << path << " (" << w << "x" << h << "x" << d
                       << ", spacing " << out.spacingX << "/" << out.spacingY << "/" << out.spacingZ
                       << "mm, range [" << mn << "," << mx << "], datatype " << datatype << ")";
+    return true;
+}
+
+bool loadNiftiAsMmappedSource(const std::string& path, MmappedNiftiSource& out) {
+    utils::MmappedFile mapping;
+    if (!mapping.open(path)) return false;
+    const size_t fileSize = mapping.size();
+    if (fileSize < 352) {
+        LOG_ERROR("Nifti") << path << ": file too small for mmap source (" << fileSize << "B)";
+        return false;
+    }
+    const uint8_t* buf = mapping.data();
+
+    const int32_t sizeofHdr = rd<int32_t>(buf, 0);
+    if (sizeofHdr != 348) return false;
+    if (std::memcmp(buf + 344, "n+1\0", 4) != 0) return false;
+
+    const int16_t ndim = rd<int16_t>(buf, 40);
+    const int16_t dx   = rd<int16_t>(buf, 42);
+    const int16_t dy   = rd<int16_t>(buf, 44);
+    const int16_t dz   = rd<int16_t>(buf, 46);
+    if (ndim < 3 || dx <= 0 || dy <= 0 || dz <= 0) return false;
+
+    const int16_t datatype = rd<int16_t>(buf, 70);
+    // Step 5.3 fast path: only int16 (4) / uint16 (512). Anything else falls
+    // back to the float decode in loadNifti.
+    if (datatype != 4 && datatype != 512) return false;
+
+    const float px        = rd<float>(buf, 76 + 4 * 1);
+    const float py        = rd<float>(buf, 76 + 4 * 2);
+    const float pz        = rd<float>(buf, 76 + 4 * 3);
+    const float voxOffset = rd<float>(buf, 108);
+    float       sclSlope  = rd<float>(buf, 112);
+    const float sclInter  = rd<float>(buf, 116);
+    if (sclSlope == 0.0f) sclSlope = 1.0f;
+
+    const uint32_t w = static_cast<uint32_t>(dx);
+    const uint32_t h = static_cast<uint32_t>(dy);
+    const uint32_t d = static_cast<uint32_t>(dz);
+    const size_t   voxels = static_cast<size_t>(w) * h * d;
+    const size_t   dataStart = static_cast<size_t>(voxOffset);
+    if (dataStart + voxels * 2 > fileSize) {
+        LOG_ERROR("Nifti") << path << ": voxel data truncated for mmap source";
+        return false;
+    }
+
+    // One scan pass to find raw min/max; OS streams pages in lazily through
+    // the mmap so this stays sequential I/O.
+    const uint8_t* dp = buf + dataStart;
+    int32_t rawMin, rawMax;
+    if (datatype == 4) {
+        const int16_t* p = reinterpret_cast<const int16_t*>(dp);
+        auto [mnIt, mxIt] = std::minmax_element(p, p + voxels);
+        rawMin = *mnIt;
+        rawMax = *mxIt;
+    } else {
+        const uint16_t* p = reinterpret_cast<const uint16_t*>(dp);
+        auto [mnIt, mxIt] = std::minmax_element(p, p + voxels);
+        rawMin = *mnIt;
+        rawMax = *mxIt;
+    }
+    const float dataMin = sclSlope * static_cast<float>(rawMin) + sclInter;
+    const float dataMax = sclSlope * static_cast<float>(rawMax) + sclInter;
+
+    out.mmap       = std::move(mapping);
+    out.dataOffset = dataStart;
+    out.w = w; out.h = h; out.d = d;
+    out.spacingX = (px > 0.0f) ? px : 1.0f;
+    out.spacingY = (py > 0.0f) ? py : 1.0f;
+    out.spacingZ = (pz > 0.0f) ? pz : 1.0f;
+    out.slope    = sclSlope;
+    out.intercept = sclInter;
+    out.isSigned = (datatype == 4);
+    out.rawMin   = rawMin;
+    out.rawMax   = rawMax;
+    out.dataMin  = dataMin;
+    out.dataMax  = dataMax;
+
+    LOG_INFO("Nifti") << "mmapped " << path << " (" << w << "x" << h << "x" << d
+                      << ", spacing " << out.spacingX << "/" << out.spacingY << "/" << out.spacingZ
+                      << "mm, range [" << dataMin << "," << dataMax
+                      << "], datatype " << datatype
+                      << (out.isSigned ? " int16" : " uint16") << ")";
     return true;
 }
 

@@ -221,17 +221,38 @@ private:
         glm::vec3 halfExtent(1.0f);   // unit box default (procedural / raw)
 
         if (m_isNifti || m_isDicom) {
+            // Disk paging Step 5.3: for NIfTI int16/uint16 try the mmap fast
+            // path first. It succeeds only when the volume's non-empty brick
+            // count exceeds the auto-sized atlas (i.e. Streaming mode); the
+            // float fallback below handles the Static-fits case and every
+            // non-int16 datatype.
+            bool loaded = false;
+            uint32_t vw = 0, vh = 0, vd = 0;
+            float sx = 1.0f, sy = 1.0f, sz = 1.0f;
+            const glm::uvec3 atlasOverride = m_atlasCap > 0 ? glm::uvec3(m_atlasCap)
+                                                            : glm::uvec3(0);
+            if (m_isNifti) {
+                assets::MmappedNiftiSource mmapSrc;
+                if (assets::loadNiftiAsMmappedSource(m_volPath, mmapSrc)) {
+                    vw = mmapSrc.w; vh = mmapSrc.h; vd = mmapSrc.d;
+                    sx = mmapSrc.spacingX; sy = mmapSrc.spacingY; sz = mmapSrc.spacingZ;
+                    loaded = m_volume->loadFromMmappedNiftiSource(std::move(mmapSrc), atlasOverride);
+                }
+            }
             assets::Volume3D vol;
-            const bool loaded = m_isNifti
-                ? assets::loadNifti(m_volPath, vol)
-                : assets::loadDicomSeries(m_volPath, vol);
+            if (!loaded) {
+                loaded = m_isNifti
+                    ? assets::loadNifti(m_volPath, vol)
+                    : assets::loadDicomSeries(m_volPath, vol);
+                if (loaded) {
+                    m_volume->loadFromFloatData(vol.intensity, vol.w, vol.h, vol.d, atlasOverride);
+                    vw = vol.w; vh = vol.h; vd = vol.d;
+                    sx = vol.spacingX; sy = vol.spacingY; sz = vol.spacingZ;
+                }
+            }
             if (loaded) {
-                m_volume->loadFromFloatData(vol.intensity, vol.w, vol.h, vol.d,
-                    m_atlasCap > 0 ? glm::uvec3(m_atlasCap) : glm::uvec3(0));
-                m_vw = vol.w; m_vh = vol.h; m_vd = vol.d;
-                // Aspect-correct box: the largest PHYSICAL extent spans [-1,1] so an
-                // anisotropic CT (e.g. thicker slices) is not distorted.
-                glm::vec3 ext(vol.w * vol.spacingX, vol.h * vol.spacingY, vol.d * vol.spacingZ);
+                m_vw = vw; m_vh = vh; m_vd = vd;
+                glm::vec3 ext(vw * sx, vh * sy, vd * sz);
                 const float m = std::max({ext.x, ext.y, ext.z});
                 halfExtent = (m > 0.0f) ? ext / m : glm::vec3(1.0f);
                 // Window slider bounds follow the data range (HU); start on a bone

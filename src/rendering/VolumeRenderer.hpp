@@ -26,6 +26,7 @@
 #include <rhi/RHIBindGroup.hpp>
 
 #include "BrickedVolume.hpp"
+#include "src/assets/NiftiFile.hpp"   // assets::MmappedNiftiSource
 
 namespace rendering {
 
@@ -90,6 +91,16 @@ public:
     bool loadFromFloatData(const std::vector<float>& intensity,
                            uint32_t w, uint32_t h, uint32_t d,
                            glm::uvec3 atlasGridOverride = glm::uvec3(0));
+
+    // Disk paging Step 5.3: build the brick atlas straight from a memory-
+    // mapped NIfTI int16 / uint16 source -- no float intermediate, no global
+    // half buffer. The mmap region owned by `src` is moved into BrickedVolume
+    // and kept alive while the atlas references it. Returns false (without
+    // touching renderer state) when the volume is small enough for the
+    // Static-mode atlas; the caller is expected to retry via loadFromFloatData
+    // for that case (see tests/volume_viewer.cpp dispatch).
+    bool loadFromMmappedNiftiSource(assets::MmappedNiftiSource&& src,
+                                    glm::uvec3 atlasGridOverride = glm::uvec3(0));
 
     // Intensity range of the loaded volume (data units, e.g. HU) -- lets the UI set
     // window-slider bounds and clinical presets sensibly.
