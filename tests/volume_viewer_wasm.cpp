@@ -16,6 +16,12 @@
 #include "src/rendering/VolumeRenderer.hpp"
 #include "src/assets/NiftiFile.hpp"
 #include "src/scene/Camera.hpp"
+#include "src/utils/Logger.hpp"
+
+// Step W1: linkage probe. opj_version() is the smallest possible OpenJPEG call
+// (returns a string pointer, no allocation). Logged once at startup so we know
+// the WASM build picked up the FetchContent-built static lib.
+#include <openjpeg.h>
 
 #include <GLFW/glfw3.h>
 #include <emscripten.h>
@@ -411,6 +417,7 @@ EMSCRIPTEN_BINDINGS(volume_viewer) {
 }
 
 int main() {
+    LOG_INFO("WasmViewer") << "OpenJPEG linked, version: " << opj_version();
     g_viewer = new VolumeViewerWasm();
     g_viewer->init();
     emscripten_set_main_loop_arg(

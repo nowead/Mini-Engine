@@ -106,6 +106,33 @@ else()
     target_include_directories(stb INTERFACE ${stb_SOURCE_DIR})
     # Match the vcpkg Stb::stb alias so call sites that need it can use either.
     add_library(Stb::stb ALIAS stb)
+
+    # OpenJPEG for DICOM JPEG 2000 transfer syntax decoding in the browser.
+    # Native gets this via vcpkg `openjpeg` (CMakeLists.txt vulkan branch);
+    # WASM builds it from source. Codec tools / docs / tests are off because
+    # we only need the static decoder library (`openjp2`). Step W1 of
+    # WASM_OPENJPEG_PLAN -- linkage only; the call sites that actually feed
+    # encapsulated DICOM bytes through opj_decode land in Step W2+.
+    set(BUILD_CODEC OFF CACHE BOOL "" FORCE)
+    set(BUILD_DOC OFF CACHE BOOL "" FORCE)
+    set(BUILD_LUTS_GENERATOR OFF CACHE BOOL "" FORCE)
+    set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(
+        openjpeg
+        GIT_REPOSITORY https://github.com/uclouvain/openjpeg.git
+        GIT_TAG v2.5.0
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(openjpeg)
+    # The openjp2 target exposes its own include directories via OpenJPEG's
+    # CMakeLists.txt -- we just need to make sure consumers depend on the
+    # generated opj_config.h. CMake forbids exposing raw build-tree paths
+    # through INTERFACE_INCLUDE_DIRECTORIES (must use $<BUILD_INTERFACE:...>),
+    # so we wrap the binary dir in the build interface generator expression.
+    target_include_directories(openjp2 INTERFACE
+        $<BUILD_INTERFACE:${openjpeg_SOURCE_DIR}/src/lib/openjp2>
+        $<BUILD_INTERFACE:${openjpeg_BINARY_DIR}/src/lib/openjp2>)
 endif()
 
 # =============================================================================
@@ -845,10 +872,16 @@ else()
         src/utils/MmappedFile.hpp
     )
     target_include_directories(volume_viewer_wasm BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-    target_link_libraries(volume_viewer_wasm PRIVATE glm::glm rhi::factory)
+    target_link_libraries(volume_viewer_wasm PRIVATE glm::glm rhi::factory openjp2)
     target_compile_definitions(volume_viewer_wasm PRIVATE
         $<$<BOOL:${RHI_BACKEND_WEBGPU}>:RHI_BACKEND_WEBGPU=1>)
-    set_target_properties(volume_viewer_wasm PROPERTIES SUFFIX ".html")
+    set_target_properties(volume_viewer_wasm PROPERTIES
+        SUFFIX ".html"
+        # OpenJPEG's CMakeLists.txt sets CMAKE_RUNTIME_OUTPUT_DIRECTORY for its
+        # own codec binaries, which would otherwise redirect ours into
+        # build_wasm/_deps/openjpeg-build/bin/. Pin the .html / .wasm / .js
+        # back to the top-level build directory so the serve scripts find them.
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 
     # Stage the volume WGSL shaders + a generated synthetic CT into preload dirs.
     set(VV_SHADER_DIR ${CMAKE_CURRENT_BINARY_DIR}/vv_shaders)
