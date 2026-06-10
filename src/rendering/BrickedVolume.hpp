@@ -33,6 +33,8 @@
 #include <rhi/RHIQueue.hpp>
 #include <rhi/RHITexture.hpp>
 
+#include "src/utils/MmappedFile.hpp"
+
 namespace rendering {
 
 class BrickedVolume {
@@ -94,6 +96,21 @@ public:
     BrickedVolume(const BrickedVolume&) = delete;
     BrickedVolume& operator=(const BrickedVolume&) = delete;
 
+    // A non-owning view over the L0 source data. Decouples callers from the
+    // underlying storage (vector vs mmap) and from the wire format (half-float
+    // vs int16/uint16 + rescale -- Step 5.2 adds the integer formats). The
+    // pack site reads voxels through this and converts to half on the fly so
+    // int16 / uint16 mmap sources skip the global half buffer materialisation.
+    struct VoxelSource {
+        enum class Format : uint8_t { HalfFloat, Int16, Uint16 };
+        const void* data      = nullptr;
+        size_t      count     = 0;
+        Format      format    = Format::HalfFloat;
+        float       slope     = 1.0f;   // physical = slope * raw + intercept
+        float       intercept = 0.0f;
+        bool empty() const noexcept { return count == 0; }
+    };
+
     // Build the atlas + page table from a dense R16Float intensity volume.
     // halfData is row-major (x-fastest) of size w*h*d uint16 (R16Float bits).
     // emptyValueHalf is the half-float bit pattern that counts as "air" --
@@ -107,6 +124,28 @@ public:
                uint32_t w, uint32_t h, uint32_t d,
                uint16_t emptyValueHalf,
                glm::uvec3 atlasGrid = glm::uvec3(0));
+
+    // Step 5.2: build from a memory-mapped Int16 / Uint16 source. The brick
+    // pack reads source voxels straight out of the mmap region, converts each
+    // to half on the fly using `slope`/`intercept` (physical = slope*raw +
+    // intercept), and avoids materialising a global half-data buffer -- the
+    // path that lets 4 GB+ NIfTI files load without RAM doubling. `mmap`
+    // ownership transfers to BrickedVolume so the region stays alive for the
+    // lifetime of any Streaming-mode atlas. `dataOffset` is the byte offset of
+    // the first voxel inside the mmap. `emptyValueRaw` is the source-format
+    // bit pattern that counts as "air" (e.g. NIfTI int16 raw value -1000
+    // reinterpreted as uint16); `emptyValueHalf` is the R16Float bit pattern
+    // used to initialise unoccupied atlas voxels (so the shader reads the
+    // correct background value).
+    bool buildFromMmappedSource(rhi::RHIDevice* device, rhi::RHIQueue* queue,
+                                utils::MmappedFile&& mmap,
+                                size_t dataOffset,
+                                VoxelSource::Format format,
+                                float slope, float intercept,
+                                uint32_t w, uint32_t h, uint32_t d,
+                                uint16_t emptyValueRaw,
+                                uint16_t emptyValueHalf,
+                                glm::uvec3 atlasGrid = glm::uvec3(0));
 
     // v1-1 CPU-side page table mirror (per virtual brick, atlas slot or
     // kEmptySlot). v0 build copies its local pageTable here at end of build
@@ -134,26 +173,7 @@ public:
     // dominated the disk-paging story for big volumes.
     static constexpr uint32_t kLodLevels = 4;        // L0 + 3 box-filter levels
 
-    // A non-owning view over the L0 source data. Decouples callers from the
-    // underlying storage (vector vs mmap) and from the wire format (half-float
-    // vs int16/uint16 + rescale -- Step 5.2 adds the integer formats). The
-    // single read(idx) accessor returns the voxel as a float in physical units
-    // (e.g. Hounsfield); pack / mip-build call sites stay format-agnostic.
-    struct VoxelSource {
-        enum class Format : uint8_t { HalfFloat, Int16, Uint16 };
-        const void* data      = nullptr;
-        size_t      count     = 0;
-        Format      format    = Format::HalfFloat;
-        float       slope     = 1.0f;   // physical = slope * raw + intercept
-        float       intercept = 0.0f;
-        bool empty() const noexcept { return count == 0; }
-    };
-    VoxelSource voxelSourceL0() const {
-        return {m_originalHalfData.data(),
-                m_originalHalfData.size(),
-                VoxelSource::Format::HalfFloat,
-                1.0f, 0.0f};
-    }
+    VoxelSource voxelSourceL0() const { return m_voxelSource; }
 
     // v1-3 streaming update. Given the list of virtual brick page indices
     // the camera frustum sees this frame, this method:
@@ -252,7 +272,14 @@ private:
 
     // v1-2 streaming-mode state. Empty / default-constructed in Static mode.
     Mode m_mode = Mode::StaticFullyLoaded;
-    std::vector<uint16_t> m_originalHalfData;  // CPU mirror, indexed (z*H + y)*W + x
+    // L0 voxel source -- either:
+    //   - HalfFloat owned: m_originalHalfData holds the data, m_voxelSource
+    //     points at it
+    //   - Int16/Uint16 mmap-backed: m_mmappedSource holds the file mapping
+    //     alive, m_voxelSource points into the mapping at m_dataOffset
+    std::vector<uint16_t> m_originalHalfData;  // CPU mirror for HalfFloat path
+    utils::MmappedFile    m_mmappedSource;     // Step 5.2: mmap path
+    VoxelSource           m_voxelSource{};     // active view (whichever path)
     uint16_t m_emptyValueHalf = 0;             // for empty-slot init + halo padding
     struct AtlasSlotState {
         uint32_t residentPageIdx = kEmptySlot; // page index living in this slot, or kEmptySlot

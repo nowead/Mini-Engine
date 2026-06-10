@@ -13,26 +13,48 @@ namespace rendering {
 
 namespace {
 
-// Source voxel fetch with edge clamping (so brick halos at the volume boundary
-// replicate the edge voxel instead of reading out-of-bounds).
-inline uint16_t srcVoxel(const std::vector<uint16_t>& src,
-                         int x, int y, int z,
-                         uint32_t W, uint32_t H, uint32_t D) {
+// Sample one source voxel with edge clamping and return its R16Float bit
+// pattern. For HalfFloat the source bits are already half so we just pass them
+// through; for Int16 / Uint16 we apply slope/intercept and pack to half.
+// Used by the Static-mode atlas pack so int16 sources flow through the same
+// build path as the legacy half-data vector input.
+inline uint16_t srcVoxelHalfBits(const BrickedVolume::VoxelSource& src,
+                                 int x, int y, int z,
+                                 uint32_t W, uint32_t H, uint32_t D) {
+    using Format = BrickedVolume::VoxelSource::Format;
     x = std::clamp(x, 0, static_cast<int>(W) - 1);
     y = std::clamp(y, 0, static_cast<int>(H) - 1);
     z = std::clamp(z, 0, static_cast<int>(D) - 1);
-    return src[(static_cast<size_t>(z) * H + y) * W + x];
+    const size_t idx = (static_cast<size_t>(z) * H + y) * W + x;
+    switch (src.format) {
+    case Format::HalfFloat:
+        return static_cast<const uint16_t*>(src.data)[idx];
+    case Format::Int16: {
+        const float v = src.slope * static_cast<float>(static_cast<const int16_t*>(src.data)[idx])
+                      + src.intercept;
+        return glm::packHalf1x16(v);
+    }
+    case Format::Uint16: {
+        const float v = src.slope * static_cast<float>(static_cast<const uint16_t*>(src.data)[idx])
+                      + src.intercept;
+        return glm::packHalf1x16(v);
+    }
+    }
+    return 0;
 }
 
-// True iff every interior voxel of the brick at (bx, by, bz) equals emptyValueHalf.
-// "Interior" = the 64^3 voxels actually owned by the brick; the halo is ignored
-// for the empty test (a brick whose interior is air but whose halo would have
-// data is still empty: the *neighbour* brick is the one that needs the gradient,
-// and ITS halo brings in our zeros).
-bool isInteriorEmpty(const std::vector<uint16_t>& src,
+// True iff every interior voxel of the brick at (bx, by, bz) equals
+// emptyValueRaw. "Interior" = the 64^3 voxels actually owned by the brick; the
+// halo is ignored for the empty test (a brick whose interior is air but whose
+// halo would have data is still empty: the *neighbour* brick is the one that
+// needs the gradient, and ITS halo brings in our zeros). Generalised over the
+// source's wire format (HalfFloat / Int16 / Uint16) by treating each voxel as
+// 16 raw bits; the comparison is bit-exact so the caller picks the right raw
+// pattern (e.g. NIfTI int16 -1000 reinterpreted as uint16).
+bool isInteriorEmpty(const uint16_t* src,
                      uint32_t bx, uint32_t by, uint32_t bz,
                      uint32_t W, uint32_t H, uint32_t D,
-                     uint16_t emptyValueHalf) {
+                     uint16_t emptyValueRaw) {
     const uint32_t x0 = bx * BrickedVolume::kBrickSize;
     const uint32_t y0 = by * BrickedVolume::kBrickSize;
     const uint32_t z0 = bz * BrickedVolume::kBrickSize;
@@ -43,7 +65,7 @@ bool isInteriorEmpty(const std::vector<uint16_t>& src,
         for (uint32_t y = y0; y < y1; ++y) {
             const size_t row = (static_cast<size_t>(z) * H + y) * W;
             for (uint32_t x = x0; x < x1; ++x) {
-                if (src[row + x] != emptyValueHalf) return false;
+                if (src[row + x] != emptyValueRaw) return false;
             }
         }
     }
@@ -71,6 +93,15 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
     m_device = device;
     m_queue  = queue;
 
+    // Build using a temporary VoxelSource view over the input parameter; only
+    // the Streaming branch below copies it into m_originalHalfData + sets
+    // m_voxelSource (the Static path never reads the source again after
+    // atlas pack, so paying the copy there would just waste RAM).
+    const VoxelSource buildView{halfData.data(), halfData.size(),
+                                VoxelSource::Format::HalfFloat,
+                                1.0f, 0.0f};
+    const uint16_t emptyValueRaw = emptyValueHalf;  // HalfFloat path: raw == half bits
+
     m_volSize   = glm::uvec3(w, h, d);
     m_pageGrid  = glm::uvec3((w + kBrickSize - 1) / kBrickSize,
                              (h + kBrickSize - 1) / kBrickSize,
@@ -89,7 +120,8 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
     for (uint32_t bz = 0; bz < m_pageGrid.z; ++bz) {
         for (uint32_t by = 0; by < m_pageGrid.y; ++by) {
             for (uint32_t bx = 0; bx < m_pageGrid.x; ++bx) {
-                if (isInteriorEmpty(halfData, bx, by, bz, w, h, d, emptyValueHalf)) continue;
+                if (isInteriorEmpty(static_cast<const uint16_t*>(buildView.data),
+                                    bx, by, bz, w, h, d, emptyValueRaw)) continue;
                 const uint32_t pageIdx = (bz * m_pageGrid.y + by) * m_pageGrid.x + bx;
                 m_pageOccupancy[pageIdx >> 3] |= static_cast<uint8_t>(1u << (pageIdx & 7));
                 ++nonEmptyCount;
@@ -249,7 +281,7 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
                             const int srcY = srcY0 + static_cast<int>(ly);
                             for (uint32_t lx = 0; lx < kBrickStored; ++lx) {
                                 const int srcXcoord = srcX0 + static_cast<int>(lx);
-                                dstRow[lx] = srcVoxel(halfData, srcXcoord, srcY, srcZ, w, h, d);
+                                dstRow[lx] = srcVoxelHalfBits(buildView, srcXcoord, srcY, srcZ, w, h, d);
                             }
                         }
                     }
@@ -264,6 +296,10 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
     // ------------------------------------------------------------------
     if (m_mode == Mode::Streaming) {
         m_originalHalfData = halfData;            // copy for v1-3 brick extraction
+        m_voxelSource = VoxelSource{m_originalHalfData.data(),
+                                    m_originalHalfData.size(),
+                                    VoxelSource::Format::HalfFloat,
+                                    1.0f, 0.0f};
         m_emptyValueHalf   = emptyValueHalf;
         for (auto& states : m_slotStates) states.assign(totalSlots, AtlasSlotState{});
         m_pageToSlot.clear();
@@ -431,6 +467,228 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
         << usedSlots() << "/" << totalSlots << " atlas slots, mode = "
         << (m_mode == Mode::Streaming ? "Streaming" : "Static")
         << " (atlas " << atlasVoxelsX << "x" << atlasVoxelsY << "x" << atlasVoxelsZ << ")";
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Disk paging Step 5.2: build from a memory-mapped Int16 / Uint16 source.
+// Avoids the half-data vector materialisation that doubles peak RAM during
+// the legacy build() ingest. Routes the persistent VoxelSource through the
+// mmap region so packBrickToStaging reads file bytes lazily via the OS page
+// cache. Only Streaming mode is supported here -- the target use case is
+// volumes too large for a single dense atlas; small-volume Static builds
+// still go through the legacy build() with halfData.
+// ---------------------------------------------------------------------------
+bool BrickedVolume::buildFromMmappedSource(rhi::RHIDevice* device, rhi::RHIQueue* queue,
+                                           utils::MmappedFile&& mmap,
+                                           size_t dataOffset,
+                                           VoxelSource::Format format,
+                                           float slope, float intercept,
+                                           uint32_t w, uint32_t h, uint32_t d,
+                                           uint16_t emptyValueRaw,
+                                           uint16_t emptyValueHalf,
+                                           glm::uvec3 atlasGrid) {
+    if (!device || !queue) return false;
+    if (w == 0 || h == 0 || d == 0) return false;
+    if (!mmap.valid()) {
+        LOG_ERROR("BrickedVolume") << "buildFromMmappedSource: mmap not valid";
+        return false;
+    }
+    const size_t voxelCount = static_cast<size_t>(w) * h * d;
+    if (dataOffset + voxelCount * 2 > mmap.size()) {
+        LOG_ERROR("BrickedVolume") << "buildFromMmappedSource: mmap region too small ("
+                                    << mmap.size() << " B, need " << (dataOffset + voxelCount * 2)
+                                    << " B at offset " << dataOffset << ")";
+        return false;
+    }
+
+    m_device = device;
+    m_queue  = queue;
+    m_mmappedSource = std::move(mmap);
+    const uint8_t* raw = m_mmappedSource.data() + dataOffset;
+    m_voxelSource = VoxelSource{raw, voxelCount, format, slope, intercept};
+
+    m_volSize  = glm::uvec3(w, h, d);
+    m_pageGrid = glm::uvec3((w + kBrickSize - 1) / kBrickSize,
+                            (h + kBrickSize - 1) / kBrickSize,
+                            (d + kBrickSize - 1) / kBrickSize);
+    const uint32_t totalPageEntries = m_pageGrid.x * m_pageGrid.y * m_pageGrid.z;
+
+    // Pre-scan: empty bricks identified by raw 16-bit pattern equality. The
+    // mmap pages stream in sequentially during this walk -- OS page cache
+    // handles the I/O lazily.
+    m_pageOccupancy.assign((totalPageEntries + 7u) >> 3, 0u);
+    uint32_t nonEmptyCount = 0;
+    for (uint32_t bz = 0; bz < m_pageGrid.z; ++bz) {
+        for (uint32_t by = 0; by < m_pageGrid.y; ++by) {
+            for (uint32_t bx = 0; bx < m_pageGrid.x; ++bx) {
+                if (isInteriorEmpty(static_cast<const uint16_t*>(m_voxelSource.data),
+                                    bx, by, bz, w, h, d, emptyValueRaw)) continue;
+                const uint32_t pageIdx = (bz * m_pageGrid.y + by) * m_pageGrid.x + bx;
+                m_pageOccupancy[pageIdx >> 3] |= static_cast<uint8_t>(1u << (pageIdx & 7));
+                ++nonEmptyCount;
+            }
+        }
+    }
+
+    // Atlas auto-size (same policy as build()).
+    if (atlasGrid.x == 0 || atlasGrid.y == 0 || atlasGrid.z == 0) {
+        const uint32_t axisGuess = std::max<uint32_t>(
+            kAutoAtlasMinAxis,
+            static_cast<uint32_t>(std::ceil(std::cbrt(static_cast<double>(std::max(nonEmptyCount, 1u))))));
+        atlasGrid = glm::uvec3(std::min(axisGuess, m_pageGrid.x),
+                               std::min(axisGuess, m_pageGrid.y),
+                               std::min(axisGuess, m_pageGrid.z));
+        auto atlasBytesOf = [](glm::uvec3 a) {
+            const uint64_t vx = static_cast<uint64_t>(a.x) * kBrickStored;
+            const uint64_t vy = static_cast<uint64_t>(a.y) * kBrickStored;
+            const uint64_t vz = static_cast<uint64_t>(a.z) * kBrickStored;
+            return vx * vy * vz * 2;
+        };
+        while (atlasBytesOf(atlasGrid) > kAutoAtlasBudgetBytes &&
+               (atlasGrid.x > kAutoAtlasMinAxis ||
+                atlasGrid.y > kAutoAtlasMinAxis ||
+                atlasGrid.z > kAutoAtlasMinAxis)) {
+            if (atlasGrid.x >= atlasGrid.y && atlasGrid.x >= atlasGrid.z && atlasGrid.x > kAutoAtlasMinAxis) --atlasGrid.x;
+            else if (atlasGrid.y >= atlasGrid.z && atlasGrid.y > kAutoAtlasMinAxis) --atlasGrid.y;
+            else if (atlasGrid.z > kAutoAtlasMinAxis) --atlasGrid.z;
+            else break;
+        }
+    }
+    m_atlasGrid = atlasGrid;
+    const uint32_t totalSlots = atlasGrid.x * atlasGrid.y * atlasGrid.z;
+
+    if (nonEmptyCount <= totalSlots) {
+        LOG_ERROR("BrickedVolume") << "buildFromMmappedSource: volume fits Static atlas ("
+                                    << nonEmptyCount << " bricks <= " << totalSlots
+                                    << " slots) -- use build(halfData) for this size";
+        return false;
+    }
+
+    // Streaming mode setup. Mirror the build() Streaming branch.
+    m_mode = Mode::Streaming;
+    m_emptyValueHalf = emptyValueHalf;
+    m_pageTableHost.assign(totalPageEntries, kEmptySlot);
+    for (auto& states : m_slotStates) states.assign(totalSlots, AtlasSlotState{});
+    m_pageToSlot.clear();
+    m_pageToSlot.reserve(nonEmptyCount);
+    m_lodTableHost.assign(totalPageEntries, 0);
+    m_usedSlotsPerLod = {0, 0, 0, 0};
+
+    // Allocate the four LOD atlases pre-filled with the empty value. Identical
+    // to the corresponding block in build(); when build() is refactored to
+    // share this, this duplicate goes away.
+    const uint32_t lodLevelsToAlloc = kLodLevels;
+    uint64_t totalAtlasBytes = 0;
+    for (uint32_t lv = 0; lv < lodLevelsToAlloc; ++lv) {
+        const uint32_t brickStoredLod = kBrickStoredAtLod(lv);
+        const uint32_t voxelsX_lv = atlasGrid.x * brickStoredLod;
+        const uint32_t voxelsY_lv = atlasGrid.y * brickStoredLod;
+        const uint32_t voxelsZ_lv = atlasGrid.z * brickStoredLod;
+        const uint32_t tightRowLv = voxelsX_lv * 2;
+#ifdef __EMSCRIPTEN__
+        const uint32_t paddedRowLv = (tightRowLv + 255u) & ~255u;
+#else
+        const uint32_t paddedRowLv = tightRowLv;
+#endif
+        const uint64_t bytesLv = static_cast<uint64_t>(paddedRowLv) * voxelsY_lv * voxelsZ_lv;
+        totalAtlasBytes += bytesLv;
+
+        rhi::TextureDesc td{};
+        td.size          = rhi::Extent3D{voxelsX_lv, voxelsY_lv, voxelsZ_lv};
+        td.dimension     = rhi::TextureDimension::Texture3D;
+        td.format        = rhi::TextureFormat::R16Float;
+        td.mipLevelCount = 1;
+        td.sampleCount   = 1;
+        td.usage         = rhi::TextureUsage::CopyDst | rhi::TextureUsage::Sampled;
+        td.label         = "VolumeBrickAtlas";
+        m_atlasTexes[lv] = device->createTexture(td);
+        if (!m_atlasTexes[lv]) { LOG_ERROR("BrickedVolume") << "atlas L" << lv << " create failed"; return false; }
+
+        std::vector<uint8_t> initBufLocal;
+        initBufLocal.resize(bytesLv);
+        for (uint32_t z = 0; z < voxelsZ_lv; ++z) {
+            for (uint32_t y = 0; y < voxelsY_lv; ++y) {
+                uint16_t* row = reinterpret_cast<uint16_t*>(
+                    initBufLocal.data() + (static_cast<uint64_t>(z) * voxelsY_lv + y) * paddedRowLv);
+                std::fill(row, row + voxelsX_lv, emptyValueHalf);
+            }
+        }
+
+        rhi::BufferDesc bd{};
+        bd.size = bytesLv;
+        bd.usage = rhi::BufferUsage::CopySrc | rhi::BufferUsage::MapWrite;
+        bd.label = "BrickAtlasStaging";
+        auto staging = device->createBuffer(bd);
+        if (!staging) { LOG_ERROR("BrickedVolume") << "atlas staging L" << lv << " create failed"; return false; }
+        std::memcpy(staging->map(), initBufLocal.data(), bytesLv);
+        staging->unmap();
+
+        auto enc = device->createCommandEncoder();
+        enc->transitionTextureLayout(m_atlasTexes[lv].get(),
+                                     rhi::TextureLayout::Undefined,
+                                     rhi::TextureLayout::TransferDst);
+        rhi::BufferTextureCopyInfo bc{};
+        bc.buffer = staging.get(); bc.offset = 0;
+#ifdef __EMSCRIPTEN__
+        bc.bytesPerRow = paddedRowLv; bc.rowsPerImage = voxelsY_lv;
+#else
+        bc.bytesPerRow = 0; bc.rowsPerImage = 0;
+#endif
+        rhi::TextureCopyInfo tc{};
+        tc.texture = m_atlasTexes[lv].get();
+        tc.mipLevel = 0; tc.origin = {0, 0, 0}; tc.aspect = 0;
+        enc->copyBufferToTexture(bc, tc, rhi::Extent3D{voxelsX_lv, voxelsY_lv, voxelsZ_lv});
+        enc->transitionTextureLayout(m_atlasTexes[lv].get(),
+                                     rhi::TextureLayout::TransferDst,
+                                     rhi::TextureLayout::ShaderReadOnly);
+        auto cmd = enc->finish();
+        queue->submit(cmd.get());
+        queue->waitIdle();
+
+        rhi::TextureViewDesc vd{};
+        vd.format = rhi::TextureFormat::R16Float;
+        vd.dimension = rhi::TextureViewDimension::View3D;
+        vd.baseMipLevel = 0; vd.mipLevelCount = 1;
+        vd.baseArrayLayer = 0; vd.arrayLayerCount = 1;
+        m_atlasViews[lv] = m_atlasTexes[lv]->createView(vd);
+        if (!m_atlasViews[lv]) { LOG_ERROR("BrickedVolume") << "atlas view L" << lv << " create failed"; return false; }
+    }
+    LOG_INFO("BrickedVolume") << "atlas total: " << (totalAtlasBytes >> 20)
+        << " MB across " << kLodLevels << " LOD textures (L0 + L1 + L2 + L3)";
+
+    // Page table buffer + initial all-sentinel upload (same shape as build()).
+    const uint64_t pageBytes = static_cast<uint64_t>(totalPageEntries) * sizeof(uint32_t);
+    {
+        rhi::BufferDesc dstDesc{};
+        dstDesc.size = pageBytes;
+        dstDesc.usage = rhi::BufferUsage::Storage | rhi::BufferUsage::CopyDst;
+        dstDesc.label = "BrickPageTable";
+        m_pageTable = device->createBuffer(dstDesc);
+        if (!m_pageTable) { LOG_ERROR("BrickedVolume") << "page table buffer create failed"; return false; }
+
+        rhi::BufferDesc stagingDesc{};
+        stagingDesc.size = pageBytes;
+        stagingDesc.usage = rhi::BufferUsage::CopySrc | rhi::BufferUsage::MapWrite;
+        stagingDesc.label = "BrickPageTableStaging";
+        auto staging = device->createBuffer(stagingDesc);
+        if (!staging) { LOG_ERROR("BrickedVolume") << "page table staging create failed"; return false; }
+        std::memcpy(staging->map(), m_pageTableHost.data(), pageBytes);
+        staging->unmap();
+
+        auto enc = device->createCommandEncoder();
+        enc->copyBufferToBuffer(staging.get(), 0, m_pageTable.get(), 0, pageBytes);
+        auto cmd = enc->finish();
+        queue->submit(cmd.get());
+        queue->waitIdle();
+    }
+
+    LOG_INFO("BrickedVolume") << "built " << w << "x" << h << "x" << d
+        << " -> page " << m_pageGrid.x << "x" << m_pageGrid.y << "x" << m_pageGrid.z
+        << " (" << nonEmptyCount << " non-empty), 0/" << totalSlots
+        << " atlas slots, mode = Streaming (mmap source, "
+        << (format == VoxelSource::Format::Int16 ? "Int16" : "Uint16")
+        << ", slope=" << slope << " intercept=" << intercept << ")";
     return true;
 }
 
