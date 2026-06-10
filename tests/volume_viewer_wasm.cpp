@@ -234,24 +234,14 @@ private:
         const bool loadedDicom = assets::loadDicomSeries("/sample_dicom", vol);
         const bool loaded = loadedDicom || assets::loadNifti("/synthetic_ct.nii", vol);
         if (loaded) {
-            // Force a Static-mode atlas in the browser viewer. Streaming mode
-            // pumps queue->waitIdle() (emscripten_sleep under ASYNCIFY) from
-            // inside drawFrame, which on WebGPU can return AFTER the surface
-            // texture acquired earlier in the frame has been destroyed by
-            // Chrome's swap-chain backing -- the queue submit then trips the
-            // "Destroyed texture used in a submit" validation spam. Single-
-            // slice DICOM (typical demo) and the synthetic NIfTI both fit a
-            // generous atlas, so a Static fit is the natural workaround.
-            // Atlas grid = ceil(dim / 64) per axis -- exactly the page grid.
-            // For a 512x512x1 single-slice DICOM that's (8, 8, 1) = 64 slots
-            // ~ 37 MB (L0) + 14% (L1+L2+L3) -- safely under the WebGPU
-            // 256 MB max buffer size cap. A uniform `glm::uvec3(8)` would
-            // produce (8, 8, 8) = 512 slots ~ 294 MB and trip CreateBuffer.
-            const glm::uvec3 atlasOverride(
-                (vol.w + 63) / 64,
-                (vol.h + 63) / 64,
-                (vol.d + 63) / 64);
-            m_volume->loadFromFloatData(vol.intensity, vol.w, vol.h, vol.d, atlasOverride);
+            // No atlas override -- BrickedVolume::build now picks Static when
+            // the non-empty bricks fit, Streaming otherwise. Streaming used
+            // to be unsafe on WASM because the per-frame staging map
+            // suspended ASYNCIFY mid-frame and the swapchain texture
+            // acquired earlier would be destroyed by the time we submitted;
+            // that race is gone now that render() runs updateBrickStreaming
+            // before beginFrame().
+            m_volume->loadFromFloatData(vol.intensity, vol.w, vol.h, vol.d);
             glm::vec3 ext(vol.w * vol.spacingX, vol.h * vol.spacingY, vol.d * vol.spacingZ);
             const float m = std::max({ext.x, ext.y, ext.z});
             halfExtent = (m > 0.0f) ? ext / m : glm::vec3(1.0f);
@@ -299,18 +289,32 @@ private:
 
     void render() {
         const auto cpuT0 = std::chrono::steady_clock::now();
-        if (!m_bridge->beginFrame()) return;
-        auto enc = m_bridge->createCommandEncoder();
-        const uint32_t w = m_swapchain->getWidth();
-        const uint32_t h = m_swapchain->getHeight();
 
         // M4 v1: camera motion resets the running average. (Other inputs reset
-        // from their JS-bound setters.)
+        // from their JS-bound setters.) Computed before the swapchain acquire
+        // so the rest of the frame stays comparison-stable across the
+        // beginFrame() boundary.
         const glm::mat4 view = m_camera.getViewMatrix();
         if (view != m_prevViewMatrix) {
             m_volume->resetAccumulation();
             m_prevViewMatrix = view;
         }
+
+        // Streaming bricks BEFORE beginFrame(): BrickedVolume::updateStreaming
+        // maps per-frame staging buffers (WebGPU mapWrite is async under
+        // ASYNCIFY) and on resume the swapchain texture acquired earlier in
+        // the same frame would already be destroyed by Chrome's swap-chain
+        // backing. Running it pre-acquire keeps the suspend window outside
+        // the (acquire -> submit) span so Queue.Submit() always references a
+        // live swapchain texture.
+        m_lastStreamStats = m_volume->updateBrickStreaming(
+            m_camera.getViewMatrix(), m_camera.getProjectionMatrix(),
+            static_cast<uint64_t>(m_frame));
+
+        if (!m_bridge->beginFrame()) return;
+        auto enc = m_bridge->createCommandEncoder();
+        const uint32_t w = m_swapchain->getWidth();
+        const uint32_t h = m_swapchain->getHeight();
 
         const bool pathTrace =
             (m_volume->getRenderMode() == rendering::VolumeRenderer::RenderMode::PathTrace)
@@ -320,10 +324,6 @@ private:
                             glm::inverse(m_camera.getViewMatrix()),
                             glm::inverse(m_camera.getProjectionMatrix()),
                             m_camera.getPosition());
-
-        m_lastStreamStats = m_volume->updateBrickStreaming(
-            m_camera.getViewMatrix(), m_camera.getProjectionMatrix(),
-            static_cast<uint64_t>(m_frame));
 
         // ---- Pass 1: path-trace into the ping-pong accumulation (PT mode only). ----
         if (pathTrace && m_volume->isEnabled()) {

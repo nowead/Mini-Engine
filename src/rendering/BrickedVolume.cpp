@@ -129,19 +129,16 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
         }
     }
 
-    // Auto-size: pick the smallest balanced atlas that holds every non-empty
-    // brick (so Static wins whenever feasible), bounded by kAutoAtlasBudgetBytes
-    // to keep VRAM allocation reasonable. The cube-root start point keeps the
-    // atlas shape close to cubic, and we shrink the longest axis until we fit
-    // the budget if we overshoot. Caller can pass an explicit atlasGrid to
+    // Auto-size: start from the page grid (the largest useful atlas, holds
+    // every non-empty brick by construction) and shrink the longest axis
+    // until we fit kAutoAtlasBudgetBytes. This wins Static whenever the
+    // budget is generous enough -- including for highly anisotropic page
+    // grids like an 8x8x1 single-slice DICOM, where the prior cube-root
+    // heuristic produced (4,4,1) = 16 slots for 64 bricks and forced a
+    // permanent Streaming churn. Caller can pass an explicit atlasGrid to
     // override the policy entirely.
     if (atlasGrid.x == 0 || atlasGrid.y == 0 || atlasGrid.z == 0) {
-        const uint32_t axisGuess = std::max<uint32_t>(
-            kAutoAtlasMinAxis,
-            static_cast<uint32_t>(std::ceil(std::cbrt(static_cast<double>(std::max(nonEmptyCount, 1u))))));
-        atlasGrid = glm::uvec3(std::min(axisGuess, m_pageGrid.x),
-                               std::min(axisGuess, m_pageGrid.y),
-                               std::min(axisGuess, m_pageGrid.z));
+        atlasGrid = m_pageGrid;
         auto atlasBytesOf = [](glm::uvec3 a) {
             const uint64_t vx = static_cast<uint64_t>(a.x) * kBrickStored;
             const uint64_t vy = static_cast<uint64_t>(a.y) * kBrickStored;
@@ -531,14 +528,10 @@ bool BrickedVolume::buildFromMmappedSource(rhi::RHIDevice* device, rhi::RHIQueue
         }
     }
 
-    // Atlas auto-size (same policy as build()).
+    // Atlas auto-size (same policy as build()): start from the page grid
+    // and shrink the longest axis until kAutoAtlasBudgetBytes fits.
     if (atlasGrid.x == 0 || atlasGrid.y == 0 || atlasGrid.z == 0) {
-        const uint32_t axisGuess = std::max<uint32_t>(
-            kAutoAtlasMinAxis,
-            static_cast<uint32_t>(std::ceil(std::cbrt(static_cast<double>(std::max(nonEmptyCount, 1u))))));
-        atlasGrid = glm::uvec3(std::min(axisGuess, m_pageGrid.x),
-                               std::min(axisGuess, m_pageGrid.y),
-                               std::min(axisGuess, m_pageGrid.z));
+        atlasGrid = m_pageGrid;
         auto atlasBytesOf = [](glm::uvec3 a) {
             const uint64_t vx = static_cast<uint64_t>(a.x) * kBrickStored;
             const uint64_t vy = static_cast<uint64_t>(a.y) * kBrickStored;
