@@ -75,8 +75,8 @@ make serve-wasm   # scripts\serve_nocache.py 사용 (브라우저 캐시 우회)
 
 | 포맷 | 네이티브 | WASM | 비고 |
 | --- | --- | --- | --- |
-| **NIfTI (.nii)** | ✅ | ✅ (preload 1개) | 헤더에 dims·spacing·intensity 단위. 우선 권장 포맷 |
-| **DICOM 시리즈 (디렉토리)** | ✅ | ❌ | Explicit VR LE 단일 시리즈, int16 CT/MR. 실 임상 코퍼스 4종 검증됨 (HU CT, 고해상도 MR, multi-frame MR, enhanced CT) |
+| **NIfTI (.nii)** | ✅ (mmap) | ✅ (preload 1개) | 헤더에 dims·spacing·intensity 단위. 우선 권장 포맷. 네이티브는 `utils::MmappedFile`로 본문을 OS 페이지 캐시에 위임 (큰 파일 ingest의 transient 버퍼 제거) |
+| **DICOM 시리즈 (디렉토리)** | ✅ | ❌ | int16 CT/MR. Transfer syntax: Explicit VR LE, Implicit VR LE(임상 PACS 기본), RLE Lossless, JPEG 2000 Lossless/Lossy(openjpeg). 실 임상 코퍼스 검증: HU CT, 고해상도 MR, multi-frame MR, enhanced CT(Explicit) · pydicom RT(Implicit dispatch) · pydicom 693_J2KI(JPEG 2000 lossy) · pydicom MR_small_RLE(비트 동일성) |
 | **raw headerless** | ✅ | ❌ | dims·bpv를 CLI로 명시 |
 | **절차적 합성** | ✅ (인자 없음) | ❌ | 128³ 노이즈 볼륨, 첫 부팅용 |
 
@@ -174,12 +174,17 @@ PT 모드 진입 시 자동으로 progressive 누적이 시작된다. **카메�
 | --- | --- | --- |
 | 16비트 강도 저장(R16Float) + Hounsfield 보존 | M1 | `loadFromFloatData` |
 | Window / level 슬라이더 + 임상 4 프리셋 | M1 | UBO `window` |
-| NIfTI 로더 + 물리 spacing 비율 | M1 | `assets::loadNifti` |
+| NIfTI 로더 + 물리 spacing 비율 (mmap 본문) | M1 / Disk paging | `assets::loadNifti` + `utils::MmappedFile` |
 | DICOM Explicit VR LE 로더(NumberOfFrames + 중첩 SQ skip) | M1 | `assets::loadDicomSeries` |
+| **DICOM Implicit VR LE (임상 PACS 기본)** | DICOM Implicit VR | `assets::loadDicomSeries` + tag VR dictionary |
+| **DICOM RLE Lossless + JPEG 2000 (lossless/lossy)** | DICOM compressed | `assets::loadDicomSeries` + OpenJPEG vcpkg |
 | Gradient 음영 (Lambert) | M2-1 | `volume_march`의 `ubo.light.w` |
 | 볼류메트릭 소프트 섀도우 | M2-2 | `volume_march`의 `ubo.shadow` |
 | 컴퓨트 occupancy 그리드 + empty-space skip | M3-1 | `volume_occupancy.comp` |
 | **Brick atlas + page table 간접 참조** | **M3-3 v0** | `BrickedVolume` |
+| **LRU streaming + memory-budget atlas auto-size** | **M3-3 v1-α** | `BrickedVolume::updateStreaming` |
+| **Multi-LOD brick + per-LOD atlas + 셰이더 LOD 디코드** | **M3-3 v1-β** | `BrickedVolume` per-LOD slot + `sampleVolume` LOD 분기 |
+| **On-the-fly box-filter mip (disk paging Step 3)** | M3-3 v1-β / Disk paging | `packBrickToStaging` lod 파라미터 |
 | Path-traced 볼륨 산란 (Woodcock + HG + NEE) | M4 v0 | `volume_pathtrace` |
 | **Progressive 누적 (ping-pong, 자동 reset)** | **M4 v1** | `volume_pathtrace_display` + ping-pong 텍스처 |
 
@@ -193,10 +198,16 @@ PT 모드 진입 시 자동으로 progressive 누적이 시작된다. **카메�
 - **RHI 추상화**: `src/rhi/include/rhi/` — 한 인터페이스, 두 백엔드 (Vulkan +
   WebGPU). 모든 그래픽 호출이 RHI를 통과.
 - **데이터 경로**:
-  - NIfTI/DICOM → `Volume3D{intensity, w, h, d, spacing*}` 공용 구조체
+  - NIfTI: `utils::MmappedFile`로 본문 mmap → 헤더만 인터프리트
+  - DICOM: `assets::loadDicomSeries` — Explicit/Implicit VR LE dispatch +
+    RLE/JPEG 2000 디코드 → 직접 uncompressed pixel layout
+  - 둘 다 → `Volume3D{intensity, w, h, d, spacing*}` 공용 구조체
   - → `VolumeRenderer::loadFromFloatData()` → R16Float 변환
-  - → `BrickedVolume::build()` — 빈 brick 제거 + atlas + page table 업로드
-  - → 셰이더가 `sampleVolume(uvw)` 헬퍼로 page-lookup → linear atlas 샘플
+  - → `BrickedVolume::build()` — 빈 brick 제거 + 4개 atlas (L0..L3) +
+    page table((lod<<30)|slot 인코드) 업로드
+  - Streaming: 매 프레임 `updateStreaming`이 거리-임계 기반 LOD selection +
+    LOD fallback + K=64 brick CPU 박스 필터 pack
+  - → 셰이더가 `sampleVolume(uvw)` 헬퍼로 page-lookup → 적절 LOD atlas 샘플
 
 ### 셰이더 세트 (양 백엔드 쌍)
 

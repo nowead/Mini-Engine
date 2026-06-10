@@ -1,7 +1,10 @@
 # Mini-Engine Project Summary
 
-**Last Updated**: 2026-03-29
-**Status**: WASM Post-Process Pipeline Complete ✅
+**Last Updated**: 2026-06-07
+**Status**: Medical Volume Renderer — M1 ~ M3-3 v1-β + DICOM Full Stack +
+Disk Paging Steps 1-3 Complete ✅
+**현재 트랙**: 의료 볼륨 렌더링 (2026-05-29~) — [docs/current/](current/README.md)
+참조. 이전 단계 (PBR/GPU-Driven/WASM 포스트프로세스)는 그대로 유지.
 
 ---
 

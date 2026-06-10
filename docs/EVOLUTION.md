@@ -585,6 +585,90 @@ if (m_pendingResize && m_pendingWidth > 0 && m_pendingHeight > 0) {
 
 ---
 
+## Stage 7: 의료 볼륨 렌더링 (2026-05-29 ~ 2026-06-07)
+
+### Stage 7 동기
+
+PBR 쇼케이스가 끝난 시점, 엔진을 **WebGPU 기반 차세대 클라이언트 사이드 의료
+볼륨 렌더러**로 심화. 차별화 명제: "브라우저에서, 서버 GPU 없이, 시네마틱
+화질로, 대용량 실데이터를" — 네 가지가 동시에 성립하는 시연이 핵심 가치.
+
+### M1 — 실데이터 기반 (2026-05-29)
+
+- **R16Float 16비트** 강도 저장 (R8 → R16, Hounsfield 보존)
+- **Window/level** UBO + 임상 4 프리셋 (bone / lung / soft-tissue / brain)
+- **NIfTI 로더** + 물리 spacing 기반 AABB
+- **DICOM Explicit VR LE** 로더 + 실 임상 코퍼스 4종 검증 (multi-frame +
+  중첩 SQ skip 갭 발견·수정)
+
+### M2 — 시네마틱 품질 (2026-05-29)
+
+- **Gradient 셰이딩** (Lambert + Blinn-Phong)
+- **볼류메트릭 소프트 섀도우** (보조 레이 self-shadowing) — WebGL이 어려운 영역
+
+### M3 — 스케일 & 성능
+
+- **M3-1 (2026-05-29)**: 컴퓨트 occupancy 그리드 + empty-space skip (양 백엔드)
+- **M3-2 (2026-05-31)**: 측정. sparse 256³ 합성 +3~5% (셰이딩 우세 워크로드).
+  per-cell-entry 변형은 GPU warp divergence로 회귀 → 되돌림
+- **M3-3 v0 (2026-06-02)**: **Brick atlas + page table** 간접 참조 도입.
+  64³ interior + 1-voxel halo = 66³ stored. 빈 brick 제거로 1024³ × 10% 점유
+  시 2 GB → ~200 MB
+- **M3-3 v1-α streaming (2026-06-04)**: LRU + incremental upload + memory-budget
+  auto-size. 1024³ default atlas 280→188 MB(-33%), 2 GB dense 자동 streaming
+  (493 MB). 한계: 가시 brick > slots면 시각 hole
+- **M3-3 v1-β LOD (2026-06-07)**: mip chain → per-LOD atlas (L0..L3) →
+  거리 임계 selection → multi-LOD streaming (no migration + fallback + K=64) →
+  셰이더가 `(lod<<30)|slot` 디코드. 1024³ Case C zoom-out missing brick
+  2320 → 326 (**-86%**). 알려진 한계: LOD 경계 seam
+
+### M4 — Path-traced 산란
+
+- **v0 (2026-05-31)**: Woodcock 자유경로 + Henyey-Greenstein 위상함수 +
+  single-light NEE + inline SPP 평균 (양 백엔드)
+- **v1 (2026-06-02)**: Progressive 누적 (RGBA16Float ping-pong, running-mean).
+  카메라/파라미터 변경 시 N=0 reset
+
+### DICOM 추가 지원 (2026-06-07)
+
+- **Implicit VR LE** (임상 PACS 기본): file meta(Explicit) ↔ dataset 인코딩 분리,
+  tag → VR dictionary. 합성 256×256×128 + 실 RT 파일 dispatch 검증
+- **압축 transfer syntax 4 step**:
+  - Step 1 — encapsulated PixelData walk + 3종 TS UID 인식
+  - Step 2 — RLE Lossless 인트리 PackBits 디코더 (비트 동일성 검증)
+  - Step 3 — OpenJPEG vcpkg 의존
+  - Step 4 — JPEG 2000 Lossless/Lossy 디코더 (memory stream)
+
+### Disk Paging (Steps 1-3, 2026-06-07)
+
+- **Step 1**: HalfDataView 추상화 + `packBrickToStaging` signature 정리
+- **Step 2**: `utils::MmappedFile` 포터블 wrapper (Windows MapViewOfFile +
+  POSIX mmap) → NIfTI 본문 OS 페이지 캐시로 위임
+- **Step 3**: `m_mipChain` 제거, `packBrickToStaging`이 LOD 박스 필터 즉석
+  (mathematically equivalent: box(box(x)) = box(x))
+- 1024³ 정착 working set 2.69 → 2.38 GB (-11%). 피크 6.57 GB는 여전히 float
+  intermediate 지배 — Step 5+가 진짜 4 GB+ unlock
+
+### 독립 WASM 볼륨 뷰어 (2026-05-29)
+
+- 브라우저에서 볼륨만 풀스크린: `volume_viewer_wasm` 별도 실행 파일
+- M1/M2/M3 전부 + HTML 컨트롤 + 랜딩 인덱스 진입
+
+### Stage 7 성과
+
+| 지표 | Before (Stage 6) | After (Stage 7) |
+|------|-----------------|----------------|
+| 강도 정밀도 | RGBA8 (퍼셉추얼) | R16Float (Hounsfield 단위 보존) |
+| 입력 포맷 | OBJ / glTF | NIfTI · DICOM (5 transfer syntax) |
+| 셰이딩 | PBR (불투명 표면) | Gradient + 볼류메트릭 섀도우 + Path tracing |
+| 빈 공간 처리 | 없음 (모든 voxel 마칭) | 컴퓨트 occupancy + skipping |
+| 대용량 데이터 | 단일 3D 텍스처 (~GPU VRAM 한계) | Brick atlas + LRU streaming + 4 LOD |
+| 시각 차별화 | PBR 표면 | Cinematic VRT (path-traced 다중 산란) |
+| 메모리 효율 | N/A | 1024³ atlas 280→188 MB(-33%), v1-β LOD hole -86% |
+| 진단 RAM | N/A | NIfTI mmap + on-the-fly mip → 정착 -11% |
+
+---
+
 ## 아키텍처 비교: Before vs After
 
 ### 시작점 (vulkan-tutorial.com)

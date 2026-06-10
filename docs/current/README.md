@@ -14,8 +14,14 @@ WebGPU 기반 차세대 클라이언트 사이드 **의료 볼륨 렌더러**로
 | [MEDICAL_VOLUME_ROADMAP.md](medical-volume/MEDICAL_VOLUME_ROADMAP.md) | 전략 결정(방향 1) + 격차 진단 + 마일스톤 M1~M4 + 결정·진행 기록 |
 | [VIEWERS.md](medical-volume/VIEWERS.md) | 사용자 가이드 — `volume_viewer` (네이티브) + `volume_viewer_wasm` (브라우저) 빌드·조작·기능·기술 스택 |
 | [M3-3_V1_STREAMING_PLAN.md](medical-volume/M3-3_V1_STREAMING_PLAN.md) | M3-3 v1-α 설계서 + 완료 기록 (v1-1~v1-4) |
+| [V1_BETA_AND_MR_PLAN.md](medical-volume/V1_BETA_AND_MR_PLAN.md) | M3-3 v1-β LOD + MR + CPU pack 트랙 계획서 (β-1~β-6 atomic) |
+| [DICOM_IMPLICIT_VR_PLAN.md](medical-volume/DICOM_IMPLICIT_VR_PLAN.md) | DICOM Implicit VR LE 파서 + tag dictionary + 검증 결과 |
+| [DICOM_COMPRESSED_PLAN.md](medical-volume/DICOM_COMPRESSED_PLAN.md) | DICOM 압축 transfer syntax (RLE + JPEG 2000) 4 step 계획 + 검증 |
+| [DISK_PAGING_PLAN.md](medical-volume/DISK_PAGING_PLAN.md) | M3-3 v1-β 디스크 페이징 (voxel source 추상화 + mmap + on-the-fly mip) |
 | [BASELINE_2026-06-03.md](medical-volume/BASELINE_2026-06-03.md) | v0 + M4 v1 기준선 측정 |
 | [BASELINE_2026-06-04_V1_ALPHA.md](medical-volume/BASELINE_2026-06-04_V1_ALPHA.md) | v1-α 측정 (auto-size win + streaming 자동 진입 + 정직한 한계) |
+| [BASELINE_2026-06-07_V1_BETA.md](medical-volume/BASELINE_2026-06-07_V1_BETA.md) | v1-β LOD 측정 (missing brick 2320→326 -86%) + 알려진 한계 (LOD seam, stale-LOD blur) |
+| [BASELINE_2026-06-07_DISK_PAGING.md](medical-volume/BASELINE_2026-06-07_DISK_PAGING.md) | Disk paging Steps 1-3 measurement (1024³ 정착 RAM 2.69→2.38 GB, 피크 6.57 GB 한계) |
 
 **M1 (실데이터 기반) 완료** (2026-05-29): R16Float 16비트 · window/level ·
 NIfTI 로더 + float 강도 경로 + 임상 윈도우 프리셋.
@@ -62,9 +68,37 @@ LOG_WARN로 권장 atlasGrid 안내. 1024³ default 280→188 MB(-33%), 2 GB den
 streaming(493 MB). 정직한 한계: 가시 brick > atlas slots면 시각 hole — 줌아웃
 전체보기 케이스는 v1-β LOD가 본질 해결. 발견·기록: atlas thrashing 디버깅 여정
 ([CHANGELOG_2026-06-04](../archive/changelogs/CHANGELOG_2026-06-04.md)).
+**M3-3 v1-β LOD multi-resolution 완료** (2026-06-07): mip chain CPU build →
+per-LOD atlas allocation → distance-based per-brick LOD selection → multi-LOD
+streaming(no migration + LOD fallback + K=8→64 upload budget) → 셰이더
+(`sampleVolume`)가 page table에 인코딩된 `(lod<<30)|slot`을 디코드해서 4 LOD
+atlas 중 선택된 것을 샘플링. 1024³ dense Case C zoom-out: missing brick
+2320 → 326 (~21% hole, **-86%**). Atlas memory L0 단독 493.5 MB → 4 LOD 합
+~572 MB (+16%, 1/8+1/64+1/512 = 1.16× ratio). 정직한 한계: LOD 경계 seam(인접
+brick LOD 다를 때 sampling 불연속), no-migration 결정으로 stale-LOD blur 일부.
+**DICOM Implicit VR LE 완료** (2026-06-07): 임상 PACS의 기본 transfer syntax.
+file meta(group 0002, 항상 Explicit VR)와 dataset 인코딩 분리 + tag → VR
+dictionary로 implicit walker 구현. 합성 32³ + 256×256×128 양 인코딩 비트 동일,
+pydicom 실 RT 파일(rtplan / rtdose) dispatch 검증(`bitsAllocated 32` 디코드가
+파서 정확성 신호). 16비트 image-bearing Implicit VR 공개 샘플은 TCIA NBIA 인증
+필요 — 정직히 기록.
+**DICOM 압축 transfer syntax 완료** (2026-06-07): encapsulated PixelData walk +
+RLE Lossless 인트리 PackBits 디코더 + OpenJPEG vcpkg 의존으로 JPEG 2000
+(Lossless + Lossy). pydicom MR_small.dcm ↔ MR_small_RLE.dcm 비트 동일성
+([127, 2145] range). 693_J2KI.dcm (CT 512×512 JPEG 2000 lossy) range
+[-3995, 1812]. JPEG Baseline / Lossless / JPEG-LS + WASM OpenJPEG 빌드는 후속.
+**Disk paging Steps 1-3 완료** (2026-06-07): HalfDataView 추상화 + NIfTI mmap
+(`utils::MmappedFile` 포터블 wrapper) + `m_mipChain` 제거 + `packBrickToStaging`
+LOD 박스 필터 즉석. 1024³ dense 정착 working set 2.69 → 2.38 GB (-11%), 파일
+본체 ~2.1 GB는 OS 페이지 캐시로 이동. 피크는 여전히 6.57 GB — Volume3D float
+intermediate + halfData 변환 임시 버퍼 동시 존재가 지배. 4 GB+ 임상 데이터 full
+unlock은 Step 5+ (mmap'd int16 → brick-pack 시 변환) 필요. 베이스라인:
+[BASELINE_2026-06-07_DISK_PAGING.md](medical-volume/BASELINE_2026-06-07_DISK_PAGING.md).
 
-**다음 후보**: M3-3 v1-β (LOD / CPU pack 최적화 / 디스크 페이징) · DICOM 후속
-(Implicit VR LE 지원 시 임상 PACS 데이터 커버리지 ↑).
+**다음 후보**: Disk paging Step 5 (mmap int16 → brick-pack 변환, 진짜 4 GB+
+unlock) · WASM OpenJPEG 빌드 (브라우저 압축 DICOM) · JPEG Baseline / Lossless
+(libjpeg-turbo) · 즉흥 폴리시 (LOD seam 완화 / async pack / adaptive K /
+screen-pixel LOD selection).
 
 **선행 완료**: 볼륨 렌더링 기초(3D 텍스처 + 레이마칭, Vulkan + WebGPU) ·
 TF 프리셋 · 독립 뷰어(네이티브 `volume_viewer` + 브라우저 `volume_viewer_wasm`).
