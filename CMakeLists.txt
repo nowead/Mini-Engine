@@ -864,6 +864,8 @@ else()
         src/rendering/BrickedVolume.hpp
         src/assets/NiftiFile.cpp
         src/assets/NiftiFile.hpp
+        src/assets/DicomFile.cpp
+        src/assets/DicomFile.hpp
         src/scene/Camera.cpp
         src/scene/Camera.hpp
         src/utils/FileUtils.hpp
