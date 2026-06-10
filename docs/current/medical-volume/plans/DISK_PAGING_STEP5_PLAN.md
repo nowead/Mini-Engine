@@ -137,7 +137,7 @@ Step 5.1 (VoxelSource 추상화, HalfFloat 전용 무회귀) 부터 진행.
   `loadFromMmappedNiftiSource` + 뷰어 dispatch. Static-fit 시 자동 fallback.
 - **Step 5.4 (baseline doc)**: 1024³ dense **피크 working set 6.57 → 2.30 GB
   (-65%)**. m_originalHalfData 제거 + float intermediate skip. 베이스라인:
-  [BASELINE_2026-06-10_DISK_PAGING_STEP5.md](BASELINE_2026-06-10_DISK_PAGING_STEP5.md).
+  [BASELINE_2026-06-10_DISK_PAGING_STEP5.md](../baselines/BASELINE_2026-06-10_DISK_PAGING_STEP5.md).
 
 Step 5는 disk paging 트랙의 본질 완성 — 다음 후보는 후속 트랙 (DICOM mmap,
 WASM openjpeg, JPEG legacy, 즉흥 폴리시).

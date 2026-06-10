@@ -3,7 +3,7 @@
 **작성일**: 2026-06-04
 **상태**: 미진입 (코드 작업 전 설계 합의용)
 **전제 구조**: M3-3 v1-α 완료 (`d748814`, `f6f1561`, `68b3a2b`).
-**baseline 비교점**: [BASELINE_2026-06-04_V1_ALPHA.md](BASELINE_2026-06-04_V1_ALPHA.md)
+**baseline 비교점**: [BASELINE_2026-06-04_V1_ALPHA.md](../baselines/BASELINE_2026-06-04_V1_ALPHA.md)
 
 ---
 

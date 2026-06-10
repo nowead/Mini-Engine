@@ -2,9 +2,9 @@
 
 **작성일**: 2026-06-03
 **상태**: **v1-α 완료** (2026-06-04, 커밋 `d748814` + `f6f1561`). 결과:
-[BASELINE_2026-06-04_V1_ALPHA.md](BASELINE_2026-06-04_V1_ALPHA.md) ·
+[BASELINE_2026-06-04_V1_ALPHA.md](../baselines/BASELINE_2026-06-04_V1_ALPHA.md) ·
 [CHANGELOG 2026-06-04](../../archive/changelogs/CHANGELOG_2026-06-04.md).
-**기준 baseline**: [BASELINE_2026-06-03.md](BASELINE_2026-06-03.md)
+**기준 baseline**: [BASELINE_2026-06-03.md](../baselines/BASELINE_2026-06-03.md)
 **전제 구조**: M3-3 v0 (brick atlas + page table) + M4 v1 (progressive 누적)
 **결정 묶음**: B / A / B / A — 아래 §2 참조
 

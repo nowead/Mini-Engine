@@ -282,7 +282,7 @@ CAREER_ROADMAP의 "수치화가 전부다" 원칙 계승. 마일스톤별 정량
   L0 단독 493.5 MB → 4 LOD 합 ~572 MB (+16%, 1.16× ratio from 1/8+1/64+1/512).
   알려진 한계: LOD 경계 seam(인접 brick LOD 다를 때 sampling 불연속), no-migration
   결정으로 stale-LOD blur 일부 (시각 안정성 trade-off). 베이스라인:
-  [BASELINE_2026-06-07_V1_BETA.md](BASELINE_2026-06-07_V1_BETA.md).
+  [BASELINE_2026-06-07_V1_BETA.md](baselines/BASELINE_2026-06-07_V1_BETA.md).
 - **M3-3 v1-α streaming** (2026-06-04): LRU + incremental upload + memory-budget
   auto-size. Atlas 자동 산정 재작성 — `ceil(cbrt(nonEmpty))` 시작점에서 pageGrid
   clamp + 512MB budget 안에 longest axis shrink. nonEmpty > slots면 자동 Streaming
@@ -325,13 +325,13 @@ v1-β LOD + DICOM (Implicit VR + 압축) + Disk paging Steps 1-3 까지가 한 �
   검증.
 - **M3-3 v1-β 디스크 페이징 Step 1-3** (`32eb364` → `b9fda20`) — voxel source
   추상화 + NIfTI mmap + on-the-fly LOD 박스 필터. 1024³ 정착 working set
-  -11%. 베이스라인: [BASELINE_2026-06-07_DISK_PAGING.md](BASELINE_2026-06-07_DISK_PAGING.md).
+  -11%. 베이스라인: [BASELINE_2026-06-07_DISK_PAGING.md](baselines/BASELINE_2026-06-07_DISK_PAGING.md).
 - **M3-3 v1-β 디스크 페이징 Step 5** (`1ff245d` → `df1710b`, 2026-06-10) —
   VoxelSource Int16/Uint16 + `buildFromMmappedSource` + NIfTI int16 mmap을
   brick-pack 시점에 직접 변환. 1024³ dense **피크 working set -65%
   (6.57 → 2.30 GB)**. m_originalHalfData + float intermediate + halfData 변환
   임시 버퍼 모두 제거. 16 GB RAM 시스템에서 ~8 GB 임상 데이터 가능성 확보
-  (추정). 베이스라인: [BASELINE_2026-06-10_DISK_PAGING_STEP5.md](BASELINE_2026-06-10_DISK_PAGING_STEP5.md).
+  (추정). 베이스라인: [BASELINE_2026-06-10_DISK_PAGING_STEP5.md](baselines/BASELINE_2026-06-10_DISK_PAGING_STEP5.md).
 - **WASM OpenJPEG (브라우저 압축 DICOM)** (`90a4f38` → `f7f62a3`, 2026-06-10) —
   Emscripten 빌드에 OpenJPEG FetchContent + DicomFile.cpp 연결 + pydicom
   693_J2KI.dcm preload + 뷰어 dispatch. 브라우저에서 실 임상 CT(JPEG 2000 lossy)
@@ -339,7 +339,7 @@ v1-β LOD + DICOM (Implicit VR + 압축) + Disk paging Steps 1-3 까지가 한 �
   부수 발견: WASM 뷰어의 Streaming 모드 + ASYNCIFY + WebGPU swapchain 상호작용
   으로 "Destroyed texture in submit" 검증 spam — Static atlas 강제 워크어라운드
   적용, 본질 해결은 후속 트랙. 계획서:
-  [WASM_OPENJPEG_PLAN.md](WASM_OPENJPEG_PLAN.md).
+  [WASM_OPENJPEG_PLAN.md](plans/WASM_OPENJPEG_PLAN.md).
 
 **즉흥 폴리시 후보 (로드맵 명시 안 됨, 후순위)** — v1-β 작업 중 발견된 개선점.
 차별화 핵심 아니므로 위 차별화 후보가 마무리된 뒤 시각 만족도/성능에 따라 선택:
