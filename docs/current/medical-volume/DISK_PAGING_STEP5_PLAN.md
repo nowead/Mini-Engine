@@ -108,7 +108,7 @@ BrickedVolume 멤버 교체:
 | --- | --- |
 | 포맷 분기 분기 비용 (pack 핫루프) | VoxelSource::read 인라인 + 포맷 const propagation (컴파일러가 분기 제거) |
 | Int16 빈-brick 스캔 비용 (2 GB 순회) | 한 번만 로드 시. mmap 순차 액세스라 OS 페이지인 자연스러움 |
-| Mmap lifetime — BrickedVolume이 소유 | unique_ptr<MmappedFile> 또는 직접 멤버. 이동 시 명확한 소유권 |
+| Mmap lifetime — BrickedVolume이 소유 | `unique_ptr<MmappedFile>` 또는 직접 멤버. 이동 시 명확한 소유권 |
 | Big-endian NIfTI (`ni1`) | 현재 미지원 그대로. 헤더에서 감지되면 기존 float 경로 fallback |
 
 ---
@@ -125,3 +125,19 @@ BrickedVolume 멤버 교체:
 ## 7. 다음 진입점
 
 Step 5.1 (VoxelSource 추상화, HalfFloat 전용 무회귀) 부터 진행.
+
+---
+
+## 8. 진행 기록 (2026-06-10)
+
+- **Step 5.1 (`1ff245d`)**: VoxelSource 추상화 (HalfFloat 전용). 무회귀.
+- **Step 5.2 (`97e226a`)**: Int16/Uint16 포맷 + `buildFromMmappedSource` 신규
+  entry. m_mmappedSource 멤버 + 일반화된 빈-brick 스캐너.
+- **Step 5.3 (`df1710b`)**: `loadNiftiAsMmappedSource` + Volume Renderer
+  `loadFromMmappedNiftiSource` + 뷰어 dispatch. Static-fit 시 자동 fallback.
+- **Step 5.4 (baseline doc)**: 1024³ dense **피크 working set 6.57 → 2.30 GB
+  (-65%)**. m_originalHalfData 제거 + float intermediate skip. 베이스라인:
+  [BASELINE_2026-06-10_DISK_PAGING_STEP5.md](BASELINE_2026-06-10_DISK_PAGING_STEP5.md).
+
+Step 5는 disk paging 트랙의 본질 완성 — 다음 후보는 후속 트랙 (DICOM mmap,
+WASM openjpeg, JPEG legacy, 즉흥 폴리시).

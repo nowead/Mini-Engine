@@ -326,7 +326,12 @@ v1-β LOD + DICOM (Implicit VR + 압축) + Disk paging Steps 1-3 까지가 한 �
 - **M3-3 v1-β 디스크 페이징 Step 1-3** (`32eb364` → `b9fda20`) — voxel source
   추상화 + NIfTI mmap + on-the-fly LOD 박스 필터. 1024³ 정착 working set
   -11%. 베이스라인: [BASELINE_2026-06-07_DISK_PAGING.md](BASELINE_2026-06-07_DISK_PAGING.md).
-  4 GB+ 임상 데이터 full unlock은 Step 5+가 본질.
+- **M3-3 v1-β 디스크 페이징 Step 5** (`1ff245d` → `df1710b`, 2026-06-10) —
+  VoxelSource Int16/Uint16 + `buildFromMmappedSource` + NIfTI int16 mmap을
+  brick-pack 시점에 직접 변환. 1024³ dense **피크 working set -65%
+  (6.57 → 2.30 GB)**. m_originalHalfData + float intermediate + halfData 변환
+  임시 버퍼 모두 제거. 16 GB RAM 시스템에서 ~8 GB 임상 데이터 가능성 확보
+  (추정). 베이스라인: [BASELINE_2026-06-10_DISK_PAGING_STEP5.md](BASELINE_2026-06-10_DISK_PAGING_STEP5.md).
 
 **즉흥 폴리시 후보 (로드맵 명시 안 됨, 후순위)** — v1-β 작업 중 발견된 개선점.
 차별화 핵심 아니므로 위 차별화 후보가 마무리된 뒤 시각 만족도/성능에 따라 선택:

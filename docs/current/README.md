@@ -17,11 +17,13 @@ WebGPU 기반 차세대 클라이언트 사이드 **의료 볼륨 렌더러**로
 | [V1_BETA_AND_MR_PLAN.md](medical-volume/V1_BETA_AND_MR_PLAN.md) | M3-3 v1-β LOD + MR + CPU pack 트랙 계획서 (β-1~β-6 atomic) |
 | [DICOM_IMPLICIT_VR_PLAN.md](medical-volume/DICOM_IMPLICIT_VR_PLAN.md) | DICOM Implicit VR LE 파서 + tag dictionary + 검증 결과 |
 | [DICOM_COMPRESSED_PLAN.md](medical-volume/DICOM_COMPRESSED_PLAN.md) | DICOM 압축 transfer syntax (RLE + JPEG 2000) 4 step 계획 + 검증 |
-| [DISK_PAGING_PLAN.md](medical-volume/DISK_PAGING_PLAN.md) | M3-3 v1-β 디스크 페이징 (voxel source 추상화 + mmap + on-the-fly mip) |
+| [DISK_PAGING_PLAN.md](medical-volume/DISK_PAGING_PLAN.md) | M3-3 v1-β 디스크 페이징 Steps 1-3 (voxel source 추상화 + mmap + on-the-fly mip) |
+| [DISK_PAGING_STEP5_PLAN.md](medical-volume/DISK_PAGING_STEP5_PLAN.md) | Disk paging Step 5 (mmap int16 → brick-pack 시 변환, 진짜 4 GB+ unlock) |
 | [BASELINE_2026-06-03.md](medical-volume/BASELINE_2026-06-03.md) | v0 + M4 v1 기준선 측정 |
 | [BASELINE_2026-06-04_V1_ALPHA.md](medical-volume/BASELINE_2026-06-04_V1_ALPHA.md) | v1-α 측정 (auto-size win + streaming 자동 진입 + 정직한 한계) |
 | [BASELINE_2026-06-07_V1_BETA.md](medical-volume/BASELINE_2026-06-07_V1_BETA.md) | v1-β LOD 측정 (missing brick 2320→326 -86%) + 알려진 한계 (LOD seam, stale-LOD blur) |
 | [BASELINE_2026-06-07_DISK_PAGING.md](medical-volume/BASELINE_2026-06-07_DISK_PAGING.md) | Disk paging Steps 1-3 measurement (1024³ 정착 RAM 2.69→2.38 GB, 피크 6.57 GB 한계) |
+| [BASELINE_2026-06-10_DISK_PAGING_STEP5.md](medical-volume/BASELINE_2026-06-10_DISK_PAGING_STEP5.md) | Disk paging Step 5 measurement (1024³ 피크 6.57→2.30 GB -65%, 16 GB RAM에서 8 GB 데이터 가능성) |
 
 **M1 (실데이터 기반) 완료** (2026-05-29): R16Float 16비트 · window/level ·
 NIfTI 로더 + float 강도 경로 + 임상 윈도우 프리셋.
@@ -91,14 +93,18 @@ RLE Lossless 인트리 PackBits 디코더 + OpenJPEG vcpkg 의존으로 JPEG 200
 (`utils::MmappedFile` 포터블 wrapper) + `m_mipChain` 제거 + `packBrickToStaging`
 LOD 박스 필터 즉석. 1024³ dense 정착 working set 2.69 → 2.38 GB (-11%), 파일
 본체 ~2.1 GB는 OS 페이지 캐시로 이동. 피크는 여전히 6.57 GB — Volume3D float
-intermediate + halfData 변환 임시 버퍼 동시 존재가 지배. 4 GB+ 임상 데이터 full
-unlock은 Step 5+ (mmap'd int16 → brick-pack 시 변환) 필요. 베이스라인:
+intermediate + halfData 변환 임시 버퍼 동시 존재가 지배. 베이스라인:
 [BASELINE_2026-06-07_DISK_PAGING.md](medical-volume/BASELINE_2026-06-07_DISK_PAGING.md).
+**Disk paging Step 5 완료** (2026-06-10): VoxelSource 추상화 (HalfFloat / Int16
+/ Uint16) → `buildFromMmappedSource` → NIfTI int16/uint16 mmap → brick-pack 시
+직접 변환. **1024³ dense 피크 working set 6.57 → 2.30 GB (-65%)**. Volume3D
+float intermediate + halfData 변환 임시 + m_originalHalfData 세 항목 모두 제거.
+Static-fit 케이스는 자동 fallback. 베이스라인:
+[BASELINE_2026-06-10_DISK_PAGING_STEP5.md](medical-volume/BASELINE_2026-06-10_DISK_PAGING_STEP5.md).
 
-**다음 후보**: Disk paging Step 5 (mmap int16 → brick-pack 변환, 진짜 4 GB+
-unlock) · WASM OpenJPEG 빌드 (브라우저 압축 DICOM) · JPEG Baseline / Lossless
-(libjpeg-turbo) · 즉흥 폴리시 (LOD seam 완화 / async pack / adaptive K /
-screen-pixel LOD selection).
+**다음 후보**: WASM OpenJPEG 빌드 (브라우저 압축 DICOM) · JPEG Baseline /
+Lossless (libjpeg-turbo) · DICOM mmap (Phase C: 슬라이스 어셈블 캐시) · 즉흥
+폴리시 (LOD seam 완화 / async pack / adaptive K / screen-pixel LOD selection).
 
 **선행 완료**: 볼륨 렌더링 기초(3D 텍스처 + 레이마칭, Vulkan + WebGPU) ·
 TF 프리셋 · 독립 뷰어(네이티브 `volume_viewer` + 브라우저 `volume_viewer_wasm`).
