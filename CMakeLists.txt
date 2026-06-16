@@ -51,6 +51,11 @@ if(NOT EMSCRIPTEN)
     # follow-up track (see DICOM_COMPRESSED_PLAN.md). The vcpkg port exposes the
     # OpenJPEG::openjp2 target via OpenJPEGConfig.cmake.
     find_package(OpenJPEG CONFIG REQUIRED)
+    # libjpeg-turbo for DICOM JPEG Baseline / Extended / Lossless transfer
+    # syntaxes (DICOM_JPEG_LEGACY_PLAN). vcpkg's `libjpeg-turbo` port exposes
+    # the standard CMake JPEG::JPEG target via FindJPEG. WASM build defers
+    # this to a follow-up track for the same reason as OpenJPEG.
+    find_package(JPEG REQUIRED)
 
     # cgltf vcpkg port is header-only and ships no CMake config — exposed via
     # find_path and wrapped in an INTERFACE target so call sites match the
@@ -1313,7 +1318,7 @@ if(BUILD_TESTS)
         src/utils/MmappedFile.hpp
     )
     configure_rhi_test(volume_viewer)
-    target_link_libraries(volume_viewer PRIVATE imgui::imgui openjp2)
+    target_link_libraries(volume_viewer PRIVATE imgui::imgui openjp2 JPEG::JPEG)
     add_dependencies(volume_viewer building_shaders)   # needs volume_march.*.spv
     endif()
 

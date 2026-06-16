@@ -21,6 +21,13 @@
 #include "src/assets/DicomFile.hpp"
 #include "src/scene/Camera.hpp"
 #include "src/ui/ImGuiVulkanBackend.hpp"
+#include "src/utils/Logger.hpp"
+
+// Step J1 linkage probe: confirm libjpeg-turbo is linked into volume_viewer.
+// JPEG_LIB_VERSION is the compile-time API version (90 = libjpeg API 9, the
+// turbo fork bumps this independently of its own LIBJPEG_TURBO_VERSION). The
+// actual decoder lands in Step J2/J3 inside DicomFile.cpp.
+#include <jpeglib.h>
 #include <rhi/vulkan/VulkanRHICommandEncoder.hpp>
 #include <rhi/vulkan/VulkanRHISwapchain.hpp>
 
@@ -651,6 +658,7 @@ private:
 
 int main(int argc, char** argv) {
     try {
+        LOG_INFO("VolumeViewer") << "libjpeg-turbo linked, JPEG_LIB_VERSION=" << JPEG_LIB_VERSION;
         VolumeViewer app;
         return app.run(argc, argv);
     } catch (const std::exception& e) {
