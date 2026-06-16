@@ -32,12 +32,19 @@ constexpr const char* IMPLICIT_VR_LE = "1.2.840.10008.1.2";
 constexpr const char* RLE_LOSSLESS       = "1.2.840.10008.1.2.5";
 constexpr const char* JPEG_BASELINE      = "1.2.840.10008.1.2.4.50";   // Process 1, 8-bit DCT
 constexpr const char* JPEG_EXTENDED      = "1.2.840.10008.1.2.4.51";   // Process 2 & 4, 12-bit DCT
+constexpr const char* JPEG_LOSSLESS_P14  = "1.2.840.10008.1.2.4.57";   // Process 14, predictive lossless
+constexpr const char* JPEG_LOSSLESS_SV1  = "1.2.840.10008.1.2.4.70";   // Process 14 SV1 (selection value 1)
 constexpr const char* JPEG2000_LOSSLESS  = "1.2.840.10008.1.2.4.90";
 constexpr const char* JPEG2000_LOSSY     = "1.2.840.10008.1.2.4.91";
 
+bool isJpegLegacyTransferSyntax(const std::string& ts) {
+    return ts == JPEG_BASELINE || ts == JPEG_EXTENDED
+        || ts == JPEG_LOSSLESS_P14 || ts == JPEG_LOSSLESS_SV1;
+}
+
 bool isCompressedTransferSyntax(const std::string& ts) {
     return ts == RLE_LOSSLESS
-        || ts == JPEG_BASELINE || ts == JPEG_EXTENDED
+        || isJpegLegacyTransferSyntax(ts)
         || ts == JPEG2000_LOSSLESS || ts == JPEG2000_LOSSY;
 }
 
@@ -200,6 +207,11 @@ struct Slice {
     const uint8_t* pixelData = nullptr;   // uncompressed path: view into file buffer
     size_t         pixelBytes = 0;
     std::vector<EncapsulatedFrame> frames; // compressed path: per-frame raw byte ranges
+    // Owned merge buffer for the (empty BOT, single-frame, multi-fragment) case.
+    // When the encapsulated stream splits one logical frame across N >= 2 items
+    // we copy them contiguously here and rewrite frames[] to point at it -- the
+    // decoders expect one EncapsulatedFrame view per logical frame.
+    std::vector<uint8_t> mergedFrameBuffer;
     // For compressed transfer syntaxes the decoder writes its output here and
     // points pixelData at it. Keeping the decoded buffer owned by the Slice
     // lets all downstream code (frame indexing, pixel sample loop in
@@ -397,7 +409,7 @@ bool decodeJpegFrame16(const std::string& path,
     }
 
     const int precision = cinfo.data_precision;
-    if (precision == 8) {
+    if (precision <= 8) {
         std::vector<JSAMPLE> rowBuf(cols);
         JSAMPROW rowPtr = rowBuf.data();
         for (uint32_t y = 0; y < rows; ++y) {
@@ -411,11 +423,25 @@ bool decodeJpegFrame16(const std::string& path,
                 dst[idx + 1] = static_cast<uint8_t>((v >> 8) & 0xFF);
             }
         }
-    } else if (precision == 12) {
+    } else if (precision <= 12) {
         std::vector<J12SAMPLE> rowBuf(cols);
         J12SAMPROW rowPtr = rowBuf.data();
         for (uint32_t y = 0; y < rows; ++y) {
             jpeg12_read_scanlines(&cinfo, &rowPtr, 1);
+            for (uint32_t x = 0; x < cols; ++x) {
+                const uint16_t v = static_cast<uint16_t>(rowBuf[x]);
+                const size_t idx = (static_cast<size_t>(y) * cols + x) * 2;
+                dst[idx + 0] = static_cast<uint8_t>(v & 0xFF);
+                dst[idx + 1] = static_cast<uint8_t>((v >> 8) & 0xFF);
+            }
+        }
+    } else if (precision <= 16) {
+        // 13..16-bit samples (lossless P14 / SV1). Bit pattern preserved as-is;
+        // the engine reinterprets signed-vs-unsigned via PixelRepresentation.
+        std::vector<J16SAMPLE> rowBuf(cols);
+        J16SAMPROW rowPtr = rowBuf.data();
+        for (uint32_t y = 0; y < rows; ++y) {
+            jpeg16_read_scanlines(&cinfo, &rowPtr, 1);
             for (uint32_t x = 0; x < cols; ++x) {
                 const uint16_t v = static_cast<uint16_t>(rowBuf[x]);
                 const size_t idx = (static_cast<size_t>(y) * cols + x) * 2;
@@ -786,6 +812,23 @@ bool parseSlice(const std::string& path, std::vector<uint8_t>& fileBuf, Slice& o
         return true;
     }
 
+    // Empty-BOT single-frame case: the encapsulated stream split one logical
+    // frame across N >= 2 (FFFE,E000) items. Concatenate them in-order into an
+    // owned merge buffer and rewrite frames[] so the decoders see a single
+    // contiguous payload.
+    if (out.frames.size() > out.numberOfFrames && out.numberOfFrames == 1) {
+        size_t total = 0;
+        for (const auto& f : out.frames) total += f.size;
+        out.mergedFrameBuffer.resize(total);
+        size_t cursor = 0;
+        for (const auto& f : out.frames) {
+            std::memcpy(out.mergedFrameBuffer.data() + cursor, f.data, f.size);
+            cursor += f.size;
+        }
+        out.frames.clear();
+        out.frames.push_back({out.mergedFrameBuffer.data(), static_cast<uint32_t>(total)});
+    }
+
     // Compressed path: decode each frame into out.decompressedBuffer laid out
     // identically to the uncompressed multi-frame format (frame 0 bytes, frame 1
     // bytes, ...), then point out.pixelData at it so the downstream pixel
@@ -813,8 +856,7 @@ bool parseSlice(const std::string& path, std::vector<uint8_t>& fileBuf, Slice& o
                 return false;
             }
         }
-    } else if (out.transferSyntaxUid == JPEG_BASELINE ||
-               out.transferSyntaxUid == JPEG_EXTENDED) {
+    } else if (isJpegLegacyTransferSyntax(out.transferSyntaxUid)) {
         for (size_t i = 0; i < out.frames.size(); ++i) {
             if (!decodeJpegFrame16(path, out.frames[i], out.rows, out.cols,
                                    out.decompressedBuffer.data() + i * frameBytes)) {
