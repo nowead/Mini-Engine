@@ -3,6 +3,11 @@
 
 #include <openjpeg.h>
 
+extern "C" {
+#include <jpeglib.h>
+}
+#include <csetjmp>
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -23,15 +28,17 @@ namespace {
 constexpr const char* EXPLICIT_VR_LE = "1.2.840.10008.1.2.1";
 constexpr const char* IMPLICIT_VR_LE = "1.2.840.10008.1.2";
 
-// Compressed transfer syntaxes the parser will recognise. Step 1 collects the
-// encapsulated frame byte ranges and rejects with a "decoder not implemented"
-// message; later steps wire up RLE (no external dep) and JPEG 2000 (openjpeg).
+// Compressed transfer syntaxes the parser will recognise.
 constexpr const char* RLE_LOSSLESS       = "1.2.840.10008.1.2.5";
+constexpr const char* JPEG_BASELINE      = "1.2.840.10008.1.2.4.50";   // Process 1, 8-bit DCT
+constexpr const char* JPEG_EXTENDED      = "1.2.840.10008.1.2.4.51";   // Process 2 & 4, 12-bit DCT
 constexpr const char* JPEG2000_LOSSLESS  = "1.2.840.10008.1.2.4.90";
 constexpr const char* JPEG2000_LOSSY     = "1.2.840.10008.1.2.4.91";
 
 bool isCompressedTransferSyntax(const std::string& ts) {
-    return ts == RLE_LOSSLESS || ts == JPEG2000_LOSSLESS || ts == JPEG2000_LOSSY;
+    return ts == RLE_LOSSLESS
+        || ts == JPEG_BASELINE || ts == JPEG_EXTENDED
+        || ts == JPEG2000_LOSSLESS || ts == JPEG2000_LOSSY;
 }
 
 // Long VRs use a 4-byte length (with 2 reserved bytes); all others use 2-byte.
@@ -322,6 +329,108 @@ bool decodeRleFrame16(const std::string& path,
         dst[i * 2 + 0] = lsbPlane[i];
         dst[i * 2 + 1] = msbPlane[i];
     }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// JPEG Baseline / Extended frame decoder via libjpeg-turbo.
+//
+// libjpeg uses setjmp / longjmp for error propagation, which we route into a
+// per-call jmp_buf + lastError string so the failure surfaces through the
+// same LOG_ERROR -> false path as the other decoders. The decoder forces
+// JCS_GRAYSCALE so 1-channel medical JPEGs land straight as 16-bit; the
+// data-precision branch picks the 8-bit vs 12-bit scanline reader. 8-bit
+// pixels are promoted to 16-bit via `<< 8` so an 8-bit baseline DICOM keeps
+// its dynamic range in the engine's R16Float atlas.
+// ---------------------------------------------------------------------------
+struct JpegErrorMgr {
+    struct jpeg_error_mgr pub;
+    std::jmp_buf setjmp_buffer;
+    char lastError[JMSG_LENGTH_MAX] = {0};
+};
+
+void jpegErrorExit(j_common_ptr cinfo) {
+    auto* err = reinterpret_cast<JpegErrorMgr*>(cinfo->err);
+    (*cinfo->err->format_message)(cinfo, err->lastError);
+    std::longjmp(err->setjmp_buffer, 1);
+}
+
+void jpegOutputMessage(j_common_ptr) {}   // silence info / warning chatter
+
+bool decodeJpegFrame16(const std::string& path,
+                       const EncapsulatedFrame& frame,
+                       uint32_t rows, uint32_t cols,
+                       uint8_t* dst /* rows*cols*2 bytes LE */) {
+    JpegErrorMgr errMgr{};
+    struct jpeg_decompress_struct cinfo{};
+    cinfo.err = jpeg_std_error(&errMgr.pub);
+    errMgr.pub.error_exit     = jpegErrorExit;
+    errMgr.pub.output_message = jpegOutputMessage;
+
+    if (setjmp(errMgr.setjmp_buffer)) {
+        LOG_ERROR("Dicom") << path << ": JPEG decode failed (" << errMgr.lastError << ")";
+        jpeg_destroy_decompress(&cinfo);
+        return false;
+    }
+
+    jpeg_create_decompress(&cinfo);
+    jpeg_mem_src(&cinfo, frame.data, frame.size);
+    jpeg_read_header(&cinfo, TRUE);
+
+    // Force grayscale output; libjpeg handles any YCbCr->Grayscale conversion
+    // internally so colour-tagged medical JPEGs still land as a 1-channel
+    // intensity array.
+    cinfo.out_color_space = JCS_GRAYSCALE;
+
+    if (!jpeg_start_decompress(&cinfo)) {
+        LOG_ERROR("Dicom") << path << ": jpeg_start_decompress failed";
+        jpeg_destroy_decompress(&cinfo);
+        return false;
+    }
+
+    if (cinfo.output_width != cols || cinfo.output_height != rows) {
+        LOG_ERROR("Dicom") << path << ": JPEG dims " << cinfo.output_width << "x"
+                           << cinfo.output_height << " differ from header "
+                           << cols << "x" << rows;
+        jpeg_destroy_decompress(&cinfo);
+        return false;
+    }
+
+    const int precision = cinfo.data_precision;
+    if (precision == 8) {
+        std::vector<JSAMPLE> rowBuf(cols);
+        JSAMPROW rowPtr = rowBuf.data();
+        for (uint32_t y = 0; y < rows; ++y) {
+            jpeg_read_scanlines(&cinfo, &rowPtr, 1);
+            // Promote 8-bit -> 16-bit via << 8 to preserve dynamic range in
+            // the R16Float atlas pipeline.
+            for (uint32_t x = 0; x < cols; ++x) {
+                const uint16_t v = static_cast<uint16_t>(rowBuf[x]) << 8;
+                const size_t idx = (static_cast<size_t>(y) * cols + x) * 2;
+                dst[idx + 0] = static_cast<uint8_t>(v & 0xFF);
+                dst[idx + 1] = static_cast<uint8_t>((v >> 8) & 0xFF);
+            }
+        }
+    } else if (precision == 12) {
+        std::vector<J12SAMPLE> rowBuf(cols);
+        J12SAMPROW rowPtr = rowBuf.data();
+        for (uint32_t y = 0; y < rows; ++y) {
+            jpeg12_read_scanlines(&cinfo, &rowPtr, 1);
+            for (uint32_t x = 0; x < cols; ++x) {
+                const uint16_t v = static_cast<uint16_t>(rowBuf[x]);
+                const size_t idx = (static_cast<size_t>(y) * cols + x) * 2;
+                dst[idx + 0] = static_cast<uint8_t>(v & 0xFF);
+                dst[idx + 1] = static_cast<uint8_t>((v >> 8) & 0xFF);
+            }
+        }
+    } else {
+        LOG_ERROR("Dicom") << path << ": unsupported JPEG data_precision " << precision;
+        jpeg_destroy_decompress(&cinfo);
+        return false;
+    }
+
+    jpeg_finish_decompress(&cinfo);
+    jpeg_destroy_decompress(&cinfo);
     return true;
 }
 
@@ -701,6 +810,14 @@ bool parseSlice(const std::string& path, std::vector<uint8_t>& fileBuf, Slice& o
         for (size_t i = 0; i < out.frames.size(); ++i) {
             if (!decodeJpeg2000Frame16(path, out.frames[i], out.rows, out.cols,
                                        out.decompressedBuffer.data() + i * frameBytes)) {
+                return false;
+            }
+        }
+    } else if (out.transferSyntaxUid == JPEG_BASELINE ||
+               out.transferSyntaxUid == JPEG_EXTENDED) {
+        for (size_t i = 0; i < out.frames.size(); ++i) {
+            if (!decodeJpegFrame16(path, out.frames[i], out.rows, out.cols,
+                                   out.decompressedBuffer.data() + i * frameBytes)) {
                 return false;
             }
         }
