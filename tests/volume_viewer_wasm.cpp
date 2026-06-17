@@ -501,6 +501,7 @@ EMSCRIPTEN_BINDINGS(volume_viewer) {
     emscripten::function("setSpp",            +[](int s)     { if (g_viewer) g_viewer->setSpp(s); });
     emscripten::function("setAniso",          +[](float g)   { if (g_viewer) g_viewer->setAniso(g); });
     emscripten::function("setBounces",        +[](int b)     { if (g_viewer) g_viewer->setBounces(b); });
+    emscripten::function("setDenoise",        +[](bool on)   { if (g_viewer) g_viewer->setDenoise(on); });
     emscripten::function("dataMin",           +[]() -> float { return g_viewer ? g_viewer->dataMin() : 0.0f; });
     emscripten::function("dataMax",           +[]() -> float { return g_viewer ? g_viewer->dataMax() : 0.0f; });
 
