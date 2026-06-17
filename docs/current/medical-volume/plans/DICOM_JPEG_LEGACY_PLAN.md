@@ -49,14 +49,14 @@ first and gets verified before the browser surface area grows.
 
 ## 3. Atomic Steps
 
-### Step J1 — Plan + libjpeg-turbo vcpkg dep (~1-2 h)
+### Step J1 — Plan + libjpeg-turbo vcpkg dep (~1-2 h)   ✅ `6ff902c`
 
 - Add `libjpeg-turbo` to `vcpkg.json`.
 - `find_package(JPEG CONFIG REQUIRED)` in the native branch.
 - `target_link_libraries(volume_viewer PRIVATE JPEG::jpeg)`.
 - Linkage probe: log `LIBJPEG_TURBO_VERSION` at startup.
 
-### Step J2 — JPEG Baseline + Extended decoder (~2-3 h)
+### Step J2 — JPEG Baseline + Extended decoder (~2-3 h)   ✅ `e7a80e2`
 
 - New helper `decodeJpegFrame16(frame, rows, cols, dst)` in DicomFile.cpp.
 - libjpeg memory source manager wrapping the encapsulated frame bytes.
@@ -65,24 +65,40 @@ first and gets verified before the browser surface area grows.
 - 12-bit extended: libjpeg-turbo 12-bit API (`jpeg12_*`) — same flow.
 - Route `JPEG_BASELINE` and `JPEG_EXTENDED` UIDs through the new helper.
 
-### Step J3 — JPEG Lossless (Process 14 + SV1) (~3-4 h)
+### Step J3 — JPEG Lossless (Process 14 + SV1) (~3-4 h)   ✅ `6157da4`
 
-- libjpeg-turbo 3.0+ adds a lossless decoder via `j_decompress_ptr` with
-  `process == JPROC_LOSSLESS`. Verify the vcpkg port shipping version.
-- Same memory-source wrapper as J2; output pixel width tracks the JPEG
-  precision (12 or 16 bits) and goes straight to the int16 dst.
-- If the vcpkg version is too old, document the gap and propose either a
-  vcpkg port pin or a fallback (libjpeg-lossless single-header).
+- libjpeg-turbo 3.0+ decodes lossless streams transparently through the
+  standard `jpeg_decompress_struct` flow -- no `JPROC_LOSSLESS` opt-in
+  needed. The vcpkg port ships 3.1.2 with full lossless support (Process
+  14 + SV1).
+- `decodeJpegFrame16` precision dispatch widened from exact equality
+  (`== 8`, `== 12`) to ranges (`<= 8`, `<= 12`, `<= 16`); the new 16-bit
+  branch calls `jpeg16_read_scanlines` and writes `J16SAMPLE` straight
+  to int16 -- bit pattern preserved so PixelRepresentation
+  signed/unsigned interpretation stays the engine's responsibility.
+- Bonus fix: single-frame multi-fragment handling. Empty-BOT encapsulated
+  streams often split one JPEG into 2+ `(FFFE,E000)` items. `parseSlice`
+  concatenates them into an owned `Slice::mergedFrameBuffer` and rewrites
+  `frames[]` to one contiguous view before dispatch.
 
-### Step J4 — Verification + docs (~1-2 h)
+### Step J4 — Verification + docs (~1-2 h)   ✅ `6157da4` (this commit)
 
-- pydicom test files:
-  - `JPGLosslessP14SV1_1s_1f_8b.dcm` — 8-bit lossless via SV1.
-  - (Optional, if reachable) JPEG baseline / extended samples.
-- Compare against the uncompressed sibling when available (bit-exact for
-  lossless).
-- Update VIEWERS.md and the roadmap with the newly supported transfer
-  syntaxes.
+- Verified on pydicom-data:
+  - `JPGExtended.dcm` (12-bit DCT, precision=12, 256×1024) -> range `[0, 264]`.
+  - `JPEG-LL.dcm` (16-bit lossless, precision=16, 256×1024, 2-fragment merge)
+    -> range `[0, 278]`. Exercises both the 16-bit `jpeg16` branch and
+    the new fragment-merge path.
+  - `JPGLosslessP14SV1_1s_1f_8b.dcm` (8-bit lossless via SV1) -> decoder
+    runs; rejected later by the pre-existing `bitsAllocated != 16` engine
+    guard (RGB secondary-capture limitation; lifting it is engine-side
+    work outside this track).
+- Regression unchanged: JPEG 2000 (`693_J2KR` `[-3024, 1468]`), RLE
+  Lossless, Explicit / Implicit VR LE.
+- JPEG-LS (`1.2.840.10008.1.2.4.80`) seen in samples (`emri_small_jpeg_ls_lossless`)
+  but correctly reported as unsupported -- separate charls track per the
+  plan.
+- Updated `VIEWERS.md` (capability matrix + dispatch list) and
+  `MEDICAL_VOLUME_ROADMAP.md` (delivered-work log).
 
 ### Total: ~7-11 h (2-3 sessions)
 

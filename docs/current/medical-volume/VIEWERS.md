@@ -76,7 +76,7 @@ make serve-wasm   # scripts\serve_nocache.py 사용 (브라우저 캐시 우회)
 | 포맷 | 네이티브 | WASM | 비고 |
 | --- | --- | --- | --- |
 | **NIfTI (.nii)** | ✅ (mmap) | ✅ (preload 1개) | 헤더에 dims·spacing·intensity 단위. 우선 권장 포맷. 네이티브는 `utils::MmappedFile`로 본문을 OS 페이지 캐시에 위임 (큰 파일 ingest의 transient 버퍼 제거) |
-| **DICOM 시리즈 (디렉토리)** | ✅ | ✅ (preload, JPEG 2000 sample) | int16 CT/MR. Transfer syntax: Explicit VR LE, Implicit VR LE(임상 PACS 기본), RLE Lossless, JPEG 2000 Lossless/Lossy(openjpeg). 실 임상 코퍼스 검증: HU CT, 고해상도 MR, multi-frame MR, enhanced CT(Explicit) · pydicom RT(Implicit dispatch) · pydicom 693_J2KI(JPEG 2000 lossy, **네이티브 + WASM 브라우저**) · pydicom MR_small_RLE(비트 동일성). WASM 빌드는 OpenJPEG를 FetchContent로 컴파일 + 693_J2KI.dcm을 자동 다운로드 + preload |
+| **DICOM 시리즈 (디렉토리)** | ✅ | ✅ (preload, JPEG 2000 sample) | int16 CT/MR. Transfer syntax: Explicit VR LE, Implicit VR LE(임상 PACS 기본), RLE Lossless, JPEG 2000 Lossless/Lossy(openjpeg), **JPEG Baseline/Extended/Lossless P14·SV1(libjpeg-turbo, 네이티브)**. 실 임상 코퍼스 검증: HU CT, 고해상도 MR, multi-frame MR, enhanced CT(Explicit) · pydicom RT(Implicit dispatch) · pydicom 693_J2KI(JPEG 2000 lossy, **네이티브 + WASM 브라우저**) · pydicom MR_small_RLE(비트 동일성) · pydicom JPGExtended(12-bit DCT, precision=12) · pydicom JPEG-LL(16-bit lossless, precision=16, 단일-frame multi-fragment 병합). 8-bit JPEG(베이스라인/lossless SV1) 디코더는 통과하지만 엔진의 `bitsAllocated != 16` 정책에서 차단됨(별개 워크). WASM 빌드는 OpenJPEG를 FetchContent로 컴파일 + 693_J2KI.dcm을 자동 다운로드 + preload (libjpeg-turbo WASM 포팅은 별개 트랙) |
 | **raw headerless** | ✅ | ❌ | dims·bpv를 CLI로 명시 |
 | **절차적 합성** | ✅ (인자 없음) | ❌ | 128³ 노이즈 볼륨, 첫 부팅용 |
 
@@ -178,6 +178,7 @@ PT 모드 진입 시 자동으로 progressive 누적이 시작된다. **카메�
 | DICOM Explicit VR LE 로더(NumberOfFrames + 중첩 SQ skip) | M1 | `assets::loadDicomSeries` |
 | **DICOM Implicit VR LE (임상 PACS 기본)** | DICOM Implicit VR | `assets::loadDicomSeries` + tag VR dictionary |
 | **DICOM RLE Lossless + JPEG 2000 (lossless/lossy)** | DICOM compressed | `assets::loadDicomSeries` + OpenJPEG vcpkg |
+| **DICOM JPEG Baseline/Extended/Lossless P14·SV1 (네이티브)** | DICOM compressed | `assets::loadDicomSeries` + libjpeg-turbo vcpkg |
 | Gradient 음영 (Lambert) | M2-1 | `volume_march`의 `ubo.light.w` |
 | 볼류메트릭 소프트 섀도우 | M2-2 | `volume_march`의 `ubo.shadow` |
 | 컴퓨트 occupancy 그리드 + empty-space skip | M3-1 | `volume_occupancy.comp` |
@@ -200,7 +201,8 @@ PT 모드 진입 시 자동으로 progressive 누적이 시작된다. **카메�
 - **데이터 경로**:
   - NIfTI: `utils::MmappedFile`로 본문 mmap → 헤더만 인터프리트
   - DICOM: `assets::loadDicomSeries` — Explicit/Implicit VR LE dispatch +
-    RLE/JPEG 2000 디코드 → 직접 uncompressed pixel layout
+    RLE/JPEG 2000/JPEG Baseline·Extended·Lossless 디코드 → 직접
+    uncompressed pixel layout
   - 둘 다 → `Volume3D{intensity, w, h, d, spacing*}` 공용 구조체
   - → `VolumeRenderer::loadFromFloatData()` → R16Float 변환
   - → `BrickedVolume::build()` — 빈 brick 제거 + 4개 atlas (L0..L3) +

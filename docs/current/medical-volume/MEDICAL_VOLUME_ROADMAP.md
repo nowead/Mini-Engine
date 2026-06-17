@@ -340,6 +340,14 @@ v1-β LOD + DICOM (Implicit VR + 압축) + Disk paging Steps 1-3 까지가 한 �
   으로 "Destroyed texture in submit" 검증 spam — Static atlas 강제 워크어라운드
   적용, 본질 해결은 후속 트랙. 계획서:
   [WASM_OPENJPEG_PLAN.md](plans/WASM_OPENJPEG_PLAN.md).
+- **DICOM JPEG Baseline/Extended/Lossless P14·SV1 (네이티브)**
+  (`6ff902c` → `6157da4`, 2026-06-16) — libjpeg-turbo 3.1.2 vcpkg 의존성
+  추가, DicomFile.cpp 디코더 (`decodeJpegFrame16` precision 분기로 8/12/16-bit
+  처리) + parseSlice dispatch + 단일-frame multi-fragment 병합. pydicom-data
+  JPGExtended(12-bit DCT) `[0, 264]`, JPEG-LL(16-bit lossless, 2 fragments)
+  `[0, 278]` 검증, JPEG 2000/RLE 무회귀. WASM libjpeg-turbo 포팅은 별개
+  트랙으로 분리. 계획서:
+  [DICOM_JPEG_LEGACY_PLAN.md](plans/DICOM_JPEG_LEGACY_PLAN.md).
 
 **즉흥 폴리시 후보 (로드맵 명시 안 됨, 후순위)** — v1-β 작업 중 발견된 개선점.
 차별화 핵심 아니므로 위 차별화 후보가 마무리된 뒤 시각 만족도/성능에 따라 선택:
