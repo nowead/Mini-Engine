@@ -963,7 +963,13 @@ bool loadDicomSeries(const std::string& dirPath, Volume3D& out) {
                     ? static_cast<float>(raw_i16)
                     : static_cast<float>(static_cast<uint16_t>(raw_i16));
                 const float v = slope * raw + inter;
-                out.intensity[(static_cast<size_t>(z) * h + y) * w + x] = v;
+                // Flip rows during load so the volume comes out anatomically
+                // upright. DICOM row 0 is the top of the image (patient
+                // superior in axial); the 3D texture maps texel v=0 to world
+                // y = aabbMin.y (screen bottom). Writing row 0 to buffer
+                // y = h-1 lands it at world y = aabbMax.y (screen top) and
+                // matches both viewers' Y-up camera convention.
+                out.intensity[(static_cast<size_t>(z) * h + (h - 1 - y)) * w + x] = v;
                 if (v < mn) mn = v;
                 if (v > mx) mx = v;
             }

@@ -84,6 +84,19 @@ public:
      */
     void setTarget(const glm::vec3& newTarget) { target = newTarget; updateCameraVectors(); }
 
+    /**
+     * @brief Set orbit yaw/pitch/distance in one call. Lets callers pose the
+     *        camera explicitly (the public rotate() only does deltas, so
+     *        absolute yaw/pitch otherwise requires re-deriving from the
+     *        unknown current state).
+     */
+    void setOrbit(float yawRad, float pitchRad, float dist) {
+        yaw = yawRad;
+        pitch = pitchRad;
+        distance = dist;
+        updateCameraVectors();
+    }
+
 private:
     // Camera parameters
     glm::vec3 position;

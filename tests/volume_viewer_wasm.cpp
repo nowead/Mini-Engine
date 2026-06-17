@@ -257,9 +257,38 @@ private:
             glm::vec3 ext(vol.w * vol.spacingX, vol.h * vol.spacingY, vol.d * vol.spacingZ);
             const float m = std::max({ext.x, ext.y, ext.z});
             halfExtent = (m > 0.0f) ? ext / m : glm::vec3(1.0f);
-            m_volume->setWindowCenter(300.0f);   // clinical bone window (data is HU)
-            m_volume->setWindowWidth(1500.0f);
+            // Pad the thinnest dimension up to a minimum half-extent. For
+            // single-slice 2D DICOMs (depth=1 voxel; mammography, single CT
+            // slice) the ray-marching path through the volume otherwise
+            // collapses to near zero and no alpha accumulates -> black. The
+            // pad is applied to the AABB only; the texture itself stays at
+            // its real voxel resolution, so sampling outside the data range
+            // returns the slice value, giving a slab-extruded look that is
+            // actually useful for inspecting a single slice in 3D.
+            const float minHalf = 0.10f;
+            halfExtent.x = std::max(halfExtent.x, minHalf);
+            halfExtent.y = std::max(halfExtent.y, minHalf);
+            halfExtent.z = std::max(halfExtent.z, minHalf);
+            // Only apply the clinical bone HU window when the data actually
+            // looks like CT (signed, with air at -1000). Other modalities --
+            // MR, mammography, the synthetic non-CT NIfTI -- already have a
+            // sensible auto-fit window set by loadFromFloatData (center =
+            // (min+max)/2, width = max-min). Overriding to 300/1500 on a
+            // [0, 278] JPEG-LL sample mapped everything into the lower 30% of
+            // the LUT, where the CT-Bone preset is fully transparent -> black.
+            if (m_volume->getDataMin() < -500.0f) {
+                m_volume->setWindowCenter(300.0f);   // clinical bone HU
+                m_volume->setWindowWidth(1500.0f);
+            }
             m_volume->setExtinction(10.0f);
+            // For single-slice 2D DICOMs, override the default 35° pitch
+            // orbit with a face-on view (camera looking straight down -Z)
+            // so the slice fills the canvas symmetrically. The 3D-volume
+            // pitch makes the same image look top-heavy because perspective
+            // foreshortens the lower half more than the upper half.
+            if (vol.d == 1) {
+                m_camera.setOrbit(0.0f, 0.0f, 2.3f);
+            }
             // Push the data range to JS so the "Full" window button reads a cached
             // value instead of calling into wasm mid-frame (which would abort under
             // ASYNCIFY if a frame is suspended in a fence wait).
@@ -274,7 +303,16 @@ private:
         m_volume->setParams(1.5f, 10.0f, /*stepSize*/0.01f, 0.05f, 2.0f);
         m_volume->setMaxSteps(512.0f);
         m_volume->setShadowParams(0.04f, 24.0f, 1.0f);
-        m_volume->setTFPreset(3);   // CT - Bone
+        // CT-Bone (3) needs HU air at -1000 to look right; the LUT is
+        // designed for the upper end of [-1000, 3000] and clamps anything
+        // below normalized 0.55 to transparent. For non-CT data (MR,
+        // mammography, synthetic non-CT NIfTI) auto-window lands the values
+        // evenly across [0, 1]; pick Cloud (1) -- near-white LUT with smooth
+        // alpha ramp from ~0.30 -- so the default frame looks like a clinical
+        // grayscale-ish X-ray view rather than the warm-orange soft-tissue
+        // palette.
+        const int defaultPreset = (m_volume->getDataMin() < -500.0f) ? 3 : 1;
+        m_volume->setTFPreset(defaultPreset);
 
         recreateDummyDepth(m_width, m_height);
         if (!m_volume->createPipeline(m_dummyDepthView.get(), nullptr, m_swapchain->getFormat())) {
