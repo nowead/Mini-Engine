@@ -23,6 +23,14 @@
 // (returns a string pointer, no allocation). Logged once at startup so we know
 // the WASM build picked up the FetchContent-built static lib.
 #include <openjpeg.h>
+// WASM_LIBJPEG_TURBO_PLAN W1: linkage probe for the FetchContent-built
+// libjpeg-turbo. JPEG_LIB_VERSION is a compile-time macro from jpeglib.h that
+// the linker resolves once we drag in any libjpeg symbol -- a tiny logged
+// reference (e.g. the helper used in DicomFile.cpp) confirms the static lib
+// went in.
+extern "C" {
+#include <jpeglib.h>
+}
 
 #include <GLFW/glfw3.h>
 #include <emscripten.h>
@@ -442,6 +450,7 @@ EMSCRIPTEN_BINDINGS(volume_viewer) {
 
 int main() {
     LOG_INFO("WasmViewer") << "OpenJPEG linked, version: " << opj_version();
+    LOG_INFO("WasmViewer") << "libjpeg-turbo linked, JPEG_LIB_VERSION=" << JPEG_LIB_VERSION;
     g_viewer = new VolumeViewerWasm();
     g_viewer->init();
     emscripten_set_main_loop_arg(

@@ -138,6 +138,74 @@ else()
     target_include_directories(openjp2 INTERFACE
         $<BUILD_INTERFACE:${openjpeg_SOURCE_DIR}/src/lib/openjp2>
         $<BUILD_INTERFACE:${openjpeg_BINARY_DIR}/src/lib/openjp2>)
+
+    # libjpeg-turbo for DICOM JPEG Baseline / Extended / Lossless P14 / SV1
+    # decoding in the browser. Native gets this via vcpkg `libjpeg-turbo`
+    # (find_package(JPEG) in the non-EMSCRIPTEN branch above); WASM builds from
+    # source. Pinned to 3.1.2 to match the vcpkg-installed version so decode
+    # behaviour is identical across native and WASM. Step W1 of
+    # WASM_LIBJPEG_TURBO_PLAN -- linkage only; the call sites that exercise
+    # 8/12/16-bit decode already live in src/assets/DicomFile.cpp from the
+    # native J2/J3 work.
+    set(WITH_SIMD       OFF CACHE BOOL "" FORCE)  # no x86 SIMD on WASM
+    set(WITH_12BIT      ON  CACHE BOOL "" FORCE)  # 12 and 16-bit symbols
+    set(WITH_TURBOJPEG  OFF CACHE BOOL "" FORCE)  # libjpeg API only
+    set(WITH_JPEG7      OFF CACHE BOOL "" FORCE)
+    set(WITH_JPEG8      OFF CACHE BOOL "" FORCE)
+    set(ENABLE_SHARED   OFF CACHE BOOL "" FORCE)
+    set(ENABLE_STATIC   ON  CACHE BOOL "" FORCE)
+    FetchContent_Declare(
+        libjpeg_turbo
+        GIT_REPOSITORY https://github.com/libjpeg-turbo/libjpeg-turbo.git
+        GIT_TAG 3.1.2
+        GIT_SHALLOW TRUE
+    )
+    # libjpeg-turbo's top-level CMakeLists.txt rejects add_subdirectory() with a
+    # FATAL_ERROR when CMAKE_SOURCE_DIR isn't its own root (the upstream
+    # maintainers do not want to support downstream subdir integrations). We
+    # only need a static archive built with our WASM toolchain, so we populate
+    # the source manually, neutralise the guard line, then add_subdirectory()
+    # as if it were a normal FetchContent_MakeAvailable. We also skip install
+    # rules globally for the add_subdirectory call: libjpeg-turbo's install()
+    # commands rely on GNUInstallDirs and collide with tinyobjloader's
+    # `uninstall` custom target -- both are irrelevant for a WASM static link.
+    # GNUInstallDirs sets CMAKE_INSTALL_DOCDIR / LIBDIR / etc. that libjpeg-turbo's
+    # install() commands reference at configure time -- without it the configure
+    # bails on "install FILES given no DESTINATION". CMAKE_SKIP_INSTALL_RULES
+    # below stops the rules from being generated, but the configure parse still
+    # requires the variables to be set.
+    include(GNUInstallDirs)
+    FetchContent_GetProperties(libjpeg_turbo)
+    if(NOT libjpeg_turbo_POPULATED)
+        FetchContent_Populate(libjpeg_turbo)
+        file(READ ${libjpeg_turbo_SOURCE_DIR}/CMakeLists.txt _ljt_cml)
+        # 1) Bypass the upstream add_subdirectory guard.
+        string(REPLACE
+            "message(FATAL_ERROR \"The libjpeg-turbo build system cannot be integrated into another build system using add_subdirectory().  Use ExternalProject_Add() instead.\")"
+            "message(STATUS \"libjpeg-turbo: add_subdirectory guard bypassed for Mini-Engine WASM build\")"
+            _ljt_cml "${_ljt_cml}")
+        # 2) Rename the upstream `uninstall` custom target -- it collides with
+        #    the one tinyobjloader (also fetched above) already created.
+        string(REPLACE
+            "add_custom_target(uninstall COMMAND"
+            "add_custom_target(libjpeg_turbo_uninstall COMMAND"
+            _ljt_cml "${_ljt_cml}")
+        file(WRITE ${libjpeg_turbo_SOURCE_DIR}/CMakeLists.txt "${_ljt_cml}")
+        set(_prev_skip_install ${CMAKE_SKIP_INSTALL_RULES})
+        set(CMAKE_SKIP_INSTALL_RULES TRUE)
+        add_subdirectory(${libjpeg_turbo_SOURCE_DIR} ${libjpeg_turbo_BINARY_DIR} EXCLUDE_FROM_ALL)
+        set(CMAKE_SKIP_INSTALL_RULES ${_prev_skip_install})
+    endif()
+    # libjpeg-turbo's CMakeLists exposes its 8-bit static library as
+    # `jpeg-static`. The 12-bit / 16-bit symbols (jpeg12_* / jpeg16_*) are
+    # folded into the same archive when WITH_12BIT is on, so a single link
+    # entry covers all three precisions used by decodeJpegFrame16. The
+    # public headers (jpeglib.h, jmorecfg.h) live in src/; the generated
+    # jconfig.h / jconfigint.h are in the build dir. Both go on the include
+    # path so downstream targets can `#include <jpeglib.h>` unchanged.
+    target_include_directories(jpeg-static INTERFACE
+        $<BUILD_INTERFACE:${libjpeg_turbo_SOURCE_DIR}/src>
+        $<BUILD_INTERFACE:${libjpeg_turbo_BINARY_DIR}>)
 endif()
 
 # =============================================================================
@@ -879,7 +947,7 @@ else()
         src/utils/MmappedFile.hpp
     )
     target_include_directories(volume_viewer_wasm BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-    target_link_libraries(volume_viewer_wasm PRIVATE glm::glm rhi::factory openjp2)
+    target_link_libraries(volume_viewer_wasm PRIVATE glm::glm rhi::factory openjp2 jpeg-static)
     target_compile_definitions(volume_viewer_wasm PRIVATE
         $<$<BOOL:${RHI_BACKEND_WEBGPU}>:RHI_BACKEND_WEBGPU=1>)
     set_target_properties(volume_viewer_wasm PROPERTIES
