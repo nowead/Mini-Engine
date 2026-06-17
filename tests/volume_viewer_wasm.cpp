@@ -235,11 +235,15 @@ private:
 
         glm::vec3 halfExtent(1.0f);
         assets::Volume3D vol;
-        // Step W3: try the preloaded JPEG 2000 DICOM first so the OpenJPEG path
-        // is exercised on every browser load. Falls back to the synthetic NIfTI
-        // (already preloaded for the prior demo flow) if the DICOM is missing
-        // or unsupported.
-        const bool loadedDicom = assets::loadDicomSeries("/sample_dicom", vol);
+        // WASM_LIBJPEG_TURBO_PLAN W2: try the JPEG Lossless P14 sample first
+        // (16-bit lossless, 2 fragments per frame -- exercises the libjpeg-
+        // turbo jpeg16 branch + the single-frame multi-fragment merge path).
+        // Fall through to the JPEG 2000 sample (OpenJPEG regression), then to
+        // the synthetic NIfTI -- the chain keeps every preload path exercised
+        // on browser load without per-sample UI.
+        const bool loadedJpegLl = assets::loadDicomSeries("/sample_dicom_jpegll", vol);
+        const bool loadedJp2    = !loadedJpegLl && assets::loadDicomSeries("/sample_dicom_jp2", vol);
+        const bool loadedDicom  = loadedJpegLl || loadedJp2;
         const bool loaded = loadedDicom || assets::loadNifti("/synthetic_ct.nii", vol);
         if (loaded) {
             // No atlas override -- BrickedVolume::build now picks Static when

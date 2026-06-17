@@ -973,14 +973,20 @@ else()
         COMMAND ${CMAKE_COMMAND} -E make_directory ${VV_ASSET_DIR}
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/make_synthetic_nii.py
                 ${VV_ASSET_DIR}/synthetic_ct.nii 96 96 48
-        # Step W3: download a small JPEG 2000-encoded DICOM (pydicom's
-        # 693_J2KI.dcm) into vv_assets/sample_dicom/ so the browser viewer can
-        # exercise the OpenJPEG decode path end to end. Idempotent -- the
-        # script no-ops when the file is already cached.
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${VV_ASSET_DIR}/sample_dicom
+        # WASM_OPENJPEG_PLAN W3: 693_J2KI.dcm (JPEG 2000 lossy, ~3.6 KB)
+        # exercises the OpenJPEG decode path in-browser.
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${VV_ASSET_DIR}/sample_dicom_jp2
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/fetch_wasm_dicom_sample.py
-                ${VV_ASSET_DIR}/sample_dicom/693_J2KI.dcm
-        COMMENT "Staging WGSL + synthetic CT + JPEG 2000 DICOM sample for volume_viewer_wasm"
+                ${VV_ASSET_DIR}/sample_dicom_jp2/693_J2KI.dcm
+        # WASM_LIBJPEG_TURBO_PLAN W2: JPEG-LL.dcm (16-bit JPEG Lossless P14,
+        # 2 fragments per frame, ~119 KB) exercises the libjpeg-turbo
+        # jpeg16_read_scanlines branch AND the single-frame multi-fragment
+        # merge path landed in J3.
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${VV_ASSET_DIR}/sample_dicom_jpegll
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/fetch_wasm_dicom_sample.py
+                ${VV_ASSET_DIR}/sample_dicom_jpegll/JPEG-LL.dcm
+                https://github.com/pydicom/pydicom-data/raw/master/data_store/data/JPEG-LL.dcm
+        COMMENT "Staging WGSL + synthetic CT + JPEG 2000 / JPEG Lossless DICOM samples for volume_viewer_wasm"
     )
     set_target_properties(volume_viewer_wasm PROPERTIES
         LINK_DEPENDS "${VV_WGSL_SOURCES};${CMAKE_CURRENT_SOURCE_DIR}/tests/volume_viewer_shell.html"
@@ -1009,7 +1015,8 @@ else()
         "SHELL:--bind"
         "SHELL:--preload-file ${VV_SHADER_DIR}@/shaders"
         "SHELL:--preload-file ${VV_ASSET_DIR}/synthetic_ct.nii@/synthetic_ct.nii"
-        "SHELL:--preload-file ${VV_ASSET_DIR}/sample_dicom@/sample_dicom"
+        "SHELL:--preload-file ${VV_ASSET_DIR}/sample_dicom_jp2@/sample_dicom_jp2"
+        "SHELL:--preload-file ${VV_ASSET_DIR}/sample_dicom_jpegll@/sample_dicom_jpegll"
         "SHELL:--shell-file ${CMAKE_CURRENT_SOURCE_DIR}/tests/volume_viewer_shell.html"
     )
     target_compile_options(volume_viewer_wasm PRIVATE
