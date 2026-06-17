@@ -24,6 +24,8 @@ struct VolumeUBO {
     accum:     vec4<f32>,   // x = previous accumulated sample count N
     volSize:   vec4<f32>,   // M3-3 xyz = source volume voxel dims (brick indexing)
     atlasGrid: vec4<f32>,   // M3-3 xyz = atlas capacity in bricks (slot unpack)
+    envTop:    vec4<f32>,   // M4 v2 P1 rgb = sky top color, w = intensity multiplier
+    envBot:    vec4<f32>,   // M4 v2 P1 rgb = sky bottom color, w = enable flag (0/1)
 };
 
 @group(0) @binding(0) var<uniform> ubo: VolumeUBO;
@@ -126,6 +128,16 @@ fn sampleTF(density: f32) -> vec4<f32> {
                 clamp(density * ubo.tf.y, 0.0, 1.0));
     return vec4<f32>(c, clamp(density, 0.0, 1.0));
 }
+// M4 v2 P1: simple top-bottom gradient sky. Direction dir.y > 0 leans towards
+// envTop, < 0 towards envBot. Disabled when envBot.w < 0.5 -- caller multiplies
+// by zero so the v1 black-background behaviour is preserved.
+fn sampleEnvironment(dir: vec3<f32>) -> vec3<f32> {
+    if (ubo.envBot.w < 0.5) { return vec3<f32>(0.0); }
+    let t = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
+    let col = mix(ubo.envBot.rgb, ubo.envTop.rgb, t);
+    return col * ubo.envTop.w;
+}
+
 fn intersectAABB(ro: vec3<f32>, rd: vec3<f32>,
                  bmin: vec3<f32>, bmax: vec3<f32>) -> vec2<f32> {
     let invD = 1.0 / rd;
@@ -160,7 +172,11 @@ fn tracePath(ro_in: vec3<f32>, rd_in: vec3<f32>,
     var hit = intersectAABB(ro_in, rd_in, bmin, bmax);
     let tNear = max(hit.x, 0.0);
     let tFar  = hit.y;
-    if (tNear >= tFar) { return vec3<f32>(0.0); }
+    // Primary ray missed the volume entirely -> the background colour the
+    // path-trace contributes is the environment sample (or black when env is
+    // disabled). Without this the background stayed clamped at 0 even with
+    // env on.
+    if (tNear >= tFar) { return sampleEnvironment(rd_in); }
 
     let boxSize = bmax - bmin;
     var ro = ro_in + rd_in * tNear;
@@ -186,7 +202,15 @@ fn tracePath(ro_in: vec3<f32>, rd_in: vec3<f32>,
             let sigma_t = sampleDensity(uvw) * ubo.params.y;
             if (rnd(seed) < sigma_t / sigmaMax) { break; }
         }
-        if (exited) { break; }
+        if (exited) {
+            // The path escaped the volume without another scatter event. The
+            // remaining throughput now lights the camera via whatever it sees
+            // in that direction -- the environment for b > 0, or background
+            // when this was the primary ray (handled by the tNear>=tFar guard
+            // above too).
+            result = result + throughput * sampleEnvironment(rd);
+            break;
+        }
 
         let p = ro + rd * t;
         let uvw = (p - bmin) / boxSize;

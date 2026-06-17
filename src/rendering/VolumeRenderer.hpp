@@ -64,6 +64,8 @@ public:
         glm::vec4 accum;       // x = path-trace accumulated sample count (for the running average); yzw spare
         glm::vec4 volSize;     // xyz = source volume voxel dims (for brick indexing); w spare
         glm::vec4 atlasGrid;   // xyz = atlas capacity in bricks (slot unpack); w spare
+        glm::vec4 envTop;      // M4 v2 P1: rgb = sky top color, w = intensity multiplier
+        glm::vec4 envBot;      // M4 v2 P1: rgb = sky bottom color, w = enable flag (0/1)
     };
 
     enum class RenderMode { Lambert = 0, PathTrace = 1 };
@@ -202,6 +204,20 @@ public:
     void setPathtraceSpp(int s)          { m_pathSpp = s; }
     void setPathtraceAnisotropy(float g) { m_pathG = g; }
     void setPathtraceBounces(int b)      { m_pathBounces = b; }
+    // M4 v2 P1: path-trace environment lighting. Sampled by miss rays
+    // (volume exit without scatter) so multi-bounce paths pick up an IBL
+    // contribution. Disabled by default -- the Lambert march ignores these
+    // values entirely.
+    void setEnvironment(const glm::vec3& topColor, const glm::vec3& botColor,
+                        float intensity, bool enabled) {
+        m_envTopColor  = topColor;
+        m_envBotColor  = botColor;
+        m_envIntensity = intensity;
+        m_envEnabled   = enabled;
+    }
+    void setEnvironmentEnabled(bool e)    { m_envEnabled = e; }
+    void setEnvironmentIntensity(float i) { m_envIntensity = i; }
+    bool isEnvironmentEnabled() const     { return m_envEnabled; }
     // Granular setters (WebGPU/JS bindings, one per HTML control).
     void setDensityScale(float v) { m_densityScale = v; }
     void setExtinction(float v)   { m_extinction   = v; }
@@ -410,6 +426,15 @@ private:
     // M4 v1 accumulation state.
     float      m_pathSampleCount = 0.0f;  // running average count N; reset on camera/param change
     uint32_t   m_pathPingPong    = 0u;    // which accum texture is the next OUTPUT (the other is INPUT)
+
+    // M4 v2 P1 environment lighting state. Off by default so existing demos
+    // (Lambert + path-trace without env) render identically. A neutral
+    // top-bottom gradient is the starting point; replacing with a sampled
+    // HDR equirect is a follow-up.
+    bool      m_envEnabled   = false;
+    glm::vec3 m_envTopColor  { 0.85f, 0.90f, 1.00f };  // soft cool top
+    glm::vec3 m_envBotColor  { 0.35f, 0.32f, 0.30f };  // muted warm bottom
+    float     m_envIntensity = 0.5f;
 };
 
 } // namespace rendering

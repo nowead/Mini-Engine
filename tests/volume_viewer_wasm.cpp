@@ -92,6 +92,8 @@ public:
     void setSpp(int s)           { m_volume->setPathtraceSpp(s); m_volume->resetAccumulation(); }
     void setAniso(float g)       { m_volume->setPathtraceAnisotropy(g); m_volume->resetAccumulation(); }
     void setBounces(int b)       { m_volume->setPathtraceBounces(b); m_volume->resetAccumulation(); }
+    void setEnvEnabled(bool on)        { m_volume->setEnvironmentEnabled(on); m_volume->resetAccumulation(); }
+    void setEnvIntensity(float i)      { m_volume->setEnvironmentIntensity(i); m_volume->resetAccumulation(); }
     float dataMin() const        { return m_volume->getDataMin(); }
     float dataMax() const        { return m_volume->getDataMax(); }
 
@@ -303,6 +305,14 @@ private:
         m_volume->setParams(1.5f, 10.0f, /*stepSize*/0.01f, 0.05f, 2.0f);
         m_volume->setMaxSteps(512.0f);
         m_volume->setShadowParams(0.04f, 24.0f, 1.0f);
+        // M4 v2 P1: default the path-trace environment lighting on so the
+        // "Path Trace" mode in the demo shows the cinematic IBL bounce
+        // contribution without anyone having to flip a toggle. Neutral
+        // top-bottom gradient -- replacing with an HDR equirect is the next
+        // step.
+        m_volume->setEnvironment(glm::vec3(0.85f, 0.90f, 1.00f),
+                                  glm::vec3(0.35f, 0.32f, 0.30f),
+                                  0.5f, true);
         // CT-Bone (3) needs HU air at -1000 to look right; the LUT is
         // designed for the upper end of [-1000, 3000] and clamps anything
         // below normalized 0.55 to transparent. For non-CT data (MR,

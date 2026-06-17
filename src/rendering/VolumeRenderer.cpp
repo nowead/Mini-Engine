@@ -1040,6 +1040,12 @@ void VolumeRenderer::updateUBO(uint32_t frameIndex, const glm::mat4& invView,
                               static_cast<float>(vs.z), 0.0f);
     ubo.atlasGrid = glm::vec4(static_cast<float>(ag.x), static_cast<float>(ag.y),
                               static_cast<float>(ag.z), 0.0f);
+    // M4 v2 P1: path-trace environment lighting. envTop.rgb / envBot.rgb feed
+    // a simple top-bottom gradient sampled on bounce/miss; .w channels carry
+    // the intensity multiplier and the enable flag. When disabled the shader
+    // falls back to the v1 "black background" behaviour.
+    ubo.envTop = glm::vec4(m_envTopColor, m_envIntensity);
+    ubo.envBot = glm::vec4(m_envBotColor, m_envEnabled ? 1.0f : 0.0f);
 
     m_uniformBuffers[fi]->write(&ubo, sizeof(VolumeUBO));
 }

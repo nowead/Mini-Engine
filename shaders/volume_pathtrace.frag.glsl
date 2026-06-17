@@ -35,6 +35,8 @@ layout(set = 0, binding = 0) uniform VolumeUBO {
     vec4 accum;      // x = previous accumulated sample count N (host-incremented)
     vec4 volSize;    // M3-3 xyz = source volume voxel dims (for brick indexing)
     vec4 atlasGrid;  // M3-3 xyz = atlas capacity in bricks (slot unpack)
+    vec4 envTop;     // M4 v2 P1 rgb = sky top color, w = intensity multiplier
+    vec4 envBot;     // M4 v2 P1 rgb = sky bottom color, w = enable flag (0/1)
 } ubo;
 
 layout(set = 0, binding = 1) uniform texture3D volumeTex0;    // brick atlas L0 (R16Float)
@@ -138,6 +140,14 @@ vec4 sampleTF(float density) {
                  clamp(density * ubo.tf.y, 0.0, 1.0));
     return vec4(c, clamp(density, 0.0, 1.0));
 }
+// M4 v2 P1: top-bottom gradient environment lighting. Disabled when envBot.w
+// is zero so existing demos render identically (sampled value is vec3(0)).
+vec3 sampleEnvironment(vec3 dir) {
+    if (ubo.envBot.w < 0.5) return vec3(0.0);
+    float t = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
+    return mix(ubo.envBot.rgb, ubo.envTop.rgb, t) * ubo.envTop.w;
+}
+
 vec2 intersectAABB(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax) {
     vec3 invD = 1.0 / rd;
     vec3 t0 = (bmin - ro) * invD;
@@ -169,7 +179,9 @@ vec3 tracePath(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax,
     vec2 hit = intersectAABB(ro, rd, bmin, bmax);
     float tNear = max(hit.x, 0.0);
     float tFar  = hit.y;
-    if (tNear >= tFar) return vec3(0.0);
+    // Primary ray missed the volume -> background = environment sample (or
+    // black when env is disabled).
+    if (tNear >= tFar) return sampleEnvironment(rd);
 
     vec3 boxSize = bmax - bmin;
     ro = ro + rd * tNear;
@@ -194,7 +206,12 @@ vec3 tracePath(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax,
             float sigma_t = sampleDensity(uvw) * ubo.params.y;
             if (rnd(seed) < sigma_t / sigmaMax) break;
         }
-        if (exited) break;
+        if (exited) {
+            // Path escaped without another scatter -- remaining throughput
+            // lights the camera via the environment in the current direction.
+            result += throughput * sampleEnvironment(rd);
+            break;
+        }
 
         vec3 p = ro + rd * t;
         vec3 uvw = (p - bmin) / boxSize;

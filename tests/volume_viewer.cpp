@@ -287,6 +287,12 @@ private:
         m_volume->setUseDepthOcclusion(false);   // no scene geometry to occlude
         // Shadow light-ray step scaled to the box (~24 steps span its larger half).
         m_volume->setShadowParams(0.04f, 24.0f, m_shadowStrength);
+        // M4 v2 P1: default path-trace environment lighting on. Sampled by
+        // miss rays in the path-trace pipeline only; the Lambert march
+        // ignores the envTop/envBot uniform fields entirely.
+        m_volume->setEnvironment(glm::vec3(0.85f, 0.90f, 1.00f),
+                                  glm::vec3(0.35f, 0.32f, 0.30f),
+                                  0.5f, true);
 
         // Dummy depth at the RENDER resolution. The bind group requires a depth
         // binding, and although occlusion is off (never texelFetch'd), the shader
