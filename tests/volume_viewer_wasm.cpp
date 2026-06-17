@@ -94,6 +94,9 @@ public:
     void setBounces(int b)       { m_volume->setPathtraceBounces(b); m_volume->resetAccumulation(); }
     void setEnvEnabled(bool on)        { m_volume->setEnvironmentEnabled(on); m_volume->resetAccumulation(); }
     void setEnvIntensity(float i)      { m_volume->setEnvironmentIntensity(i); m_volume->resetAccumulation(); }
+    // M4 v2 P2.1: denoise toggle. No accumulation reset (denoise is a post pass,
+    // its toggle doesn't invalidate the running average).
+    void setDenoise(bool on)           { m_volume->setDenoiseEnabled(on); }
     float dataMin() const        { return m_volume->getDataMin(); }
     float dataMax() const        { return m_volume->getDataMax(); }
 
@@ -313,6 +316,10 @@ private:
         m_volume->setEnvironment(glm::vec3(0.85f, 0.90f, 1.00f),
                                   glm::vec3(0.35f, 0.32f, 0.30f),
                                   0.5f, true);
+        // M4 v2 P2.1: default the denoise stage on. With the pass-through
+        // identity shader the visual is identical to denoise-off; this just
+        // proves the new pass routes correctly. Real A-trous lands in P2.2.
+        m_volume->setDenoiseEnabled(true);
         // CT-Bone (3) needs HU air at -1000 to look right; the LUT is
         // designed for the upper end of [-1000, 3000] and clamps anything
         // below normalized 0.55 to transparent. For non-CT data (MR,
@@ -403,6 +410,31 @@ private:
                 ptRp->setBindGroup(0, m_volume->getPathBindGroup(m_frame));
                 ptRp->draw(3);
                 ptRp->end();
+            }
+        }
+
+        // ---- Pass 1b: denoise (PT mode + denoise toggle on). Reads the
+        // just-written accumulation slot and writes the dedicated denoise
+        // intermediate; the display pass below picks the right source via
+        // getDisplayBindGroup() routing.
+        if (pathTrace && m_volume->isEnabled() && m_volume->isDenoiseEnabled()
+            && m_volume->isDenoiseReady()) {
+            rhi::RenderPassColorAttachment dnCa{};
+            dnCa.view       = m_volume->getDenoiseOutputView();
+            dnCa.loadOp     = rhi::LoadOp::Clear;
+            dnCa.storeOp    = rhi::StoreOp::Store;
+            dnCa.clearValue = rhi::ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f);
+            rhi::RenderPassDesc dnPd{};
+            dnPd.colorAttachments = { dnCa };
+            dnPd.width = w; dnPd.height = h; dnPd.label = "VolumePathDenoiseWasm";
+            auto dnRp = enc->beginRenderPass(dnPd);
+            if (dnRp) {
+                dnRp->setViewport(0, 0, static_cast<float>(w), static_cast<float>(h), 0.0f, 1.0f);
+                dnRp->setScissorRect(0, 0, w, h);
+                dnRp->setPipeline(m_volume->getDenoisePipeline());
+                dnRp->setBindGroup(0, m_volume->getDenoiseBindGroup());
+                dnRp->draw(3);
+                dnRp->end();
             }
         }
 

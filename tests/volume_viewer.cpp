@@ -293,6 +293,10 @@ private:
         m_volume->setEnvironment(glm::vec3(0.85f, 0.90f, 1.00f),
                                   glm::vec3(0.35f, 0.32f, 0.30f),
                                   0.5f, true);
+        // M4 v2 P2.1: default the denoise stage on. Pass-through identity for
+        // now (verifying the pipeline routes); the A-trous filter replaces the
+        // shader body in P2.2.
+        m_volume->setDenoiseEnabled(true);
 
         // Dummy depth at the RENDER resolution. The bind group requires a depth
         // binding, and although occlusion is off (never texelFetch'd), the shader
@@ -580,6 +584,28 @@ private:
                 ptRp->setBindGroup(0, m_volume->getPathBindGroup(m_frameIndex));
                 ptRp->draw(3);
                 ptRp->end();
+            }
+        }
+
+        // ---- Denoise pass: between path-trace and display when PT + denoise on. ----
+        if (pathTrace && m_volume->isEnabled() && m_volume->isDenoiseEnabled()
+            && m_volume->isDenoiseReady()) {
+            rhi::RenderPassColorAttachment dnCa{};
+            dnCa.view       = m_volume->getDenoiseOutputView();
+            dnCa.loadOp     = rhi::LoadOp::Clear;
+            dnCa.storeOp    = rhi::StoreOp::Store;
+            dnCa.clearValue = rhi::ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f);
+            rhi::RenderPassDesc dnPd{};
+            dnPd.colorAttachments = { dnCa };
+            dnPd.width = w; dnPd.height = h; dnPd.label = "VolumePathDenoise";
+            auto dnRp = enc->beginRenderPass(dnPd);
+            if (dnRp) {
+                dnRp->setViewport(0, 0, static_cast<float>(w), static_cast<float>(h), 0.0f, 1.0f);
+                dnRp->setScissorRect(0, 0, w, h);
+                dnRp->setPipeline(m_volume->getDenoisePipeline());
+                dnRp->setBindGroup(0, m_volume->getDenoiseBindGroup());
+                dnRp->draw(3);
+                dnRp->end();
             }
         }
 

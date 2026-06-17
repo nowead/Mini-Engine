@@ -822,6 +822,131 @@ bool VolumeRenderer::createAccumulationResources(uint32_t width, uint32_t height
         if (!m_pathDisplayBindGroups[pp]) { LOG_ERROR("VolumeRenderer") << "display bind group create failed"; return false; }
     }
 
+    // -----------------------------------------------------------------------
+    // M4 v2 P2.1: denoise resources.
+    // Allocated unconditionally so toggling the denoise switch at runtime
+    // doesn't require a resize. When denoise is OFF the pass is just skipped
+    // by the caller and these textures stay dormant.
+    // -----------------------------------------------------------------------
+    {
+        rhi::TextureDesc td{};
+        td.size          = rhi::Extent3D{width, height, 1};
+        td.dimension     = rhi::TextureDimension::Texture2D;
+        td.format        = rhi::TextureFormat::RGBA16Float;
+        td.mipLevelCount = 1;
+        td.sampleCount   = 1;
+        td.usage         = rhi::TextureUsage::RenderTarget | rhi::TextureUsage::Sampled;
+        td.label         = "VolumePathDenoise";
+        m_denoiseTexture = m_device->createTexture(td);
+        if (!m_denoiseTexture) { LOG_ERROR("VolumeRenderer") << "denoise texture create failed"; return false; }
+        rhi::TextureViewDesc vd{};
+        vd.format          = rhi::TextureFormat::RGBA16Float;
+        vd.dimension       = rhi::TextureViewDimension::View2D;
+        vd.mipLevelCount   = 1;
+        vd.arrayLayerCount = 1;
+        m_denoiseView = m_denoiseTexture->createView(vd);
+        if (!m_denoiseView) return false;
+    }
+
+    if (!m_pathDenoiseFragmentShader) {
+#ifdef __EMSCRIPTEN__
+        auto raw = FileUtils::readFile("shaders/volume_pathtrace_denoise.wgsl");
+        if (raw.empty()) { LOG_ERROR("VolumeRenderer") << "missing volume_pathtrace_denoise.wgsl"; return false; }
+        std::vector<uint8_t> code(raw.begin(), raw.end());
+        rhi::ShaderSource fs(rhi::ShaderLanguage::WGSL, code, rhi::ShaderStage::Fragment, "fs_main");
+        m_pathDenoiseFragmentShader = m_device->createShader(rhi::ShaderDesc(fs, "VolumePathDenoiseFS"));
+#else
+        auto raw = FileUtils::readFile("shaders/volume_pathtrace_denoise.frag.spv");
+        if (raw.empty()) { LOG_ERROR("VolumeRenderer") << "missing volume_pathtrace_denoise.frag.spv"; return false; }
+        std::vector<uint8_t> code(raw.begin(), raw.end());
+        rhi::ShaderSource fs(rhi::ShaderLanguage::SPIRV, code, rhi::ShaderStage::Fragment, "main");
+        m_pathDenoiseFragmentShader = m_device->createShader(rhi::ShaderDesc(fs, "VolumePathDenoiseFS"));
+#endif
+        if (!m_pathDenoiseFragmentShader) return false;
+    }
+
+    if (!m_pathDenoiseLayout) {
+        using S = rhi::ShaderStage;
+        using T = rhi::BindingType;
+        rhi::BindGroupLayoutDesc ld;
+#ifdef __EMSCRIPTEN__
+        // Same convention as the display pass: WGSL textureLoad needs no sampler.
+        ld.entries = {
+            rhi::BindGroupLayoutEntry(0, S::Fragment, T::SampledTexture),
+        };
+#else
+        ld.entries = {
+            rhi::BindGroupLayoutEntry(0, S::Fragment, T::SampledTexture),
+            rhi::BindGroupLayoutEntry(1, S::Fragment, T::Sampler),
+        };
+#endif
+        ld.label = "VolumePathDenoiseBGLayout";
+        m_pathDenoiseLayout = m_device->createBindGroupLayout(ld);
+        if (!m_pathDenoiseLayout) return false;
+        rhi::PipelineLayoutDesc pl;
+        pl.bindGroupLayouts.push_back(m_pathDenoiseLayout.get());
+        pl.label = "VolumePathDenoisePipelineLayout";
+        m_pathDenoisePipelineLayout = m_device->createPipelineLayout(pl);
+        if (!m_pathDenoisePipelineLayout) return false;
+    }
+    {
+        rhi::RenderPipelineDesc pd;
+        pd.label          = "VolumePathDenoisePipeline";
+        pd.layout         = m_pathDenoisePipelineLayout.get();
+        pd.vertexShader   = m_vertexShader.get();
+        pd.fragmentShader = m_pathDenoiseFragmentShader.get();
+        pd.primitive.topology  = rhi::PrimitiveTopology::TriangleList;
+        pd.primitive.cullMode  = rhi::CullMode::None;
+        pd.primitive.frontFace = rhi::FrontFace::CounterClockwise;
+        rhi::ColorTargetState ct;
+        ct.format             = rhi::TextureFormat::RGBA16Float;  // intermediate stays linear HDR
+        ct.blend.blendEnabled = false;
+        pd.colorTargets = { ct };
+        pd.depthStencil = nullptr;
+        pd.nativeRenderPass = nullptr;
+        m_pathDenoisePipeline = m_device->createRenderPipeline(pd);
+        if (!m_pathDenoisePipeline) { LOG_ERROR("VolumeRenderer") << "denoise pipeline create failed"; return false; }
+    }
+    // Input bind groups: one per accumulation ping-pong slot. Caller picks
+    // via getDenoiseBindGroup() which keys off m_pathPingPong.
+    for (uint32_t pp = 0; pp < 2; ++pp) {
+        rhi::BindGroupDesc desc;
+        desc.layout = m_pathDenoiseLayout.get();
+#ifdef __EMSCRIPTEN__
+        desc.entries = {
+            rhi::BindGroupEntry::TextureView(0, m_accumViews[pp].get()),
+        };
+#else
+        desc.entries = {
+            rhi::BindGroupEntry::TextureView(0, m_accumViews[pp].get()),
+            rhi::BindGroupEntry::Sampler(1, m_accumSampler.get()),
+        };
+#endif
+        desc.label = "VolumePathDenoiseBindGroup";
+        m_pathDenoiseBindGroups[pp] = m_device->createBindGroup(desc);
+        if (!m_pathDenoiseBindGroups[pp]) { LOG_ERROR("VolumeRenderer") << "denoise bind group create failed"; return false; }
+    }
+    // Display bind group that samples the denoise output. Reuses the existing
+    // display layout (same single SampledTexture binding) so no new layout is
+    // needed; just a fresh bind group pointing at m_denoiseView.
+    {
+        rhi::BindGroupDesc desc;
+        desc.layout = m_pathDisplayLayout.get();
+#ifdef __EMSCRIPTEN__
+        desc.entries = {
+            rhi::BindGroupEntry::TextureView(0, m_denoiseView.get()),
+        };
+#else
+        desc.entries = {
+            rhi::BindGroupEntry::TextureView(0, m_denoiseView.get()),
+            rhi::BindGroupEntry::Sampler(1, m_accumSampler.get()),
+        };
+#endif
+        desc.label = "VolumePathDenoiseDisplayBindGroup";
+        m_pathDenoiseDisplayBindGroup = m_device->createBindGroup(desc);
+        if (!m_pathDenoiseDisplayBindGroup) { LOG_ERROR("VolumeRenderer") << "denoise display bind group create failed"; return false; }
+    }
+
     // Resize implies a fresh accumulation. Garbage in the two textures is fine
     // because the integrator gates on N==0 (prev * 0 = 0), but reset the counter.
     resetAccumulation();

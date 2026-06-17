@@ -218,6 +218,11 @@ public:
     void setEnvironmentEnabled(bool e)    { m_envEnabled = e; }
     void setEnvironmentIntensity(float i) { m_envIntensity = i; }
     bool isEnvironmentEnabled() const     { return m_envEnabled; }
+    // M4 v2 P2: spatial denoiser toggle. P2.1 plumbs a pass-through identity
+    // shader so display pulls from the denoise output when enabled and from the
+    // raw accumulation when not; P2.2 swaps the shader for the A-trous filter.
+    void setDenoiseEnabled(bool e)        { m_denoiseEnabled = e; }
+    bool isDenoiseEnabled() const         { return m_denoiseEnabled; }
     // Granular setters (WebGPU/JS bindings, one per HTML control).
     void setDensityScale(float v) { m_densityScale = v; }
     void setExtinction(float v)   { m_extinction   = v; }
@@ -284,9 +289,25 @@ public:
     }
     rhi::RHIRenderPipeline* getDisplayPipeline() const { return m_pathDisplayPipeline.get(); }
     rhi::RHIBindGroup* getDisplayBindGroup() const {
-        // Display reads the JUST-WRITTEN accumulation (the texture we rendered to).
+        // Display reads the just-written accumulation (denoise disabled) or the
+        // denoise output (denoise enabled). Routing hidden from the caller so the
+        // viewer's render loop stays one accessor call per pass.
+        if (m_denoiseEnabled && m_pathDenoiseDisplayBindGroup) {
+            return m_pathDenoiseDisplayBindGroup.get();
+        }
         return m_pathDisplayBindGroups[1u - m_pathPingPong].get();
     }
+    // M4 v2 P2 -- denoise pass accessors. Caller runs this between the path-trace
+    // and display passes when isDenoiseEnabled(). The output view is the
+    // dedicated m_denoiseView (single intermediate; multi-iteration ping-pong
+    // lands in P2.3). Input bind group reads from the just-written accumulation
+    // slot, mirroring the display pass's source.
+    bool isDenoiseReady() const { return m_pathDenoisePipeline != nullptr; }
+    rhi::RHIRenderPipeline* getDenoisePipeline() const { return m_pathDenoisePipeline.get(); }
+    rhi::RHIBindGroup* getDenoiseBindGroup() const {
+        return m_pathDenoiseBindGroups[1u - m_pathPingPong].get();
+    }
+    rhi::RHITextureView* getDenoiseOutputView() const { return m_denoiseView.get(); }
     void advanceAccumulationFrame() {
         m_pathSampleCount += 1.0f;
         m_pathPingPong = 1u - m_pathPingPong;
@@ -378,6 +399,24 @@ private:
     // bind groups: outer = frame-in-flight, inner = ping-pong direction
     std::array<std::array<std::unique_ptr<rhi::RHIBindGroup>, 2>, kFramesInFlight> m_pathBindGroups{};
     std::array<std::unique_ptr<rhi::RHIBindGroup>, 2> m_pathDisplayBindGroups{};
+
+    // M4 v2 P2.1: spatial denoiser pipeline. Sits between path-trace and
+    // display; reads from whichever accumulation slot the path-trace just wrote
+    // and emits into a dedicated single intermediate texture. P2.3 will expand
+    // to ping-pong for multi-iteration A-trous.
+    std::unique_ptr<rhi::RHIShader>          m_pathDenoiseFragmentShader;
+    std::unique_ptr<rhi::RHIBindGroupLayout> m_pathDenoiseLayout;
+    std::unique_ptr<rhi::RHIPipelineLayout>  m_pathDenoisePipelineLayout;
+    std::unique_ptr<rhi::RHIRenderPipeline>  m_pathDenoisePipeline;
+    std::unique_ptr<rhi::RHITexture>         m_denoiseTexture;
+    std::unique_ptr<rhi::RHITextureView>     m_denoiseView;
+    // One denoise input bind group per accumulation ping-pong slot (the path
+    // tracer just wrote to one of them; we read whichever is "current").
+    std::array<std::unique_ptr<rhi::RHIBindGroup>, 2> m_pathDenoiseBindGroups{};
+    // Single display bind group that samples the denoise output, used by
+    // getDisplayBindGroup() when m_denoiseEnabled is true.
+    std::unique_ptr<rhi::RHIBindGroup>       m_pathDenoiseDisplayBindGroup;
+    bool                                     m_denoiseEnabled = false;
     std::array<std::unique_ptr<rhi::RHIBuffer>,    kFramesInFlight> m_uniformBuffers{};
     std::array<std::unique_ptr<rhi::RHIBindGroup>, kFramesInFlight> m_bindGroups{};
 
