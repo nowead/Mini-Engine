@@ -30,7 +30,7 @@ forks.
 
 ## 2. Atomic Steps
 
-### Step W1 -- Plan + FetchContent + linkage probe (~1-2 h)
+### Step W1 -- Plan + FetchContent + linkage probe (~1-2 h)   ✅ `9f83230`
 
 - Add a libjpeg-turbo FetchContent block in the Emscripten branch of
   `CMakeLists.txt`, right after the OpenJPEG block.
@@ -52,7 +52,7 @@ forks.
   `[INFO][VolumeViewer] libjpeg-turbo linked, JPEG_LIB_VERSION=62`.
 - WASM size delta measured.
 
-### Step W2 -- Bundled JPEG-compressed DICOM sample + dispatch verify (~1-2 h)
+### Step W2 -- Bundled JPEG-compressed DICOM sample + dispatch verify (~1-2 h)   ✅ `7b129fd`
 
 - Extend `scripts/fetch_wasm_dicom_sample.py` (or add a sibling script)
   to fetch a JPEG-encoded DICOM (preference: `JPGExtended.dcm` for
@@ -65,12 +65,15 @@ forks.
 - Verify: browser loads sample -> console log
   `[Dicom] loaded ... range [0, NNN] ...` -> volume renders.
 
-### Step W3 -- Docs roll-up (~1 h)
+### Step W3 -- Docs roll-up (~1 h)   ✅ (this commit)
 
-- Update VIEWERS.md to mark JPEG legacy as supported on WASM too.
-- Add the delivered-work entry to MEDICAL_VOLUME_ROADMAP.md (commit
-  range, samples verified, WASM size delta).
-- Strike off W1..W3 in this plan.
+- VIEWERS.md capability matrix gains the WASM column for JPEG
+  Baseline/Extended/Lossless P14·SV1; dispatch row covers both
+  vcpkg (native) and FetchContent (WASM) sources.
+- MEDICAL_VOLUME_ROADMAP.md delivered-work section records the
+  W1→W2 entry with commit range, samples verified, WASM size
+  delta, and the three add_subdirectory workarounds.
+- This plan strikes off W1..W3.
 
 ### Total: ~3-5 h (1-2 sessions)
 
