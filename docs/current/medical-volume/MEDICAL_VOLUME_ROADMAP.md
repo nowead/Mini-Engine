@@ -358,6 +358,34 @@ v1-β LOD + DICOM (Implicit VR + 압축) + Disk paging Steps 1-3 까지가 한 �
   콘솔에서 `libjpeg-turbo linked, JPEG_LIB_VERSION=62` + JPEG-LL `[0,278]`
   디코드 확인. WASM 1.08 MB → 1.41 MB (+327 KB, OpenJPEG와 비슷한 규모).
   계획서: [WASM_LIBJPEG_TURBO_PLAN.md](plans/WASM_LIBJPEG_TURBO_PLAN.md).
+- **단일-슬라이스 DICOM 시각화 폴리시** (`a3a4133`, 2026-06-17) — JPEG-LL
+  검증에서 드러난 4가지 기본 UX 문제 묶음 수정:
+  (a) DicomFile.cpp row flip — DICOM row 0(상단)이 world y=+halfExtent.y
+  (화면 상단) 으로 가도록, native/WASM 모든 transfer syntax 영향;
+  (b) `Camera::setOrbit(yaw, pitch, distance)` 추가 — 절대 자세 설정 가능;
+  (c) 조건부 HU 본 윈도우 — `dataMin < -500`(CT air) 만 300/1500 적용,
+  비-CT는 auto-fit 유지; (d) 가장 얇은 halfExtent 최소 0.1 padding —
+  단일 슬라이스가 ray-marching에서 0 alpha 안 되도록; (e) 비-CT는 Cloud
+  preset (1) 디폴트; (f) `vol.d == 1` 면 face-on 카메라 (yaw=0, pitch=0,
+  distance=2.3). 결과: JPEG-LL이 슬라이더 안 만지고 보임.
+- **M4 v2 P1 path-trace IBL (환경광)** (`521a3f8`, 2026-06-17) —
+  VolumeUBO에 envTop/envBot 두 vec4 추가, `sampleEnvironment(dir)`
+  top-bottom 그래디언트 sky. `tracePath()` 양쪽 miss 분기에서 호출:
+  primary-miss(배경) + bounce escape(멀티-scatter throughput에 IBL 기여).
+  WGSL + GLSL 미러, native + WASM 디폴트 on. v0/v1의 검은 배경이 환경광
+  그래디언트로 대체, multi-bounce가 진짜 IBL contribution 받음.
+  계획서: [PATH_TRACE_POLISH_PLAN.md](plans/PATH_TRACE_POLISH_PLAN.md).
+- **M4 v2 P2.1/P2.2 spatial denoiser (A-trous)** (`c34d85c` → `74b2473`,
+  2026-06-17) — path-trace와 display 사이에 third fragment pipeline 삽입.
+  P2.1 plumbing: `m_denoiseTexture`, `m_pathDenoisePipeline`,
+  `m_pathDenoiseBindGroups[2]`, `getDisplayBindGroup()` routing.
+  P2.2 5x5 cross-bilateral kernel — binomial (1,4,6,4,1) outer-product
+  weights × color-similarity `exp(-|d|²/0.35²)`, stride=4 (~32px 커버).
+  의도적으로 gentle — progressive temporal accumulation과 보완, 카메라
+  이동 직후 grain만 부드럽게. UI 토글 + JS binding. 정지 상태에선 시각
+  차이 미세(누적이 이미 수렴) — P3에서 누적 N cap 도입하면 가시화. P2.3
+  cascade (stride 1/2/4 ping-pong) 가 다음. 계획서:
+  [PATH_TRACE_POLISH_PLAN.md](plans/PATH_TRACE_POLISH_PLAN.md).
 
 **즉흥 폴리시 후보 (로드맵 명시 안 됨, 후순위)** — v1-β 작업 중 발견된 개선점.
 차별화 핵심 아니므로 위 차별화 후보가 마무리된 뒤 시각 만족도/성능에 따라 선택:

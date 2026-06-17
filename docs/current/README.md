@@ -20,6 +20,9 @@ WebGPU 기반 차세대 클라이언트 사이드 **의료 볼륨 렌더러**로
 | [DISK_PAGING_PLAN.md](medical-volume/plans/DISK_PAGING_PLAN.md) | M3-3 v1-β 디스크 페이징 Steps 1-3 (voxel source 추상화 + mmap + on-the-fly mip) |
 | [DISK_PAGING_STEP5_PLAN.md](medical-volume/plans/DISK_PAGING_STEP5_PLAN.md) | Disk paging Step 5 (mmap int16 → brick-pack 시 변환, 진짜 4 GB+ unlock) |
 | [WASM_OPENJPEG_PLAN.md](medical-volume/plans/WASM_OPENJPEG_PLAN.md) | WASM OpenJPEG 빌드 (브라우저 JPEG 2000 DICOM 디코드) |
+| [DICOM_JPEG_LEGACY_PLAN.md](medical-volume/plans/DICOM_JPEG_LEGACY_PLAN.md) | DICOM JPEG Baseline / Extended / Lossless P14·SV1 (libjpeg-turbo, 네이티브) |
+| [WASM_LIBJPEG_TURBO_PLAN.md](medical-volume/plans/WASM_LIBJPEG_TURBO_PLAN.md) | WASM libjpeg-turbo 빌드 (브라우저 JPEG legacy) |
+| [PATH_TRACE_POLISH_PLAN.md](medical-volume/plans/PATH_TRACE_POLISH_PLAN.md) | M4 v2 path-trace 폴리시 — IBL + A-trous denoiser + adaptive SPP (P1, P2, P3) |
 | [BASELINE_2026-06-03.md](medical-volume/baselines/BASELINE_2026-06-03.md) | v0 + M4 v1 기준선 측정 |
 | [BASELINE_2026-06-04_V1_ALPHA.md](medical-volume/baselines/BASELINE_2026-06-04_V1_ALPHA.md) | v1-α 측정 (auto-size win + streaming 자동 진입 + 정직한 한계) |
 | [BASELINE_2026-06-07_V1_BETA.md](medical-volume/baselines/BASELINE_2026-06-07_V1_BETA.md) | v1-β LOD 측정 (missing brick 2320→326 -86%) + 알려진 한계 (LOD seam, stale-LOD blur) |
@@ -111,10 +114,40 @@ swapchain "Destroyed texture used in a submit" 검증 spam — Static atlas
 워크어라운드 적용, 본질 해결은 후속 트랙. 계획서:
 [WASM_OPENJPEG_PLAN.md](medical-volume/plans/WASM_OPENJPEG_PLAN.md).
 
-**다음 후보**: WASM Streaming + swapchain race 본질 해결 (별도 트랙) · JPEG
-Baseline / Lossless (libjpeg-turbo) · DICOM mmap (Phase C: 슬라이스 어셈블 캐시)
-· `<input type="file">` 런타임 DICOM 업로드 · 즉흥 폴리시 (LOD seam 완화 / async
-pack / adaptive K / screen-pixel LOD selection).
+**WASM Streaming + swapchain race 본질 해결 완료** (2026-06-13, `f353356`):
+WASM `render()`가 `updateBrickStreaming`을 `beginFrame()` *이전*으로 이동 —
+swapchain 텍스처 획득과 staging map 의 ASYNCIFY suspend 윈도우가 더는 겹치지
+않음. Streaming 모드 강제 우회 워크어라운드 제거.
+**DICOM JPEG legacy (네이티브) 완료** (2026-06-16, `6ff902c` → `a8c17e8`):
+libjpeg-turbo vcpkg 의존 + `decodeJpegFrame16` precision 분기로 8/12/16-bit
+처리 + 단일-frame multi-fragment 병합 + parseSlice dispatch. JPEG Baseline
+(.50), Extended (.51), Lossless P14 (.57), SV1 (.70) 4종. pydicom JPGExtended
+[0,264] / JPEG-LL [0,278] 검증, JPEG 2000 / RLE 무회귀. 계획서:
+[DICOM_JPEG_LEGACY_PLAN.md](medical-volume/plans/DICOM_JPEG_LEGACY_PLAN.md).
+**WASM libjpeg-turbo (브라우저 JPEG legacy) 완료** (2026-06-17, `9f83230` →
+`053cc2b`): Emscripten 빌드에 libjpeg-turbo 3.1.2 FetchContent + `jpeg-static`
+링크 + 동일 DicomFile.cpp 재사용. Upstream `add_subdirectory` FATAL_ERROR
+우회 3가지 (manual populate + `string(REPLACE)` 패치 / `GNUInstallDirs` /
+`uninstall` 타겟 rename). 브라우저 콘솔에서 JPEG-LL [0,278] 디코드 확인.
+WASM 1.08 → 1.41 MB (+327 KB). 계획서:
+[WASM_LIBJPEG_TURBO_PLAN.md](medical-volume/plans/WASM_LIBJPEG_TURBO_PLAN.md).
+**단일-슬라이스 DICOM 시각화 폴리시 완료** (2026-06-17, `a3a4133`):
+DICOM row flip (anatomy upright) · `Camera::setOrbit` · 조건부 HU 윈도우
+(CT만) · 가장 얇은 halfExtent 최소 0.1 padding · 비-CT는 Cloud preset ·
+`vol.d==1`이면 face-on 카메라. JPEG-LL이 디폴트 설정 그대로 보임.
+**M4 v2 P1 path-trace IBL 완료** (2026-06-17, `521a3f8`): VolumeUBO에
+envTop/envBot 추가 + `sampleEnvironment(dir)` top-bottom 그래디언트 sky +
+`tracePath()` 양쪽 miss 분기에서 환경광 기여. WGSL + GLSL 미러.
+**M4 v2 P2.1/P2.2 spatial denoiser 완료** (2026-06-17, `c34d85c` → `74b2473`):
+path-trace ↔ display 사이에 third fragment pipeline 삽입 + 5x5 cross-bilateral
+A-trous (color guide, stride=4) + UI 토글. 계획서:
+[PATH_TRACE_POLISH_PLAN.md](medical-volume/plans/PATH_TRACE_POLISH_PLAN.md).
+
+**다음 후보**: P2.3 multi-iteration cascade (stride 1/2/4 ping-pong) ·
+P3 adaptive SPP + temporal reprojection · DICOM mmap (Phase C: 슬라이스
+어셈블 캐시) · `<input type="file">` 런타임 DICOM 업로드 · 즉흥 폴리시
+(LOD seam 완화 / async pack / adaptive K / screen-pixel LOD selection) ·
+JPEG-LS (charls) · HDR equirect IBL.
 
 **선행 완료**: 볼륨 렌더링 기초(3D 텍스처 + 레이마칭, Vulkan + WebGPU) ·
 TF 프리셋 · 독립 뷰어(네이티브 `volume_viewer` + 브라우저 `volume_viewer_wasm`).

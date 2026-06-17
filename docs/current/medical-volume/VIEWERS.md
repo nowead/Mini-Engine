@@ -152,6 +152,7 @@ ImGui / HTML 패널 위에서는 호버 시 자동으로 카메라 입력이 차
 | | SPP (PT 전용) | 1~32 | 프레임당 sample-per-pixel |
 | | Aniso g (PT 전용) | -0.9~0.9 | Henyey-Greenstein 위상함수 (>0=전방산란) |
 | | Bounces (PT 전용) | 0~4 | 최대 산란 횟수 |
+| | A-trous denoise (PT 전용) | on/off | 5x5 cross-bilateral spatial filter (M4 v2 P2.2) |
 | **Performance** | Empty-space skip 토글 | on/off | 컴퓨트 occupancy 그리드 활용 (M3-1) |
 | | FPS 표시 (네이티브만) | — | 1초 평균 |
 
@@ -188,6 +189,8 @@ PT 모드 진입 시 자동으로 progressive 누적이 시작된다. **카메�
 | **On-the-fly box-filter mip (disk paging Step 3)** | M3-3 v1-β / Disk paging | `packBrickToStaging` lod 파라미터 |
 | Path-traced 볼륨 산란 (Woodcock + HG + NEE) | M4 v0 | `volume_pathtrace` |
 | **Progressive 누적 (ping-pong, 자동 reset)** | **M4 v1** | `volume_pathtrace_display` + ping-pong 텍스처 |
+| **Path-trace 환경광 IBL (miss-ray top-bottom 그래디언트 sky)** | **M4 v2 P1** | `VolumeUBO::envTop/envBot` + `sampleEnvironment` |
+| **A-trous spatial denoiser (5x5 cross-bilateral, color guide)** | **M4 v2 P2.2** | `volume_pathtrace_denoise` |
 
 ---
 
@@ -218,6 +221,7 @@ PT 모드 진입 시 자동으로 progressive 누적이 시작된다. **카메�
 | 레이마칭 | `volume_march.frag.glsl` | `volume_march.wgsl` |
 | Path tracer | `volume_pathtrace.frag.glsl` | `volume_pathtrace.wgsl` |
 | PT display | `volume_pathtrace_display.frag.glsl` | `volume_pathtrace_display.wgsl` |
+| PT denoise (A-trous) | `volume_pathtrace_denoise.frag.glsl` | `volume_pathtrace_denoise.wgsl` |
 | Occupancy 컴퓨트 | `volume_occupancy.comp.glsl` | `volume_occupancy.comp.wgsl` |
 
 각 쌍은 같은 UBO 레이아웃과 의미를 공유 (CLAUDE.md §8: 두 사본 항상 동기화).

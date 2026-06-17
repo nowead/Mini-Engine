@@ -38,6 +38,9 @@ Mini-Engine implements it:
 | [DISK_PAGING_PLAN.md](plans/DISK_PAGING_PLAN.md) | Disk paging Steps 1-3 (VoxelSource + NIfTI mmap + on-the-fly mip) |
 | [DISK_PAGING_STEP5_PLAN.md](plans/DISK_PAGING_STEP5_PLAN.md) | Disk paging Step 5 (mmap int16 -> brick-pack conversion) |
 | [WASM_OPENJPEG_PLAN.md](plans/WASM_OPENJPEG_PLAN.md) | WASM OpenJPEG build (browser JPEG 2000 DICOM) |
+| [DICOM_JPEG_LEGACY_PLAN.md](plans/DICOM_JPEG_LEGACY_PLAN.md) | DICOM JPEG Baseline / Extended / Lossless P14·SV1 (libjpeg-turbo, native) |
+| [WASM_LIBJPEG_TURBO_PLAN.md](plans/WASM_LIBJPEG_TURBO_PLAN.md) | WASM libjpeg-turbo build (browser JPEG legacy) |
+| [PATH_TRACE_POLISH_PLAN.md](plans/PATH_TRACE_POLISH_PLAN.md) | M4 v2 path-trace polish — IBL + A-trous denoiser + adaptive SPP (P1, P2, P3) |
 
 ---
 
