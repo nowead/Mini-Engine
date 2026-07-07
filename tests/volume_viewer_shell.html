@@ -104,6 +104,10 @@
             <input type="range" id="bounces" aria-label="Max scattering bounces" min="0" max="4" step="1" value="2" disabled>
             <span class="val" id="bouncesv">2</span></div>
         <label class="tog"><input type="checkbox" id="denoise" checked disabled> A-trous denoise</label>
+        <div class="row"><span class="lbl">Accum cap</span>
+            <input type="range" id="accumCap" aria-label="Accumulation N cap" min="0" max="256" step="1" value="32" disabled>
+            <span class="val" id="accumCapv">32</span></div>
+        <button type="button" id="accumReset" disabled>Reset accumulation</button>
 
         <div class="sec">Performance</div>
         <label class="tog"><input type="checkbox" id="skip" checked> Empty-space skip</label>
@@ -167,11 +171,19 @@
                 document.getElementById('aniso').disabled   = !pt;
                 document.getElementById('bounces').disabled = !pt;
                 document.getElementById('denoise').disabled = !pt;
+                document.getElementById('accumCap').disabled = !pt;
+                document.getElementById('accumReset').disabled = !pt;
             });
             bindRange('spp',     'sppv',     0, 'setSpp');
             bindRange('aniso',   'anisov',   2, 'setAniso');
             bindRange('bounces', 'bouncesv', 0, 'setBounces');
             document.getElementById('denoise').addEventListener('change', function() { _queue('setDenoise', this.checked); });
+            bindRange('accumCap', 'accumCapv', 0, 'setAccumCap');
+            document.getElementById('accumReset').addEventListener('click', function() {
+                if (!Module._wasmBusy && typeof Module.resetAccum === 'function') {
+                    try { Module.resetAccum(); } catch (e) {}
+                }
+            });
 
             document.getElementById('wFull').addEventListener('click', function() {
                 // Use the cached data range (pushed from wasm at load) -- never call
@@ -210,6 +222,13 @@
                     line += '\n  LOD: L0=' + Module.lodCount(0) + '  L1=' + Module.lodCount(1)
                           + '  L2=' + Module.lodCount(2) + '  L3=' + Module.lodCount(3);
                 }
+                var accumLine = '';
+                if (typeof Module.accumN === 'function') {
+                    var n = Module.accumN();
+                    var cap = Module.accumCap();
+                    var capStr = (cap === 0) ? 'uncapped' : ('cap ' + cap);
+                    accumLine = '\nAccum:  N=' + n.toFixed(0) + ' (' + capStr + ')';
+                }
                 statsEl.textContent =
                     'Volume: ' + vw + 'x' + vh + 'x' + vd + '  (' + denseMB.toFixed(1) + ' MB dense)\n' +
                     'Page:   ' + pgx + 'x' + pgy + 'x' + pgz + '  (' + (pgx*pgy*pgz) + ' bricks)\n' +
@@ -217,7 +236,8 @@
                     'Memory: ' + mbUsed.toFixed(1) + ' / ' + mbAlloc.toFixed(1) + ' MB  (-' + saved.toFixed(1) + '% vs dense)\n' +
                     'CPU:    ' + ms.toFixed(2) + ' ms/frame\n' +
                     'Mode:   ' + modeStr + '\n' +
-                    line;
+                    line +
+                    accumLine;
             }, 500);
         }
 

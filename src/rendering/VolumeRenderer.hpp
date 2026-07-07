@@ -221,7 +221,15 @@ public:
     // M4 v2 P2: spatial denoiser toggle. P2.1 plumbs a pass-through identity
     // shader so display pulls from the denoise output when enabled and from the
     // raw accumulation when not; P2.2 swaps the shader for the A-trous filter.
-    void setDenoiseEnabled(bool e)        { m_denoiseEnabled = e; }
+    // P3.1: toggling changes the effective accumulation cap policy, so reset N
+    // to make the new policy visible immediately (otherwise a high stale N can
+    // hide the spatial filter behind an already-smooth temporal average).
+    void setDenoiseEnabled(bool e) {
+        if (e != m_denoiseEnabled) {
+            m_denoiseEnabled = e;
+            m_pathSampleCount = 0.0f;
+        }
+    }
     bool isDenoiseEnabled() const         { return m_denoiseEnabled; }
     // Granular setters (WebGPU/JS bindings, one per HTML control).
     void setDensityScale(float v) { m_densityScale = v; }
@@ -319,13 +327,31 @@ public:
         return m_denoiseViews[iteration % 2].get();
     }
     void advanceAccumulationFrame() {
-        m_pathSampleCount += 1.0f;
+        // M4 v2 P3.1: cap N so the running mean keeps a constant per-frame
+        // weight for the current sample once it's warmed up (weight =
+        // 1 / (cap + 1)). Without the cap N grows unboundedly and the current
+        // frame's contribution decays to zero, which makes the spatial denoise
+        // invisible at rest. Cap only applies when the spatial filter is on;
+        // with denoise off the temporal average has to carry the full
+        // convergence, so we let N grow unbounded (v1 behaviour).
+        const bool capActive = m_denoiseEnabled && m_maxAccumSamples > 0;
+        if (!capActive || m_pathSampleCount < static_cast<float>(m_maxAccumSamples)) {
+            m_pathSampleCount += 1.0f;
+        }
         m_pathPingPong = 1u - m_pathPingPong;
     }
     void resetAccumulation() {
         m_pathSampleCount = 0.0f;
         m_pathPingPong    = 0u;
     }
+    // M4 v2 P3.1 accessor: 0 means uncapped (previous behaviour). Default 32
+    // gives ~3 % weight per frame to the freshest path-trace + denoise pair.
+    void setMaxAccumSamples(uint32_t n) { m_maxAccumSamples = n; }
+    uint32_t getMaxAccumSamples() const { return m_maxAccumSamples; }
+    // Current running-mean sample count N. Read-only; the shader consumes this
+    // via VolumeUBO.accum.x. Handy for HUDs that want to visualise how quickly
+    // temporal accumulation is converging (or how tightly the P3.1 cap kicks in).
+    float getPathSampleCount() const { return m_pathSampleCount; }
 
     // Create / recreate the path-trace + display pipelines and their accumulation
     // textures. Call once after createPipeline, and again on swapchain resize.
@@ -484,6 +510,11 @@ private:
     // M4 v1 accumulation state.
     float      m_pathSampleCount = 0.0f;  // running average count N; reset on camera/param change
     uint32_t   m_pathPingPong    = 0u;    // which accum texture is the next OUTPUT (the other is INPUT)
+    // M4 v2 P3.1 accumulation cap. 0 = uncapped (v1 behaviour, full temporal
+    // convergence). 32 gives the denoiser a permanent visual role: every frame
+    // contributes ~3 % to the running mean once N reaches the cap, so a stable
+    // spatial-filter signal keeps flowing through the display.
+    uint32_t   m_maxAccumSamples = 32u;
 
     // M4 v2 P1 environment lighting state. Off by default so existing demos
     // (Lambert + path-trace without env) render identically. A neutral

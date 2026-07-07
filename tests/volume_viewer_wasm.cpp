@@ -97,6 +97,13 @@ public:
     // M4 v2 P2.1: denoise toggle. No accumulation reset (denoise is a post pass,
     // its toggle doesn't invalidate the running average).
     void setDenoise(bool on)           { m_volume->setDenoiseEnabled(on); }
+    // M4 v2 P3.1 controls + observation. resetAccum() lets the UI trigger a
+    // manual convergence restart without moving the camera, so the cap curve
+    // is easy to demo. accumN() / accumCap() feed the stats panel.
+    void resetAccum()             { m_volume->resetAccumulation(); }
+    float accumN() const          { return m_volume->getPathSampleCount(); }
+    unsigned accumCap() const     { return m_volume->getMaxAccumSamples(); }
+    void setAccumCap(unsigned n)  { m_volume->setMaxAccumSamples(n); m_volume->resetAccumulation(); }
     float dataMin() const        { return m_volume->getDataMin(); }
     float dataMax() const        { return m_volume->getDataMax(); }
 
@@ -511,6 +518,10 @@ EMSCRIPTEN_BINDINGS(volume_viewer) {
     emscripten::function("setAniso",          +[](float g)   { if (g_viewer) g_viewer->setAniso(g); });
     emscripten::function("setBounces",        +[](int b)     { if (g_viewer) g_viewer->setBounces(b); });
     emscripten::function("setDenoise",        +[](bool on)   { if (g_viewer) g_viewer->setDenoise(on); });
+    emscripten::function("resetAccum",        +[]()          { if (g_viewer) g_viewer->resetAccum(); });
+    emscripten::function("accumN",            +[]() -> float { return g_viewer ? g_viewer->accumN() : 0.0f; });
+    emscripten::function("accumCap",          +[]() -> unsigned { return g_viewer ? g_viewer->accumCap() : 0u; });
+    emscripten::function("setAccumCap",       +[](unsigned n){ if (g_viewer) g_viewer->setAccumCap(n); });
     emscripten::function("dataMin",           +[]() -> float { return g_viewer ? g_viewer->dataMin() : 0.0f; });
     emscripten::function("dataMax",           +[]() -> float { return g_viewer ? g_viewer->dataMax() : 0.0f; });
 
