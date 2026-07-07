@@ -828,7 +828,8 @@ bool VolumeRenderer::createAccumulationResources(uint32_t width, uint32_t height
     // doesn't require a resize. When denoise is OFF the pass is just skipped
     // by the caller and these textures stay dormant.
     // -----------------------------------------------------------------------
-    {
+    // Two ping-pong denoise textures for the multi-iteration A-trous cascade.
+    for (uint32_t i = 0; i < 2; ++i) {
         rhi::TextureDesc td{};
         td.size          = rhi::Extent3D{width, height, 1};
         td.dimension     = rhi::TextureDimension::Texture2D;
@@ -837,15 +838,32 @@ bool VolumeRenderer::createAccumulationResources(uint32_t width, uint32_t height
         td.sampleCount   = 1;
         td.usage         = rhi::TextureUsage::RenderTarget | rhi::TextureUsage::Sampled;
         td.label         = "VolumePathDenoise";
-        m_denoiseTexture = m_device->createTexture(td);
-        if (!m_denoiseTexture) { LOG_ERROR("VolumeRenderer") << "denoise texture create failed"; return false; }
+        m_denoiseTextures[i] = m_device->createTexture(td);
+        if (!m_denoiseTextures[i]) { LOG_ERROR("VolumeRenderer") << "denoise texture create failed"; return false; }
         rhi::TextureViewDesc vd{};
         vd.format          = rhi::TextureFormat::RGBA16Float;
         vd.dimension       = rhi::TextureViewDimension::View2D;
         vd.mipLevelCount   = 1;
         vd.arrayLayerCount = 1;
-        m_denoiseView = m_denoiseTexture->createView(vd);
-        if (!m_denoiseView) return false;
+        m_denoiseViews[i] = m_denoiseTextures[i]->createView(vd);
+        if (!m_denoiseViews[i]) return false;
+    }
+
+    // Per-iteration stride uniform buffers (16 B each). Values are written
+    // once here and never touched again -- changing them means editing the
+    // cascade schedule in code.
+    if (!m_denoiseStrideBuffers[0]) {
+        static constexpr uint32_t kStrides[kDenoiseIterations] = {1u, 2u, 4u};
+        for (uint32_t i = 0; i < kDenoiseIterations; ++i) {
+            rhi::BufferDesc bd{};
+            bd.size = 16;  // vec4<u32>
+            bd.usage = rhi::BufferUsage::Uniform | rhi::BufferUsage::CopyDst;
+            bd.label = "VolumePathDenoiseStride";
+            m_denoiseStrideBuffers[i] = m_device->createBuffer(bd);
+            if (!m_denoiseStrideBuffers[i]) { LOG_ERROR("VolumeRenderer") << "denoise stride buffer create failed"; return false; }
+            uint32_t strideVec[4] = { kStrides[i], 0u, 0u, 0u };
+            m_denoiseStrideBuffers[i]->write(strideVec, sizeof(strideVec));
+        }
     }
 
     if (!m_pathDenoiseFragmentShader) {
@@ -865,19 +883,23 @@ bool VolumeRenderer::createAccumulationResources(uint32_t width, uint32_t height
         if (!m_pathDenoiseFragmentShader) return false;
     }
 
+    // Bind group layout gains a uniform-buffer slot for the stride UBO. WGSL
+    // side keeps the sampler-less textureLoad convention; GLSL side adds the
+    // sampler at binding 1 with the UBO at binding 2.
     if (!m_pathDenoiseLayout) {
         using S = rhi::ShaderStage;
         using T = rhi::BindingType;
         rhi::BindGroupLayoutDesc ld;
 #ifdef __EMSCRIPTEN__
-        // Same convention as the display pass: WGSL textureLoad needs no sampler.
         ld.entries = {
             rhi::BindGroupLayoutEntry(0, S::Fragment, T::SampledTexture),
+            rhi::BindGroupLayoutEntry(1, S::Fragment, T::UniformBuffer),
         };
 #else
         ld.entries = {
             rhi::BindGroupLayoutEntry(0, S::Fragment, T::SampledTexture),
             rhi::BindGroupLayoutEntry(1, S::Fragment, T::Sampler),
+            rhi::BindGroupLayoutEntry(2, S::Fragment, T::UniformBuffer),
         };
 #endif
         ld.label = "VolumePathDenoiseBGLayout";
@@ -899,7 +921,7 @@ bool VolumeRenderer::createAccumulationResources(uint32_t width, uint32_t height
         pd.primitive.cullMode  = rhi::CullMode::None;
         pd.primitive.frontFace = rhi::FrontFace::CounterClockwise;
         rhi::ColorTargetState ct;
-        ct.format             = rhi::TextureFormat::RGBA16Float;  // intermediate stays linear HDR
+        ct.format             = rhi::TextureFormat::RGBA16Float;
         ct.blend.blendEnabled = false;
         pd.colorTargets = { ct };
         pd.depthStencil = nullptr;
@@ -907,38 +929,64 @@ bool VolumeRenderer::createAccumulationResources(uint32_t width, uint32_t height
         m_pathDenoisePipeline = m_device->createRenderPipeline(pd);
         if (!m_pathDenoisePipeline) { LOG_ERROR("VolumeRenderer") << "denoise pipeline create failed"; return false; }
     }
-    // Input bind groups: one per accumulation ping-pong slot. Caller picks
-    // via getDenoiseBindGroup() which keys off m_pathPingPong.
-    for (uint32_t pp = 0; pp < 2; ++pp) {
+
+    // Bind group helper: builds an entries list for (inputView, strideUBO) with
+    // the sampler slot filled on the GLSL/Vulkan branch.
+    auto makeDenoiseBG = [&](rhi::RHITextureView* inputView,
+                             rhi::RHIBuffer* strideBuf,
+                             const char* label) -> std::unique_ptr<rhi::RHIBindGroup> {
         rhi::BindGroupDesc desc;
         desc.layout = m_pathDenoiseLayout.get();
 #ifdef __EMSCRIPTEN__
         desc.entries = {
-            rhi::BindGroupEntry::TextureView(0, m_accumViews[pp].get()),
+            rhi::BindGroupEntry::TextureView(0, inputView),
+            rhi::BindGroupEntry::Buffer(1, strideBuf, 0, 16),
         };
 #else
         desc.entries = {
-            rhi::BindGroupEntry::TextureView(0, m_accumViews[pp].get()),
+            rhi::BindGroupEntry::TextureView(0, inputView),
             rhi::BindGroupEntry::Sampler(1, m_accumSampler.get()),
+            rhi::BindGroupEntry::Buffer(2, strideBuf, 0, 16),
         };
 #endif
-        desc.label = "VolumePathDenoiseBindGroup";
-        m_pathDenoiseBindGroups[pp] = m_device->createBindGroup(desc);
-        if (!m_pathDenoiseBindGroups[pp]) { LOG_ERROR("VolumeRenderer") << "denoise bind group create failed"; return false; }
+        desc.label = label;
+        return m_device->createBindGroup(desc);
+    };
+
+    // Iter 0: reads from whichever accumulation slot the path-trace just wrote.
+    // Two variants keyed by the ping-pong direction.
+    for (uint32_t pp = 0; pp < 2; ++pp) {
+        m_pathDenoiseIter0BindGroups[pp] = makeDenoiseBG(
+            m_accumViews[pp].get(),
+            m_denoiseStrideBuffers[0].get(),
+            "VolumePathDenoiseIter0BG");
+        if (!m_pathDenoiseIter0BindGroups[pp]) { LOG_ERROR("VolumeRenderer") << "denoise iter0 bind group failed"; return false; }
     }
-    // Display bind group that samples the denoise output. Reuses the existing
-    // display layout (same single SampledTexture binding) so no new layout is
-    // needed; just a fresh bind group pointing at m_denoiseView.
+    // Iter 1: reads denoise[0], writes denoise[1].
+    m_pathDenoiseIter1BindGroup = makeDenoiseBG(
+        m_denoiseViews[0].get(),
+        m_denoiseStrideBuffers[1].get(),
+        "VolumePathDenoiseIter1BG");
+    if (!m_pathDenoiseIter1BindGroup) { LOG_ERROR("VolumeRenderer") << "denoise iter1 bind group failed"; return false; }
+    // Iter 2: reads denoise[1], writes denoise[0].
+    m_pathDenoiseIter2BindGroup = makeDenoiseBG(
+        m_denoiseViews[1].get(),
+        m_denoiseStrideBuffers[2].get(),
+        "VolumePathDenoiseIter2BG");
+    if (!m_pathDenoiseIter2BindGroup) { LOG_ERROR("VolumeRenderer") << "denoise iter2 bind group failed"; return false; }
+
+    // Display bind group samples the final iteration output = denoise[0]
+    // (after 3 iterations: 0 -> 1 -> 0).
     {
         rhi::BindGroupDesc desc;
         desc.layout = m_pathDisplayLayout.get();
 #ifdef __EMSCRIPTEN__
         desc.entries = {
-            rhi::BindGroupEntry::TextureView(0, m_denoiseView.get()),
+            rhi::BindGroupEntry::TextureView(0, m_denoiseViews[0].get()),
         };
 #else
         desc.entries = {
-            rhi::BindGroupEntry::TextureView(0, m_denoiseView.get()),
+            rhi::BindGroupEntry::TextureView(0, m_denoiseViews[0].get()),
             rhi::BindGroupEntry::Sampler(1, m_accumSampler.get()),
         };
 #endif

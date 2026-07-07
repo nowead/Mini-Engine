@@ -297,17 +297,27 @@ public:
         }
         return m_pathDisplayBindGroups[1u - m_pathPingPong].get();
     }
-    // M4 v2 P2 -- denoise pass accessors. Caller runs this between the path-trace
-    // and display passes when isDenoiseEnabled(). The output view is the
-    // dedicated m_denoiseView (single intermediate; multi-iteration ping-pong
-    // lands in P2.3). Input bind group reads from the just-written accumulation
-    // slot, mirroring the display pass's source.
+    // M4 v2 P2.3 -- denoise pass accessors. Caller runs three iterations at
+    // strides 1, 2, 4 (the standard A-trous cascade). Each iteration reads a
+    // different input texture, so the caller loops i=0..2 and picks the right
+    // bind group + output view:
+    //   i=0: input=accum[1-pp], output=denoise[0]
+    //   i=1: input=denoise[0],  output=denoise[1]
+    //   i=2: input=denoise[1],  output=denoise[0]
+    // Final result always lands in denoise[0]; the display bind group samples
+    // that fixed slot.
+    static constexpr uint32_t kDenoiseIterations = 3;
     bool isDenoiseReady() const { return m_pathDenoisePipeline != nullptr; }
     rhi::RHIRenderPipeline* getDenoisePipeline() const { return m_pathDenoisePipeline.get(); }
-    rhi::RHIBindGroup* getDenoiseBindGroup() const {
-        return m_pathDenoiseBindGroups[1u - m_pathPingPong].get();
+    rhi::RHIBindGroup* getDenoiseBindGroup(uint32_t iteration) const {
+        if (iteration == 0) return m_pathDenoiseIter0BindGroups[1u - m_pathPingPong].get();
+        if (iteration == 1) return m_pathDenoiseIter1BindGroup.get();
+        return m_pathDenoiseIter2BindGroup.get();
     }
-    rhi::RHITextureView* getDenoiseOutputView() const { return m_denoiseView.get(); }
+    rhi::RHITextureView* getDenoiseOutputView(uint32_t iteration) const {
+        // 0 -> denoise[0], 1 -> denoise[1], 2 -> denoise[0]
+        return m_denoiseViews[iteration % 2].get();
+    }
     void advanceAccumulationFrame() {
         m_pathSampleCount += 1.0f;
         m_pathPingPong = 1u - m_pathPingPong;
@@ -400,21 +410,30 @@ private:
     std::array<std::array<std::unique_ptr<rhi::RHIBindGroup>, 2>, kFramesInFlight> m_pathBindGroups{};
     std::array<std::unique_ptr<rhi::RHIBindGroup>, 2> m_pathDisplayBindGroups{};
 
-    // M4 v2 P2.1: spatial denoiser pipeline. Sits between path-trace and
-    // display; reads from whichever accumulation slot the path-trace just wrote
-    // and emits into a dedicated single intermediate texture. P2.3 will expand
-    // to ping-pong for multi-iteration A-trous.
+    // M4 v2 P2.3: multi-iteration A-trous denoiser. Three ping-pong iterations
+    // at strides 1/2/4 (standard cascade). Two denoise textures alternate as
+    // input/output; iter 0 reads whichever accumulation slot the path-trace
+    // just wrote. Each iteration's stride comes from its own tiny uniform
+    // buffer so a single pipeline can drive all three passes.
     std::unique_ptr<rhi::RHIShader>          m_pathDenoiseFragmentShader;
     std::unique_ptr<rhi::RHIBindGroupLayout> m_pathDenoiseLayout;
     std::unique_ptr<rhi::RHIPipelineLayout>  m_pathDenoisePipelineLayout;
     std::unique_ptr<rhi::RHIRenderPipeline>  m_pathDenoisePipeline;
-    std::unique_ptr<rhi::RHITexture>         m_denoiseTexture;
-    std::unique_ptr<rhi::RHITextureView>     m_denoiseView;
-    // One denoise input bind group per accumulation ping-pong slot (the path
-    // tracer just wrote to one of them; we read whichever is "current").
-    std::array<std::unique_ptr<rhi::RHIBindGroup>, 2> m_pathDenoiseBindGroups{};
-    // Single display bind group that samples the denoise output, used by
-    // getDisplayBindGroup() when m_denoiseEnabled is true.
+    std::array<std::unique_ptr<rhi::RHITexture>,     2> m_denoiseTextures{};
+    std::array<std::unique_ptr<rhi::RHITextureView>, 2> m_denoiseViews{};
+    // Per-iteration stride uniforms. Written once at pipeline setup (strides
+    // never change at runtime; changing them means a code edit). vec4<uint>
+    // wraps the value to keep std140 alignment simple.
+    std::array<std::unique_ptr<rhi::RHIBuffer>, kDenoiseIterations> m_denoiseStrideBuffers{};
+    // Bind groups. Iter 0 has two variants indexed by accum ping-pong; iter
+    // 1 and iter 2 each have a single bind group (input source is fixed --
+    // denoise[0] or denoise[1] respectively).
+    std::array<std::unique_ptr<rhi::RHIBindGroup>, 2> m_pathDenoiseIter0BindGroups{};
+    std::unique_ptr<rhi::RHIBindGroup>                m_pathDenoiseIter1BindGroup;
+    std::unique_ptr<rhi::RHIBindGroup>                m_pathDenoiseIter2BindGroup;
+    // Display bind group that samples the final denoise output (denoise[0]
+    // after 3 iterations 0->1->0). Used by getDisplayBindGroup() when
+    // m_denoiseEnabled.
     std::unique_ptr<rhi::RHIBindGroup>       m_pathDenoiseDisplayBindGroup;
     bool                                     m_denoiseEnabled = false;
     std::array<std::unique_ptr<rhi::RHIBuffer>,    kFramesInFlight> m_uniformBuffers{};

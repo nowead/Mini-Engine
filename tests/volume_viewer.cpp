@@ -168,6 +168,10 @@ private:
             auto* a = static_cast<VolumeViewer*>(glfwGetWindowUserPointer(w));
             if (width > 0 && height > 0) {
                 a->m_bridge->onResize(width, height);
+                // Bridge tears down + recreates the swapchain internally; refresh
+                // the raw pointer we cached at init so downstream code (viewer
+                // renders, ImGui backend) doesn't reach into a freed object.
+                a->m_swapchain = a->m_bridge->getSwapchain();
                 a->m_camera.setAspectRatio(static_cast<float>(width) / height);
                 // The dummy depth feeds the shader's screenSize, so it must track
                 // the new resolution; rebuild bind groups to point at the new view.
@@ -587,25 +591,28 @@ private:
             }
         }
 
-        // ---- Denoise pass: between path-trace and display when PT + denoise on. ----
+        // ---- Denoise cascade: 3 iterations (strides 1/2/4) with ping-pong. ----
         if (pathTrace && m_volume->isEnabled() && m_volume->isDenoiseEnabled()
             && m_volume->isDenoiseReady()) {
-            rhi::RenderPassColorAttachment dnCa{};
-            dnCa.view       = m_volume->getDenoiseOutputView();
-            dnCa.loadOp     = rhi::LoadOp::Clear;
-            dnCa.storeOp    = rhi::StoreOp::Store;
-            dnCa.clearValue = rhi::ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f);
-            rhi::RenderPassDesc dnPd{};
-            dnPd.colorAttachments = { dnCa };
-            dnPd.width = w; dnPd.height = h; dnPd.label = "VolumePathDenoise";
-            auto dnRp = enc->beginRenderPass(dnPd);
-            if (dnRp) {
-                dnRp->setViewport(0, 0, static_cast<float>(w), static_cast<float>(h), 0.0f, 1.0f);
-                dnRp->setScissorRect(0, 0, w, h);
-                dnRp->setPipeline(m_volume->getDenoisePipeline());
-                dnRp->setBindGroup(0, m_volume->getDenoiseBindGroup());
-                dnRp->draw(3);
-                dnRp->end();
+            using Vol = rendering::VolumeRenderer;
+            for (uint32_t iter = 0; iter < Vol::kDenoiseIterations; ++iter) {
+                rhi::RenderPassColorAttachment dnCa{};
+                dnCa.view       = m_volume->getDenoiseOutputView(iter);
+                dnCa.loadOp     = rhi::LoadOp::Clear;
+                dnCa.storeOp    = rhi::StoreOp::Store;
+                dnCa.clearValue = rhi::ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f);
+                rhi::RenderPassDesc dnPd{};
+                dnPd.colorAttachments = { dnCa };
+                dnPd.width = w; dnPd.height = h; dnPd.label = "VolumePathDenoise";
+                auto dnRp = enc->beginRenderPass(dnPd);
+                if (dnRp) {
+                    dnRp->setViewport(0, 0, static_cast<float>(w), static_cast<float>(h), 0.0f, 1.0f);
+                    dnRp->setScissorRect(0, 0, w, h);
+                    dnRp->setPipeline(m_volume->getDenoisePipeline());
+                    dnRp->setBindGroup(0, m_volume->getDenoiseBindGroup(iter));
+                    dnRp->draw(3);
+                    dnRp->end();
+                }
             }
         }
 

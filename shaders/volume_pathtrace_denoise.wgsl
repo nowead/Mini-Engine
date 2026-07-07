@@ -1,11 +1,16 @@
-// M4 v2 P2.2 -- single-iteration A-trous wavelet denoiser (WebGPU). Reads the
-// linear-HDR running average from the path-trace accumulation and writes a
-// color-guided cross-bilateral 5x5 blur to the denoise intermediate. P2.3 will
-// add multi-iteration ping-pong with exponentially growing tap spacing; here we
-// stay at spacing=1 (the standard A-trous level-0 kernel) so the cost is bounded
-// and the visual change is easy to read.
+// M4 v2 P2.3 -- multi-iteration A-trous wavelet denoiser (WebGPU). 5x5 cross-
+// bilateral kernel with a color guide, run three times at exponentially growing
+// tap spacings (1, 2, 4) using ping-pong denoise textures. Each iteration binds
+// its own tiny stride UBO so a single pipeline drives all three passes.
+
+struct StrideUBO {
+    // x = tap spacing in pixels for this iteration. yzw reserved for future
+    // per-iteration parameters (e.g. sigma multipliers, level index).
+    stride: vec4<u32>,
+};
 
 @group(0) @binding(0) var inputTex: texture_2d<f32>;
+@group(0) @binding(1) var<uniform> params: StrideUBO;
 
 struct VSOut { @builtin(position) position: vec4<f32> };
 
@@ -17,8 +22,6 @@ fn vs_main(@builtin(vertex_index) vertIdx: u32) -> VSOut {
     return out;
 }
 
-// 5x5 separable kernel weights (1, 4, 6, 4, 1) / 16 -> 2D outer product.
-// Embedded as a 25-entry lookup for the simple non-separable inner loop.
 fn atrousWeight(dx: i32, dy: i32) -> f32 {
     let w = array<f32, 5>(1.0/16.0, 4.0/16.0, 6.0/16.0, 4.0/16.0, 1.0/16.0);
     return w[dx + 2] * w[dy + 2];
@@ -30,17 +33,11 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
     let center    = vec2<i32>(fragPos.xy);
     let centerCol = textureLoad(inputTex, center, 0).rgb;
 
-    // Color-similarity weight: tighter sigma -> more edges preserved.
-    // 0.35 reads HDR-linear noise as "the same surface" without blurring across
-    // sharp transfer-function ridges.
+    // Color-similarity weight: tighter sigma -> more edges preserved. 0.35 in
+    // HDR-linear works across the noise magnitudes we see at SPP=1..8. Same
+    // constant across iterations -- the stride change alone widens the reach.
     let sigmaC2 = 0.35 * 0.35;
-
-    // A-trous level-2 tap spacing: 25 taps cover a ~32x32 px window. Single-
-    // iteration spatial blur is intentionally gentle -- progressive temporal
-    // accumulation handles most of the convergence; this pass cleans grain in
-    // the first few frames after camera motion. P2.3 will cascade three
-    // ping-pong iterations at strides 1/2/4 for stronger visible smoothing.
-    let stride = 4;
+    let stride  = i32(params.stride.x);
 
     var accum: vec3<f32> = vec3<f32>(0.0);
     var wSum:  f32       = 0.0;

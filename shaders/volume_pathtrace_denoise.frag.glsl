@@ -1,15 +1,18 @@
 #version 450
 
-// M4 v2 P2.2 -- single-iteration A-trous wavelet denoiser. Reads the linear-HDR
-// running average from the path-trace accumulation and writes a color-guided
-// cross-bilateral 5x5 blur to the denoise intermediate. P2.3 will add multi-
-// iteration ping-pong; here we run a single level-0 kernel (spacing=1) so the
-// cost is bounded and the visual change easy to read.
+// M4 v2 P2.3 -- multi-iteration A-trous wavelet denoiser. 5x5 cross-bilateral
+// kernel with a color guide, run three times at exponentially growing tap
+// spacings (1, 2, 4) using ping-pong denoise textures. Each iteration binds
+// its own tiny stride UBO so a single pipeline drives all three passes.
 
 layout(location = 0) out vec4 outColor;
 
 layout(set = 0, binding = 0) uniform texture2D inputTex;
 layout(set = 0, binding = 1) uniform sampler   inputSampler;
+layout(set = 0, binding = 2) uniform StrideUBO {
+    // x = tap spacing in pixels for this iteration; yzw reserved.
+    uvec4 stride;
+} params;
 
 float atrousWeight(int dx, int dy) {
     float w[5] = float[5](1.0/16.0, 4.0/16.0, 6.0/16.0, 4.0/16.0, 1.0/16.0);
@@ -22,12 +25,7 @@ void main() {
     vec3 centerCol  = texelFetch(sampler2D(inputTex, inputSampler), center, 0).rgb;
 
     const float sigmaC2 = 0.35 * 0.35;
-
-    // A-trous level-2 tap spacing: 25 taps cover an 8x8 px window instead of
-    // the dense 5x5. Without this the single-iteration filter is sub-pixel
-    // Gaussian on a 1700+ wide canvas and invisible. P2.3 will cascade levels
-    // 0/1/2 (spacings 1, 2, 4) in three ping-pong iterations.
-    const int stride = 4;
+    int stride = int(params.stride.x);
 
     vec3 accum = vec3(0.0);
     float wSum = 0.0;

@@ -347,6 +347,12 @@ private:
         m_width = static_cast<uint32_t>(m_pendingW);
         m_height = static_cast<uint32_t>(m_pendingH);
         m_bridge->onResize(m_width, m_height);
+        // RendererBridge::onResize destroys the old swapchain and creates a
+        // new one; the raw pointer we cached at init is now dangling. Refresh
+        // it before anyone reads getFormat()/other queries, otherwise the
+        // display pipeline picks up garbage from freed memory (observed as a
+        // spurious R8Unorm attachment state after devtools open/close).
+        m_swapchain = m_bridge->getSwapchain();
         m_camera.setAspectRatio(static_cast<float>(m_width) / m_height);
         m_device->waitIdle();
         recreateDummyDepth(m_width, m_height);
@@ -413,28 +419,31 @@ private:
             }
         }
 
-        // ---- Pass 1b: denoise (PT mode + denoise toggle on). Reads the
-        // just-written accumulation slot and writes the dedicated denoise
-        // intermediate; the display pass below picks the right source via
-        // getDisplayBindGroup() routing.
+        // ---- Pass 1b: denoise cascade (PT mode + denoise toggle on). Runs the
+        // A-trous filter three times at strides 1, 2, 4 with ping-pong
+        // denoise textures. The final iteration output feeds the display pass
+        // via getDisplayBindGroup() routing.
         if (pathTrace && m_volume->isEnabled() && m_volume->isDenoiseEnabled()
             && m_volume->isDenoiseReady()) {
-            rhi::RenderPassColorAttachment dnCa{};
-            dnCa.view       = m_volume->getDenoiseOutputView();
-            dnCa.loadOp     = rhi::LoadOp::Clear;
-            dnCa.storeOp    = rhi::StoreOp::Store;
-            dnCa.clearValue = rhi::ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f);
-            rhi::RenderPassDesc dnPd{};
-            dnPd.colorAttachments = { dnCa };
-            dnPd.width = w; dnPd.height = h; dnPd.label = "VolumePathDenoiseWasm";
-            auto dnRp = enc->beginRenderPass(dnPd);
-            if (dnRp) {
-                dnRp->setViewport(0, 0, static_cast<float>(w), static_cast<float>(h), 0.0f, 1.0f);
-                dnRp->setScissorRect(0, 0, w, h);
-                dnRp->setPipeline(m_volume->getDenoisePipeline());
-                dnRp->setBindGroup(0, m_volume->getDenoiseBindGroup());
-                dnRp->draw(3);
-                dnRp->end();
+            using Vol = rendering::VolumeRenderer;
+            for (uint32_t iter = 0; iter < Vol::kDenoiseIterations; ++iter) {
+                rhi::RenderPassColorAttachment dnCa{};
+                dnCa.view       = m_volume->getDenoiseOutputView(iter);
+                dnCa.loadOp     = rhi::LoadOp::Clear;
+                dnCa.storeOp    = rhi::StoreOp::Store;
+                dnCa.clearValue = rhi::ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f);
+                rhi::RenderPassDesc dnPd{};
+                dnPd.colorAttachments = { dnCa };
+                dnPd.width = w; dnPd.height = h; dnPd.label = "VolumePathDenoiseWasm";
+                auto dnRp = enc->beginRenderPass(dnPd);
+                if (dnRp) {
+                    dnRp->setViewport(0, 0, static_cast<float>(w), static_cast<float>(h), 0.0f, 1.0f);
+                    dnRp->setScissorRect(0, 0, w, h);
+                    dnRp->setPipeline(m_volume->getDenoisePipeline());
+                    dnRp->setBindGroup(0, m_volume->getDenoiseBindGroup(iter));
+                    dnRp->draw(3);
+                    dnRp->end();
+                }
             }
         }
 
