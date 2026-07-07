@@ -21,9 +21,23 @@ build matrix.
 | P1 | Environment lighting (miss-ray IBL) | ✅ `521a3f8` |
 | P2.1 | Denoise pass plumbing (pass-through identity) | ✅ `c34d85c` |
 | P2.2 | Single-iteration A-trous (color guide, stride=4) | ✅ `74b2473` |
-| P2.3 | Multi-iteration cascade (stride 1/2/4, ping-pong) | 🔲 next |
-| P3 | Adaptive SPP + temporal reprojection | 🔲 |
+| P2.3 | Multi-iteration cascade (stride 1/2/4, ping-pong) | ✅ `5f6723a` |
+| P3.1 | Accumulation N cap (denoise-coupled, HUD + reset) | ✅ `d50e76f` |
+| P3.2 | Adaptive SPP by camera motion | 🟡 **deferred** |
+| P3.3 | Temporal reprojection (SVGF-style) | 🟡 **deferred** |
 | P4 (optional) | HDR equirect environment map upgrade | 🔲 backlog |
+
+### Track status: paused after P3.1
+
+P3.1 delivered the whole point of the P3 sub-track -- "spatial denoise stays
+visible at rest" -- by capping the temporal N when the spatial filter is on.
+P3.2 (adaptive SPP by motion) and P3.3 (SVGF temporal reprojection) remain in
+the plan but are **explicitly deferred**: they are optimisation + polish on
+top of a payoff that is already realised, and the surrounding project has
+shifted priority to the real-MRI verification track (see
+[REAL_MRI_VERIFICATION_PLAN.md](REAL_MRI_VERIFICATION_PLAN.md)). Resume this
+track when either (a) the real-MRI track exposes noise pathologies that
+adaptive SPP would fix, or (b) the polish story becomes portfolio-critical.
 
 ---
 
@@ -67,38 +81,66 @@ build matrix.
 
 ---
 
-## 3. Remaining
+### P2.3 -- Multi-iteration cascade (`5f6723a`)
 
-### P2.3 -- Multi-iteration cascade (~2-3 h)
+- Two ping-pong denoise textures + three tiny stride UBOs (16 B each,
+  values baked to {1, 2, 4}). Single pipeline drives all three passes
+  via three iteration-indexed bind groups.
+- Iter 0 has two variants keyed by the accumulation ping-pong; iter 1
+  and iter 2 are fixed (denoise[0]->denoise[1], denoise[1]->denoise[0]).
+  Final result lands in denoise[0]; the display bind group samples that
+  fixed slot.
+- Shipped alongside a resize-race bug fix (dangling `m_swapchain` raw
+  pointer after `RendererBridge::onResize()`) that was blocking stable
+  verification -- see the commit message for the full trace.
+- Verified: SPP=1 + continuous camera drag shows an unmistakable
+  denoise on/off difference; the P2.2 single-iter stride=4 blur was
+  subtle at the same resolution.
 
-- Add a second denoise texture so the pass can ping-pong: iter 0
-  writes denoise[0], iter 1 reads denoise[0] + writes denoise[1],
-  iter 2 reads denoise[1] + writes denoise[0]. Display reads whichever
-  slot the last iteration wrote to.
-- Stride source: small dedicated uniform (16 B vec4 with the int
-  packed in) -- avoids touching VolumeUBO. Three bind groups per
-  iteration carry input + uniform.
-- Cascade strides 1 / 2 / 4 -- the standard A-trous schedule. Coarse
-  iterations clean the low-frequency noise, fine iterations clean
-  high-frequency grain.
-- Verification: toggle denoise during camera motion at SPP=1 ->
-  visible noise vs. smooth comparison.
+### P3.1 -- Accumulation N cap (`d50e76f`)
 
-### P3 -- Adaptive SPP + temporal reprojection (~3-4 h)
+- `m_maxAccumSamples` default 32; `advanceAccumulationFrame()` clamps
+  `m_pathSampleCount` at the cap only when denoise is enabled. Denoise
+  off = uncapped (v1 behaviour, temporal has to carry convergence
+  alone).
+- `setDenoiseEnabled()` now resets accumulation on transition so the
+  new cap policy is visible from the very next frame.
+- WASM viewer + shell HTML: `resetAccum()`, `accumN()`, `accumCap()`,
+  `setAccumCap()` JS bindings; stats panel gains an `Accum: N=... (cap
+  32 | uncapped)` line; new "Accum cap" slider + "Reset accumulation"
+  button gated on Path-traced mode.
+- Verified: denoise on ramps N to 32 then locks; denoise off flips to
+  "uncapped" and N resumes unbounded growth. Spatial denoise on/off
+  now visibly changes the image even after the camera has been still
+  for many seconds -- the whole point of P3.
 
-- Adaptive SPP: detect camera motion (already detected for
-  accumulation reset). During motion run SPP=1 + denoiser; at rest
-  ramp SPP up over a few frames so the renderer prioritises
-  responsiveness in motion and converges quickly at rest.
-- Temporal reprojection: reuse the previous frame's denoised output
-  with camera-history reprojection. SVGF-style temporal filtering on
+---
+
+## 3. Remaining (deferred)
+
+### P3.2 -- Adaptive SPP by camera motion (~1 session, deferred)
+
+- Detect camera motion (already tracked for accumulation reset). While
+  the camera is moving, force SPP=1 so path-trace stays interactive.
+  At rest, ramp SPP up over a few frames so the running mean settles
+  fast without spiking frame time on the very first still frame.
+- Rationale for deferral: the payoff is performance (higher FPS in
+  motion, faster convergence at rest), not visual quality. P3.1 has
+  already made the spatial denoiser carry a permanent visual role, so
+  adaptive SPP is optimisation on a stable baseline.
+
+### P3.3 -- Temporal reprojection (~2-3 sessions, deferred)
+
+- Reproject the previous frame's denoised output into the current
+  camera via view/proj history, blend with the current denoised output
+  weighted by depth/normal consistency. SVGF-style temporal filter on
   top of the spatial A-trous.
-- Cap accumulation N so the spatial pass always carries some weight
-  (the v1 progressive accumulation otherwise drives noise to zero on
-  its own and hides the denoiser's contribution).
-- Verification: noise reduction curve vs. frame count -- measure how
-  many frames to reach a target PSNR with adaptive SPP + denoise on
-  vs. plain SPP-N accumulation.
+- Would need a new render target from the path-trace pass carrying
+  first-hit position (or depth) so disocclusion detection is possible.
+- Rationale for deferral: significant infrastructure cost (new render
+  target, reprojection math, disocclusion heuristics) for a payoff
+  that is now incremental after P3.1's cap. Revisit if a real-MRI
+  workload exposes noise pathologies that spatial-only cannot handle.
 
 ### P4 -- HDR equirect environment map (backlog)
 

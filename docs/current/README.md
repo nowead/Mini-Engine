@@ -22,7 +22,8 @@ WebGPU 기반 차세대 클라이언트 사이드 **의료 볼륨 렌더러**로
 | [WASM_OPENJPEG_PLAN.md](medical-volume/plans/WASM_OPENJPEG_PLAN.md) | WASM OpenJPEG 빌드 (브라우저 JPEG 2000 DICOM 디코드) |
 | [DICOM_JPEG_LEGACY_PLAN.md](medical-volume/plans/DICOM_JPEG_LEGACY_PLAN.md) | DICOM JPEG Baseline / Extended / Lossless P14·SV1 (libjpeg-turbo, 네이티브) |
 | [WASM_LIBJPEG_TURBO_PLAN.md](medical-volume/plans/WASM_LIBJPEG_TURBO_PLAN.md) | WASM libjpeg-turbo 빌드 (브라우저 JPEG legacy) |
-| [PATH_TRACE_POLISH_PLAN.md](medical-volume/plans/PATH_TRACE_POLISH_PLAN.md) | M4 v2 path-trace 폴리시 — IBL + A-trous denoiser + adaptive SPP (P1, P2, P3) |
+| [PATH_TRACE_POLISH_PLAN.md](medical-volume/plans/PATH_TRACE_POLISH_PLAN.md) | M4 v2 path-trace 폴리시 — IBL + A-trous denoiser + accumulation cap (P1..P3.1 완료; P3.2/P3.3 유예) |
+| [REAL_MRI_VERIFICATION_PLAN.md](medical-volume/plans/REAL_MRI_VERIFICATION_PLAN.md) | **Active** — 실 MR 번들 + preset 튜닝 + 런타임 DICOM 업로드 + FPS/메모리 HUD (R1..R4) |
 | [BASELINE_2026-06-03.md](medical-volume/baselines/BASELINE_2026-06-03.md) | v0 + M4 v1 기준선 측정 |
 | [BASELINE_2026-06-04_V1_ALPHA.md](medical-volume/baselines/BASELINE_2026-06-04_V1_ALPHA.md) | v1-α 측정 (auto-size win + streaming 자동 진입 + 정직한 한계) |
 | [BASELINE_2026-06-07_V1_BETA.md](medical-volume/baselines/BASELINE_2026-06-07_V1_BETA.md) | v1-β LOD 측정 (missing brick 2320→326 -86%) + 알려진 한계 (LOD seam, stale-LOD blur) |
@@ -142,12 +143,24 @@ envTop/envBot 추가 + `sampleEnvironment(dir)` top-bottom 그래디언트 sky +
 path-trace ↔ display 사이에 third fragment pipeline 삽입 + 5x5 cross-bilateral
 A-trous (color guide, stride=4) + UI 토글. 계획서:
 [PATH_TRACE_POLISH_PLAN.md](medical-volume/plans/PATH_TRACE_POLISH_PLAN.md).
+**M4 v2 P2.3 A-trous cascade + swapchain race fix 완료** (2026-07-07,
+`5f6723a`): stride 1/2/4 ping-pong 3-iteration cascade + stride UBO
+per-iter + swapchain dangling pointer 재획득 방어 (F12 crash 근본 수정).
+**M4 v2 P3.1 accumulation N cap 완료** (2026-07-07, `d50e76f`): denoise
+활성 시 N 을 32로 캡 → spatial denoise 가 정지 상태에서도 상시 가시
+contribution. HUD 라인 + cap 슬라이더 + reset 버튼. **M4 v2 P3의 원 목표
+달성.**
 
-**다음 후보**: P2.3 multi-iteration cascade (stride 1/2/4 ping-pong) ·
-P3 adaptive SPP + temporal reprojection · DICOM mmap (Phase C: 슬라이스
-어셈블 캐시) · `<input type="file">` 런타임 DICOM 업로드 · 즉흥 폴리시
-(LOD seam 완화 / async pack / adaptive K / screen-pixel LOD selection) ·
-JPEG-LS (charls) · HDR equirect IBL.
+**현재 활성 트랙**: **실 MRI 검증 트랙 (2026-07-07~)** — 계획서:
+[REAL_MRI_VERIFICATION_PLAN.md](medical-volume/plans/REAL_MRI_VERIFICATION_PLAN.md).
+프로젝트 원 목표 ("실제 MRI 유의미한 프레임/메모리로 띄우기") 정면 대응.
+R1 실 MR 번들 → R2 preset 튜닝 → R3 런타임 DICOM 업로드 → R4 FPS/메모리
+HUD + baseline 측정.
+
+**유예된 트랙**: M4 v2 P3.2 (adaptive SPP by motion) · M4 v2 P3.3
+(SVGF temporal reprojection) · M4 v2 P4 (HDR equirect IBL) · JPEG-LS
+(charls) · DICOM mmap (Phase C: 슬라이스 어셈블 캐시) · 즉흥 폴리시
+(LOD seam 완화 / async pack / adaptive K / screen-pixel LOD selection).
 
 **선행 완료**: 볼륨 렌더링 기초(3D 텍스처 + 레이마칭, Vulkan + WebGPU) ·
 TF 프리셋 · 독립 뷰어(네이티브 `volume_viewer` + 브라우저 `volume_viewer_wasm`).

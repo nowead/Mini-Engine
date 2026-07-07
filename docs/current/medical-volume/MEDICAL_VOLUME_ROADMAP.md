@@ -383,9 +383,56 @@ v1-β LOD + DICOM (Implicit VR + 압축) + Disk paging Steps 1-3 까지가 한 �
   weights × color-similarity `exp(-|d|²/0.35²)`, stride=4 (~32px 커버).
   의도적으로 gentle — progressive temporal accumulation과 보완, 카메라
   이동 직후 grain만 부드럽게. UI 토글 + JS binding. 정지 상태에선 시각
-  차이 미세(누적이 이미 수렴) — P3에서 누적 N cap 도입하면 가시화. P2.3
-  cascade (stride 1/2/4 ping-pong) 가 다음. 계획서:
+  차이 미세(누적이 이미 수렴) — P3에서 누적 N cap 도입하면 가시화. 계획서:
   [PATH_TRACE_POLISH_PLAN.md](plans/PATH_TRACE_POLISH_PLAN.md).
+- **M4 v2 P2.3 A-trous cascade + swapchain race fix** (`5f6723a`,
+  2026-07-07) — 단일 iteration을 3-level cascade로 확장 (strides 1/2/4,
+  ping-pong denoise 텍스처 2개). 각 iteration 별 16 B stride UBO로 단일
+  pipeline이 세 pass 모두 구동. Iter 0은 accum ping-pong별 2 variant,
+  iter 1/2는 fixed. SPP=1 + 카메라 드래그 시 P2.2의 미묘하던 차이가
+  뚜렷해짐. 동시에 dangling swapchain 포인터 race 수정 —
+  `RendererBridge::onResize()` 후 캐시된 raw pointer가 stale 되어 F12
+  toggle 시 display pipeline이 R8Unorm target으로 재생성되며 crash. 두
+  뷰어 모두 `m_swapchain = m_bridge->getSwapchain()` 재획득으로 방어.
+- **M4 v2 P3.1 accumulation N cap** (`d50e76f`, 2026-07-07) — spatial
+  denoise가 정지 상태에서도 상시 가시 contribution을 갖도록 temporal
+  N 을 32에서 캡. `advanceAccumulationFrame()`이 denoise 활성 시에만
+  clamp (off 시엔 uncapped, v1 그대로). `setDenoiseEnabled` transition
+  시 자동 accumulation reset으로 정책 즉시 반영. WASM 셸에 accum HUD
+  라인 + cap 슬라이더 + reset 버튼 추가. **M4 v2 P3의 진짜 목표
+  ("spatial denoise stays visible at rest") 달성.** P3.2 (adaptive
+  SPP) / P3.3 (SVGF temporal reprojection) 은 최적화·인프라 성격이라
+  **명시적으로 유예** — real-MRI 검증 트랙이 원 프로젝트 목표에 더 직접
+  기여함. 계획서:
+  [PATH_TRACE_POLISH_PLAN.md](plans/PATH_TRACE_POLISH_PLAN.md).
+
+---
+
+### 현재 활성 방향 — 실 MRI 검증 트랙 (2026-07-07~)
+
+**결정**: M4 v2 P3.1 도달 시점에서 프로젝트의 원 목표 — "실제 MRI 영상을
+유의미한 프레임과 메모리로 화면에 띄우기" — 를 정면으로 밟기 위해 pivot.
+지금까지 M1~M4 v2 P3.1 이 인프라(로더 9종·brick atlas·multi-LOD·streaming·
+disk paging·path-trace polish)를 다졌고, 남은 갭은 **실 MR 데이터로의 시각
+검증** 과 **사용자 입력 경로** 이다.
+
+**진행 순서** (계획서: [REAL_MRI_VERIFICATION_PLAN.md](plans/REAL_MRI_VERIFICATION_PLAN.md))
+
+| Step | 작업 | 예상 |
+| --- | --- | --- |
+| **R1** | 실 MR 시리즈 (pydicom-data / IXI / OSF) 번들 + preload + MR-T1·T2 preset 렌더 검증 | 0.5~1 세션 |
+| **R2** | (조건부) MR-T1 / T2 preset LUT 재튜닝 — R1이 임상 signal 대비 어색하면 | 0.5~1 세션 |
+| **R3** | `<input type="file">` 런타임 DICOM 업로드 — ASYNCIFY safe 패턴 (`Module._wasmBusy`) | 2 세션 |
+| **R4** | 실 MR 사이즈에서 FPS + 메모리 HUD 보강 + `baselines/BASELINE_<date>_REAL_MRI.md` | 0.5~1 세션 |
+
+**유예된 트랙** (계획서 유지, 필요 시 재개):
+
+- **M4 v2 P3.2** — adaptive SPP by camera motion (성능 최적화, P3.1 이후 시각 임팩트 낮음)
+- **M4 v2 P3.3** — SVGF temporal reprojection (2-3 세션 인프라, first-hit 렌더 타겟 추가 필요)
+- **M4 v2 P4** — HDR equirect IBL (`IBLManager` WASM 이식)
+- **JPEG-LS (charls)** — 임상 희귀 transfer syntax
+
+---
 
 **즉흥 폴리시 후보 (로드맵 명시 안 됨, 후순위)** — v1-β 작업 중 발견된 개선점.
 차별화 핵심 아니므로 위 차별화 후보가 마무리된 뒤 시각 만족도/성능에 따라 선택:

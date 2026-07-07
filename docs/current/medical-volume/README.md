@@ -40,7 +40,8 @@ Mini-Engine implements it:
 | [WASM_OPENJPEG_PLAN.md](plans/WASM_OPENJPEG_PLAN.md) | WASM OpenJPEG build (browser JPEG 2000 DICOM) |
 | [DICOM_JPEG_LEGACY_PLAN.md](plans/DICOM_JPEG_LEGACY_PLAN.md) | DICOM JPEG Baseline / Extended / Lossless P14·SV1 (libjpeg-turbo, native) |
 | [WASM_LIBJPEG_TURBO_PLAN.md](plans/WASM_LIBJPEG_TURBO_PLAN.md) | WASM libjpeg-turbo build (browser JPEG legacy) |
-| [PATH_TRACE_POLISH_PLAN.md](plans/PATH_TRACE_POLISH_PLAN.md) | M4 v2 path-trace polish — IBL + A-trous denoiser + adaptive SPP (P1, P2, P3) |
+| [PATH_TRACE_POLISH_PLAN.md](plans/PATH_TRACE_POLISH_PLAN.md) | M4 v2 path-trace polish — IBL + A-trous denoiser + accumulation cap (P1..P3.1 done; P3.2/P3.3 deferred) |
+| [REAL_MRI_VERIFICATION_PLAN.md](plans/REAL_MRI_VERIFICATION_PLAN.md) | **Active** — real MR bundle + preset tuning + runtime DICOM upload + FPS/memory HUD (R1..R4) |
 
 ---
 
