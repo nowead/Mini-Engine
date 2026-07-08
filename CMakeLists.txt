@@ -997,7 +997,15 @@ else()
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/fetch_wasm_dicom_sample.py
                 ${VV_ASSET_DIR}/sample_dicom_jpegll/JPEG-LL.dcm
                 https://github.com/pydicom/pydicom-data/raw/master/data_store/data/JPEG-LL.dcm
-        COMMENT "Staging WGSL + synthetic CT + JPEG 2000 / JPEG Lossless DICOM samples for volume_viewer_wasm"
+        # REAL_MRI_VERIFICATION_PLAN R1: emri_small.dcm (functional MRI,
+        # 64x64x10, multi-frame Explicit VR LE, ~84 KB) -- first real 3D MR
+        # volume the demo can render. Bundled as the top-priority sample so
+        # a fresh browser load lands on real MR anatomy immediately.
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${VV_ASSET_DIR}/sample_dicom_mr
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/fetch_wasm_dicom_sample.py
+                ${VV_ASSET_DIR}/sample_dicom_mr/emri_small.dcm
+                https://github.com/pydicom/pydicom-data/raw/master/data_store/data/emri_small.dcm
+        COMMENT "Staging WGSL + synthetic CT + JPEG 2000 / JPEG Lossless / real MR DICOM samples for volume_viewer_wasm"
     )
     set_target_properties(volume_viewer_wasm PROPERTIES
         LINK_DEPENDS "${VV_WGSL_SOURCES};${CMAKE_CURRENT_SOURCE_DIR}/tests/volume_viewer_shell.html"
@@ -1028,6 +1036,7 @@ else()
         "SHELL:--preload-file ${VV_ASSET_DIR}/synthetic_ct.nii@/synthetic_ct.nii"
         "SHELL:--preload-file ${VV_ASSET_DIR}/sample_dicom_jp2@/sample_dicom_jp2"
         "SHELL:--preload-file ${VV_ASSET_DIR}/sample_dicom_jpegll@/sample_dicom_jpegll"
+        "SHELL:--preload-file ${VV_ASSET_DIR}/sample_dicom_mr@/sample_dicom_mr"
         "SHELL:--shell-file ${CMAKE_CURRENT_SOURCE_DIR}/tests/volume_viewer_shell.html"
     )
     target_compile_options(volume_viewer_wasm PRIVATE

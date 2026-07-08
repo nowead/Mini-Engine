@@ -106,6 +106,13 @@ public:
     void setAccumCap(unsigned n)  { m_volume->setMaxAccumSamples(n); m_volume->resetAccumulation(); }
     float dataMin() const        { return m_volume->getDataMin(); }
     float dataMax() const        { return m_volume->getDataMax(); }
+    // R2 UI sync -- read the wasm-side defaults so the shell can push them
+    // back into the HTML controls after load (dropdown / slider mismatch was
+    // hiding the fact that non-CT data ran on a different preset than the
+    // dropdown showed).
+    int   currentPreset() const  { return m_volume->getTFPreset(); }
+    float currentWinC()   const  { return m_volume->defWindowCenter(); }
+    float currentWinW()   const  { return m_volume->defWindowWidth(); }
 
     // D3 stats exposure for the HTML readout. Scalars only (emscripten::val
     // packs them into a JS object on the JS side via the binding adapter).
@@ -247,15 +254,16 @@ private:
 
         glm::vec3 halfExtent(1.0f);
         assets::Volume3D vol;
-        // WASM_LIBJPEG_TURBO_PLAN W2: try the JPEG Lossless P14 sample first
-        // (16-bit lossless, 2 fragments per frame -- exercises the libjpeg-
-        // turbo jpeg16 branch + the single-frame multi-fragment merge path).
-        // Fall through to the JPEG 2000 sample (OpenJPEG regression), then to
-        // the synthetic NIfTI -- the chain keeps every preload path exercised
-        // on browser load without per-sample UI.
-        const bool loadedJpegLl = assets::loadDicomSeries("/sample_dicom_jpegll", vol);
-        const bool loadedJp2    = !loadedJpegLl && assets::loadDicomSeries("/sample_dicom_jp2", vol);
-        const bool loadedDicom  = loadedJpegLl || loadedJp2;
+        // REAL_MRI_VERIFICATION_PLAN R1: try the real 3D MR sample first so a
+        // fresh browser load lands on real MR anatomy immediately. Fall through
+        // to the JPEG Lossless P14 sample (libjpeg-turbo regression), then to
+        // the JPEG 2000 sample (OpenJPEG regression), then to the synthetic
+        // NIfTI. Every preload path stays exercised on browser load without
+        // per-sample UI.
+        const bool loadedMr     = assets::loadDicomSeries("/sample_dicom_mr", vol);
+        const bool loadedJpegLl = !loadedMr && assets::loadDicomSeries("/sample_dicom_jpegll", vol);
+        const bool loadedJp2    = !loadedMr && !loadedJpegLl && assets::loadDicomSeries("/sample_dicom_jp2", vol);
+        const bool loadedDicom  = loadedMr || loadedJpegLl || loadedJp2;
         const bool loaded = loadedDicom || assets::loadNifti("/synthetic_ct.nii", vol);
         if (loaded) {
             // No atlas override -- BrickedVolume::build now picks Static when
@@ -327,15 +335,18 @@ private:
         // identity shader the visual is identical to denoise-off; this just
         // proves the new pass routes correctly. Real A-trous lands in P2.2.
         m_volume->setDenoiseEnabled(true);
-        // CT-Bone (3) needs HU air at -1000 to look right; the LUT is
-        // designed for the upper end of [-1000, 3000] and clamps anything
-        // below normalized 0.55 to transparent. For non-CT data (MR,
-        // mammography, synthetic non-CT NIfTI) auto-window lands the values
-        // evenly across [0, 1]; pick Cloud (1) -- near-white LUT with smooth
-        // alpha ramp from ~0.30 -- so the default frame looks like a clinical
-        // grayscale-ish X-ray view rather than the warm-orange soft-tissue
-        // palette.
-        const int defaultPreset = (m_volume->getDataMin() < -500.0f) ? 3 : 1;
+        // Preset auto-pick:
+        //   CT (dataMin < -500)  -> CT-Bone (3), designed for HU [-1000, 3000]
+        //   MR (0 < dataMax < 4096, common range for T1 / T2) -> MR-T1 (5)
+        //   everything else (mammography, non-CT NIfTI) -> Cloud (1)
+        // MR-T1 has CSF-dark / GM-mid / WM-bright control points, so the
+        // fMRI / T1 anatomy actually reads as tissue instead of the uniform
+        // haze Cloud gives on the same data.
+        const float dmin = m_volume->getDataMin();
+        const float dmax = m_volume->getDataMax();
+        int defaultPreset = 1;                                   // Cloud fallback
+        if      (dmin < -500.0f)                    defaultPreset = 3;  // CT-Bone
+        else if (dmin >= 0.0f && dmax <= 4096.0f)   defaultPreset = 5;  // MR-T1
         m_volume->setTFPreset(defaultPreset);
 
         recreateDummyDepth(m_width, m_height);
@@ -524,6 +535,9 @@ EMSCRIPTEN_BINDINGS(volume_viewer) {
     emscripten::function("setAccumCap",       +[](unsigned n){ if (g_viewer) g_viewer->setAccumCap(n); });
     emscripten::function("dataMin",           +[]() -> float { return g_viewer ? g_viewer->dataMin() : 0.0f; });
     emscripten::function("dataMax",           +[]() -> float { return g_viewer ? g_viewer->dataMax() : 0.0f; });
+    emscripten::function("currentPreset",     +[]() -> int   { return g_viewer ? g_viewer->currentPreset() : 0; });
+    emscripten::function("currentWinC",       +[]() -> float { return g_viewer ? g_viewer->currentWinC()  : 0.0f; });
+    emscripten::function("currentWinW",       +[]() -> float { return g_viewer ? g_viewer->currentWinW()  : 1.0f; });
 
     // D3 stats — JS polls these from a setInterval (gated on Module._wasmBusy
     // per the ASYNCIFY discipline). Returned as individual scalars; JS packs
