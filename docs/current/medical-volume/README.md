@@ -54,6 +54,7 @@ Mini-Engine implements it:
 | [BASELINE_2026-06-07_V1_BETA.md](baselines/BASELINE_2026-06-07_V1_BETA.md) | v1-β LOD (missing brick -86%, LOD seam limit) |
 | [BASELINE_2026-06-07_DISK_PAGING.md](baselines/BASELINE_2026-06-07_DISK_PAGING.md) | Disk paging Steps 1-3 (1024³ settled RAM -11%, peak 6.57 GB) |
 | [BASELINE_2026-06-10_DISK_PAGING_STEP5.md](baselines/BASELINE_2026-06-10_DISK_PAGING_STEP5.md) | Disk paging Step 5 (1024³ peak 6.57 -> 2.30 GB, -65%) |
+| [BASELINE_2026-07-08_REAL_MRI.md](baselines/BASELINE_2026-07-08_REAL_MRI.md) | Real MRI verification (R4): 4 public series, runtime upload path, memory + CPU baselines |
 
 ---
 

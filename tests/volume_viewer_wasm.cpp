@@ -113,20 +113,21 @@ public:
     int   currentPreset() const  { return m_volume->getTFPreset(); }
     float currentWinC()   const  { return m_volume->defWindowCenter(); }
     float currentWinW()   const  { return m_volume->defWindowWidth(); }
-    // R3 -- public entry point invoked by JS after the shell has written
-    // user-uploaded DICOM bytes into /user_dicom.
-    bool reloadUserDicom() {
-        if (!m_volume) return false;
-        assets::Volume3D vol;
-        if (!assets::loadDicomSeries("/user_dicom", vol)) {
-            std::cerr << "[VolumeViewerWasm] user DICOM reload failed\n";
-            return false;
-        }
-        glm::vec3 halfExtent = applyVolumeData(vol);
-        m_volume->setAABB(-halfExtent, halfExtent);
-        m_volume->resetAccumulation();
-        return true;
-    }
+    // R3 -- deferred reload queue. JS writes user DICOM bytes to memfs and
+    // calls queueUserDicomReload(); we set a flag and return immediately
+    // (no emscripten_sleep in this path). render() picks the flag up at
+    // frame start -- BEFORE beginFrame() -- and runs the actual load
+    // synchronously in that known-safe wasm context. Calling loadDicomSeries
+    // directly from JS races: embind returns undefined the moment the wasm-
+    // side texture upload hits queue->waitIdle (emscripten_sleep), the JS
+    // finally-block clears the busy flag prematurely, and the stats poll
+    // then re-enters wasm while the reload is still in flight -> "Cannot
+    // have multiple async operations in flight" abort.
+    void queueUserDicomReload() { m_pendingUserDicomReload = true; }
+    // 0 = idle / no result yet
+    // 1 = success (last completed reload succeeded)
+    // 2 = failure (last completed reload failed)
+    int  lastReloadStatus() const { return m_lastReloadStatus; }
 
     // D3 stats exposure for the HTML readout. Scalars only (emscripten::val
     // packs them into a JS object on the JS side via the binding adapter).
@@ -185,6 +186,9 @@ private:
     double m_lastX = 0, m_lastY = 0;
     bool   m_pendingResize = false;
     int    m_pendingW = 0, m_pendingH = 0;
+    // R3 -- deferred user-DICOM reload state. See queueUserDicomReload().
+    bool   m_pendingUserDicomReload = false;
+    int    m_lastReloadStatus       = 0;   // 0=idle, 1=success, 2=failure
 
     // M4 v1: camera change triggers an accumulation reset. (Param changes reset
     // from inside their setters; the camera has no JS hook so we poll instead.)
@@ -369,6 +373,27 @@ private:
     void render() {
         const auto cpuT0 = std::chrono::steady_clock::now();
 
+        // R3 deferred reload: JS parked user-DICOM bytes in memfs and set
+        // this flag; run the actual load here, BEFORE beginFrame(), so any
+        // ASYNCIFY sleep during texture upload lives entirely inside the
+        // render loop's BusyFlagGuard window. Calling loadDicomSeries from JS
+        // directly races with the stats poll because embind returns undefined
+        // the moment wasm suspends, clearing whatever busy flag JS holds
+        // early -- see queueUserDicomReload() comment.
+        if (m_pendingUserDicomReload && m_volume) {
+            m_pendingUserDicomReload = false;
+            assets::Volume3D vol;
+            if (assets::loadDicomSeries("/user_dicom", vol)) {
+                glm::vec3 halfExtent = applyVolumeData(vol);
+                m_volume->setAABB(-halfExtent, halfExtent);
+                m_volume->resetAccumulation();
+                m_lastReloadStatus = 1;
+            } else {
+                std::cerr << "[VolumeViewerWasm] user DICOM reload failed\n";
+                m_lastReloadStatus = 2;
+            }
+        }
+
         // M4 v1: camera motion resets the running average. (Other inputs reset
         // from their JS-bound setters.) Computed before the swapchain acquire
         // so the rest of the frame stays comparison-stable across the
@@ -526,7 +551,8 @@ EMSCRIPTEN_BINDINGS(volume_viewer) {
     emscripten::function("currentPreset",     +[]() -> int   { return g_viewer ? g_viewer->currentPreset() : 0; });
     emscripten::function("currentWinC",       +[]() -> float { return g_viewer ? g_viewer->currentWinC()  : 0.0f; });
     emscripten::function("currentWinW",       +[]() -> float { return g_viewer ? g_viewer->currentWinW()  : 1.0f; });
-    emscripten::function("reloadUserDicom",   +[]() -> bool  { return g_viewer ? g_viewer->reloadUserDicom() : false; });
+    emscripten::function("queueUserDicomReload", +[]()          { if (g_viewer) g_viewer->queueUserDicomReload(); });
+    emscripten::function("lastReloadStatus",     +[]() -> int   { return g_viewer ? g_viewer->lastReloadStatus() : 0; });
 
     // D3 stats — JS polls these from a setInterval (gated on Module._wasmBusy
     // per the ASYNCIFY discipline). Returned as individual scalars; JS packs

@@ -242,14 +242,16 @@
             }
             function handleFileList(fileList) {
                 if (!fileList || fileList.length === 0) return;
-                if (typeof Module.reloadUserDicom !== 'function' || !Module.FS) {
+                if (typeof Module.queueUserDicomReload !== 'function' || !Module.FS) {
                     uploadStatus.textContent = 'wasm not ready';
                     return;
                 }
+                var t0 = performance.now();
                 var files = Array.prototype.slice.call(fileList);
                 uploadStatus.textContent = 'reading ' + files.length + ' file(s)...';
                 var reads = files.map(function(f) { return f.arrayBuffer().then(function(buf) { return { name: f.name, buf: buf }; }); });
                 Promise.all(reads).then(function(items) {
+                    var tRead = performance.now();
                     var total = items.reduce(function(a, b) { return a + b.buf.byteLength; }, 0);
                     uploadStatus.textContent = 'writing ' + (total / 1024 / 1024).toFixed(1) + ' MB to memfs...';
                     return waitWasmIdle().then(function() {
@@ -262,11 +264,44 @@
                             Module.FS.writeFile('/user_dicom/' + name, new Uint8Array(items[i].buf));
                             items[i].buf = null;  // drop reference so GC can reclaim
                         }
-                        var ok = false;
-                        try { ok = !!Module.reloadUserDicom(); } catch (e) {}
-                        uploadStatus.textContent = ok
-                            ? 'loaded ' + items.length + ' file(s) — ' + (total / 1024 / 1024).toFixed(1) + ' MB'
-                            : 'load failed (unsupported format or missing DICM magic?)';
+                        var tWrite = performance.now();
+                        // Queue the reload -- wasm picks it up at the start of
+                        // the next render() frame, BEFORE beginFrame(). Doing
+                        // the load here directly would race the stats poll:
+                        // embind returns undefined the instant wasm suspends
+                        // in an ASYNCIFY sleep (queue->waitIdle during texture
+                        // upload), the poll then re-enters wasm and trips the
+                        // "multiple async operations" abort.
+                        try { Module.queueUserDicomReload(); } catch (e) {}
+                        // Poll for completion: the render loop sets
+                        // lastReloadStatus to 1 (ok) or 2 (fail) once done.
+                        var maxWait = 15000, deadline = performance.now() + maxWait;
+                        (function poll() {
+                            if (Module._wasmBusy) { setTimeout(poll, 50); return; }
+                            var st = 0;
+                            try { st = Module.lastReloadStatus(); } catch (e) {}
+                            if (st === 0) {
+                                if (performance.now() > deadline) {
+                                    uploadStatus.textContent = 'reload timed out (' + maxWait + ' ms)';
+                                    return;
+                                }
+                                setTimeout(poll, 50);
+                                return;
+                            }
+                            var tLoad = performance.now();
+                            if (st === 1) {
+                                uploadStatus.textContent =
+                                    'loaded ' + items.length + ' file(s) · ' +
+                                    (total / 1024 / 1024).toFixed(2) + ' MB · read ' +
+                                    (tRead - t0).toFixed(0) + ' ms + write ' +
+                                    (tWrite - tRead).toFixed(0) + ' ms + decode ' +
+                                    (tLoad - tWrite).toFixed(0) + ' ms';
+                                syncFromWasm();
+                                frameStats.reset();
+                            } else {
+                                uploadStatus.textContent = 'load failed (unsupported format or missing DICM magic?)';
+                            }
+                        })();
                     });
                 }).catch(function(err) {
                     uploadStatus.textContent = 'error: ' + (err && err.message ? err.message : err);
@@ -279,12 +314,11 @@
                 handleFileList(ev.target.files); ev.target.value = '';
             });
 
-            // R2 UI sync -- wait for wasm to finish initialisation, then pull
-            // the actual preset / window / data range and push into the HTML
-            // controls so the dropdown and sliders reflect what's really on
-            // the GPU (auto-picked preset for non-CT was previously
-            // out-of-sync with the "CT-Bone" default the dropdown showed).
-            (function syncFromWasm() {
+            // R2 UI sync -- named so R3's upload flow can call it again after
+            // a runtime swap. Pulls the wasm-side preset / window / data range
+            // and pushes them into the HTML controls so the dropdown and
+            // sliders reflect what's really on the GPU.
+            function syncFromWasm() {
                 if (Module._wasmBusy || typeof Module.currentPreset !== 'function' ||
                     typeof Module.dataMin !== 'function' || Module.volW() === 0) {
                     setTimeout(syncFromWasm, 100);
@@ -308,6 +342,38 @@
                         'range [' + Math.round(dmin) + ', ' + Math.round(dmax) + '] · ' +
                         presetName;
                 } catch (e) {}
+            }
+            syncFromWasm();
+
+            // R4 -- frame time ring buffer. lastRenderMs() returns the wasm
+            // side's most recent CPU render cost; we sample every stats tick
+            // (~500 ms) and derive a stable mean + observed max over ~30 s of
+            // history. reset() nulls the ring so a fresh volume upload doesn't
+            // carry stale samples into the readout.
+            var frameStats = (function() {
+                var N = 60;
+                var buf = new Array(N);
+                var next = 0;
+                var filled = 0;
+                return {
+                    push: function(v) {
+                        if (!(v > 0)) return;
+                        buf[next] = v;
+                        next = (next + 1) % N;
+                        if (filled < N) ++filled;
+                    },
+                    reset: function() { next = 0; filled = 0; },
+                    summarise: function() {
+                        if (filled === 0) return { n: 0, mean: 0, max: 0 };
+                        var sum = 0, max = 0;
+                        for (var i = 0; i < filled; ++i) {
+                            var v = buf[i];
+                            sum += v;
+                            if (v > max) max = v;
+                        }
+                        return { n: filled, mean: sum / filled, max: max };
+                    }
+                };
             })();
 
             // Stats poll. Same _wasmBusy gate as the command flush -- the
@@ -325,7 +391,15 @@
                 var mbUsed = Module.atlasMBUsed(), mbAlloc = Module.atlasMBAlloc();
                 var denseMB = Module.denseMB();
                 var ms = Module.lastRenderMs();
+                frameStats.push(ms);
+                var fs = frameStats.summarise();
+                // saved > 0 -> compression win; saved < 0 -> single-slice / thin
+                // volume where atlas padding costs more than the raw dense
+                // storage. Format so the sign reads correctly either way.
                 var saved = denseMB > 0 ? (100 * (1 - mbAlloc / denseMB)) : 0;
+                var savedStr = (saved >= 0)
+                    ? '-' + saved.toFixed(1) + '% vs dense'
+                    : '+' + Math.min(9999, -saved).toFixed(0) + '% overhead';
                 var vis = Module.visibleBricks(), visNE = Module.visibleNonEmpty();
                 var streaming = Module.isStreaming();
                 var modeStr = streaming ? 'Streaming (v1-alpha)' : 'Static';
@@ -347,8 +421,11 @@
                     'Volume: ' + vw + 'x' + vh + 'x' + vd + '  (' + denseMB.toFixed(1) + ' MB dense)\n' +
                     'Page:   ' + pgx + 'x' + pgy + 'x' + pgz + '  (' + (pgx*pgy*pgz) + ' bricks)\n' +
                     'Atlas:  ' + ax + 'x' + ay + 'x' + az + '  ' + used + '/' + tot + ' slots\n' +
-                    'Memory: ' + mbUsed.toFixed(1) + ' / ' + mbAlloc.toFixed(1) + ' MB  (-' + saved.toFixed(1) + '% vs dense)\n' +
-                    'CPU:    ' + ms.toFixed(2) + ' ms/frame\n' +
+                    'Memory: ' + mbUsed.toFixed(1) + ' / ' + mbAlloc.toFixed(1) + ' MB  (' + savedStr + ')\n' +
+                    'CPU:    ' + ms.toFixed(2) + ' ms/frame  (mean ' +
+                        (fs.n ? fs.mean.toFixed(2) : '--') + ' / max ' +
+                        (fs.n ? fs.max.toFixed(2) : '--') + ' over ' +
+                        fs.n + ' samples)\n' +
                     'Mode:   ' + modeStr + '\n' +
                     line +
                     accumLine;

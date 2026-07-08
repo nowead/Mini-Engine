@@ -46,7 +46,7 @@ Gaps against the stated goal:
 
 ## 2. Atomic Steps
 
-### Step R1 -- Bundle a real MR series + verify default render (~0.5-1 session)
+### Step R1 -- Bundle a real MR series + verify default render (~0.5-1 session)   ✅ `933faa5`
 
 - Pick a small public MR series with clear anatomy. Candidates:
   - pydicom-data `MR-SIEMENS-DICOM-WithOverlays.dcm` (single slice,
@@ -64,7 +64,7 @@ Gaps against the stated goal:
 **Expected outcome**: real brain / whatever anatomy displays. If the
 default render looks off, Step R2 kicks in.
 
-### Step R2 -- Tune MR-T1 / MR-T2 preset LUTs for real signal (~0.5-1 session, conditional)
+### Step R2 -- Tune MR-T1 / MR-T2 preset LUTs for real signal (~0.5-1 session, conditional)   ✅ `933faa5` (preset auto-pick sufficed; LUT retuning not needed)
 
 - Only run if R1 exposes preset issues (contrast wrong, tissue not
   differentiated, alpha ramp misplaced).
@@ -75,7 +75,7 @@ default render looks off, Step R2 kicks in.
   (CSF dark on T1, CSF bright on T2, WM bright on T1, etc.).
 - Verify: same sample looks anatomically correct with either preset.
 
-### Step R3 -- Runtime DICOM upload via `<input type="file">` (~2 sessions)
+### Step R3 -- Runtime DICOM upload via `<input type="file">` (~2 sessions)   ✅ `91cf26a` (initial) + this commit (deferred-reload fix)
 
 - WASM: HTML `<input type="file" multiple webkitdirectory>` for a
   DICOM directory. Or single .zip / .tar for the simpler case.
@@ -98,7 +98,7 @@ synchronous call after all buffers ready).
 (one file at a time, free the JS ArrayBuffer after each `FS.writeFile`)
 avoids doubling that in JS heap. Document the observed ceiling.
 
-### Step R4 -- Live FPS + memory HUD on real MR sizes (~0.5-1 session)
+### Step R4 -- Live FPS + memory HUD on real MR sizes (~0.5-1 session)   ✅ (this commit)
 
 - The stats panel already shows CPU ms/frame and atlas memory; extend
   with:

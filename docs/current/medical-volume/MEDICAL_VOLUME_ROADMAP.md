@@ -408,7 +408,49 @@ v1-β LOD + DICOM (Implicit VR + 압축) + Disk paging Steps 1-3 까지가 한 �
 
 ---
 
-### 현재 활성 방향 — 실 MRI 검증 트랙 (2026-07-07~)
+### 실 MRI 검증 트랙 완료 (2026-07-07~2026-07-08)
+
+- **R1 실 MR 번들 + preset 자동 선택 + UI sync** (`933faa5`) — pydicom-data
+  emri_small (fMRI 64×64×10) preload + fallback chain 상단 배치;
+  preset heuristic 확장 (CT/-500 · MR/0-4096 · else Cloud); JS ↔ wasm
+  UI 값 동기화 (dropdown / window slider / subtitle).
+- **R3 런타임 DICOM 업로드** (`91cf26a` → deferred-reload 후속) —
+  `<input type="file" webkitdirectory>` + memfs write + wasm 측
+  deferred-reload 패턴 (`queueUserDicomReload` → render() 시작에서 처리
+  → `lastReloadStatus` 폴). 초기 즉시 호출 버전은 embind 가 wasm suspend
+  시 즉시 undefined return → JS finally 가 busy flag 조기 해제 → 재진입
+  crash. 원인 진단 후 M3-3 swapchain race 와 동일한 defer-to-render 패턴
+  으로 근본 해결.
+- **R4 FPS/메모리 HUD + baseline** (2026-07-08) — frame time ring buffer
+  (mean / max, 500 ms 샘플, ~60 sample window), 업로드 latency
+  breakdown (read / write / decode), 얇은 볼륨 memory overhead 표시
+  버그 (--%%%) 수정. 4개 공개 시리즈 baseline 측정:
+  [BASELINE_2026-07-08_REAL_MRI.md](baselines/BASELINE_2026-07-08_REAL_MRI.md).
+  관측: fMRI 3D shape 은 memory overhead +602% 로 상대적으로 낮음, 단일
+  슬라이스 (`d=1`) 는 atlas depth 낭비로 +6919~7754% 오버헤드 — bricking
+  의 정직한 한계. CPU 는 dim 이 아니라 content-driven (fMRI 6.5 ms
+  vs 매머그래피 2.4 ms).
+
+**목표 달성**: 프로젝트의 원 목표 — "실제 MRI 를 유의미한 프레임과
+메모리로 화면에 띄우기" — 대응 완료. 사용자가 자신의 DICOM 폴더를
+브라우저에 드래그하면 즉시 렌더 되며, 실 fMRI 데이터에서 6.5 ms/frame
+(=153 FPS 이론상, 실제 60 FPS 캡) 로 실시간 동작. 계획서:
+[REAL_MRI_VERIFICATION_PLAN.md](plans/REAL_MRI_VERIFICATION_PLAN.md).
+
+---
+
+### 현재 활성 방향 (2026-07-08~)
+
+실 MRI 검증 트랙이 원 프로젝트 목표를 충족했으므로 **활성 트랙 없음**.
+다음 트랙 방향은 사용자와 재협의 필요. 후보: 유예된 트랙 (M4 v2 P3.2 /
+P3.3 / P4 · JPEG-LS · DICOM mmap · 즉흥 폴리시) 재개 또는 신규 방향
+(예: HDR equirect IBL, 임상 워크플로우 통합, 대용량 TCIA CT).
+
+---
+
+### (지난 문단 유지 — 실 MRI 트랙 진행 순서 기록)
+
+### 실 MRI 검증 트랙 (2026-07-07~) — 원 계획
 
 **결정**: M4 v2 P3.1 도달 시점에서 프로젝트의 원 목표 — "실제 MRI 영상을
 유의미한 프레임과 메모리로 화면에 띄우기" — 를 정면으로 밟기 위해 pivot.

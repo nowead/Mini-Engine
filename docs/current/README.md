@@ -29,6 +29,7 @@ WebGPU 기반 차세대 클라이언트 사이드 **의료 볼륨 렌더러**로
 | [BASELINE_2026-06-07_V1_BETA.md](medical-volume/baselines/BASELINE_2026-06-07_V1_BETA.md) | v1-β LOD 측정 (missing brick 2320→326 -86%) + 알려진 한계 (LOD seam, stale-LOD blur) |
 | [BASELINE_2026-06-07_DISK_PAGING.md](medical-volume/baselines/BASELINE_2026-06-07_DISK_PAGING.md) | Disk paging Steps 1-3 measurement (1024³ 정착 RAM 2.69→2.38 GB, 피크 6.57 GB 한계) |
 | [BASELINE_2026-06-10_DISK_PAGING_STEP5.md](medical-volume/baselines/BASELINE_2026-06-10_DISK_PAGING_STEP5.md) | Disk paging Step 5 measurement (1024³ 피크 6.57→2.30 GB -65%, 16 GB RAM에서 8 GB 데이터 가능성) |
+| [BASELINE_2026-07-08_REAL_MRI.md](medical-volume/baselines/BASELINE_2026-07-08_REAL_MRI.md) | 실 MRI 검증 (R4) — 4개 공개 시리즈, 런타임 업로드 경로 · atlas / CPU baseline · thin-volume overhead 관측 |
 
 **M1 (실데이터 기반) 완료** (2026-05-29): R16Float 16비트 · window/level ·
 NIfTI 로더 + float 강도 경로 + 임상 윈도우 프리셋.
