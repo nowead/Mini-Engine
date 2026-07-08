@@ -113,6 +113,20 @@ public:
     int   currentPreset() const  { return m_volume->getTFPreset(); }
     float currentWinC()   const  { return m_volume->defWindowCenter(); }
     float currentWinW()   const  { return m_volume->defWindowWidth(); }
+    // R3 -- public entry point invoked by JS after the shell has written
+    // user-uploaded DICOM bytes into /user_dicom.
+    bool reloadUserDicom() {
+        if (!m_volume) return false;
+        assets::Volume3D vol;
+        if (!assets::loadDicomSeries("/user_dicom", vol)) {
+            std::cerr << "[VolumeViewerWasm] user DICOM reload failed\n";
+            return false;
+        }
+        glm::vec3 halfExtent = applyVolumeData(vol);
+        m_volume->setAABB(-halfExtent, halfExtent);
+        m_volume->resetAccumulation();
+        return true;
+    }
 
     // D3 stats exposure for the HTML readout. Scalars only (emscripten::val
     // packs them into a JS object on the JS side via the binding adapter).
@@ -247,6 +261,38 @@ private:
         m_dummyDepthView = m_dummyDepth->createView(dvd);
     }
 
+    // R3 refactor: shared volume-configuration path so both the initial
+    // preload fallback chain and the runtime user-DICOM reload land on the
+    // same window / preset / AABB / camera policies.
+    glm::vec3 applyVolumeData(const assets::Volume3D& vol) {
+        m_volume->loadFromFloatData(vol.intensity, vol.w, vol.h, vol.d);
+        glm::vec3 ext(vol.w * vol.spacingX, vol.h * vol.spacingY, vol.d * vol.spacingZ);
+        const float m = std::max({ext.x, ext.y, ext.z});
+        glm::vec3 halfExtent = (m > 0.0f) ? ext / m : glm::vec3(1.0f);
+        const float minHalf = 0.10f;
+        halfExtent.x = std::max(halfExtent.x, minHalf);
+        halfExtent.y = std::max(halfExtent.y, minHalf);
+        halfExtent.z = std::max(halfExtent.z, minHalf);
+        if (m_volume->getDataMin() < -500.0f) {
+            m_volume->setWindowCenter(300.0f);
+            m_volume->setWindowWidth(1500.0f);
+        }
+        m_volume->setExtinction(10.0f);
+        if (vol.d == 1) {
+            m_camera.setOrbit(0.0f, 0.0f, 2.3f);
+        }
+        EM_ASM({ Module._dataMin = $0; Module._dataMax = $1; },
+               m_volume->getDataMin(), m_volume->getDataMax());
+        // Preset auto-pick (same heuristic as R2).
+        const float dmin = m_volume->getDataMin();
+        const float dmax = m_volume->getDataMax();
+        int defaultPreset = 1;
+        if      (dmin < -500.0f)                    defaultPreset = 3;
+        else if (dmin >= 0.0f && dmax <= 4096.0f)   defaultPreset = 5;
+        m_volume->setTFPreset(defaultPreset);
+        return halfExtent;
+    }
+
     void initVolume() {
         auto* q = m_device->getQueue(rhi::QueueType::Graphics);
         m_volume = std::make_unique<rendering::VolumeRenderer>(m_device, q);
@@ -266,54 +312,7 @@ private:
         const bool loadedDicom  = loadedMr || loadedJpegLl || loadedJp2;
         const bool loaded = loadedDicom || assets::loadNifti("/synthetic_ct.nii", vol);
         if (loaded) {
-            // No atlas override -- BrickedVolume::build now picks Static when
-            // the non-empty bricks fit, Streaming otherwise. Streaming used
-            // to be unsafe on WASM because the per-frame staging map
-            // suspended ASYNCIFY mid-frame and the swapchain texture
-            // acquired earlier would be destroyed by the time we submitted;
-            // that race is gone now that render() runs updateBrickStreaming
-            // before beginFrame().
-            m_volume->loadFromFloatData(vol.intensity, vol.w, vol.h, vol.d);
-            glm::vec3 ext(vol.w * vol.spacingX, vol.h * vol.spacingY, vol.d * vol.spacingZ);
-            const float m = std::max({ext.x, ext.y, ext.z});
-            halfExtent = (m > 0.0f) ? ext / m : glm::vec3(1.0f);
-            // Pad the thinnest dimension up to a minimum half-extent. For
-            // single-slice 2D DICOMs (depth=1 voxel; mammography, single CT
-            // slice) the ray-marching path through the volume otherwise
-            // collapses to near zero and no alpha accumulates -> black. The
-            // pad is applied to the AABB only; the texture itself stays at
-            // its real voxel resolution, so sampling outside the data range
-            // returns the slice value, giving a slab-extruded look that is
-            // actually useful for inspecting a single slice in 3D.
-            const float minHalf = 0.10f;
-            halfExtent.x = std::max(halfExtent.x, minHalf);
-            halfExtent.y = std::max(halfExtent.y, minHalf);
-            halfExtent.z = std::max(halfExtent.z, minHalf);
-            // Only apply the clinical bone HU window when the data actually
-            // looks like CT (signed, with air at -1000). Other modalities --
-            // MR, mammography, the synthetic non-CT NIfTI -- already have a
-            // sensible auto-fit window set by loadFromFloatData (center =
-            // (min+max)/2, width = max-min). Overriding to 300/1500 on a
-            // [0, 278] JPEG-LL sample mapped everything into the lower 30% of
-            // the LUT, where the CT-Bone preset is fully transparent -> black.
-            if (m_volume->getDataMin() < -500.0f) {
-                m_volume->setWindowCenter(300.0f);   // clinical bone HU
-                m_volume->setWindowWidth(1500.0f);
-            }
-            m_volume->setExtinction(10.0f);
-            // For single-slice 2D DICOMs, override the default 35° pitch
-            // orbit with a face-on view (camera looking straight down -Z)
-            // so the slice fills the canvas symmetrically. The 3D-volume
-            // pitch makes the same image look top-heavy because perspective
-            // foreshortens the lower half more than the upper half.
-            if (vol.d == 1) {
-                m_camera.setOrbit(0.0f, 0.0f, 2.3f);
-            }
-            // Push the data range to JS so the "Full" window button reads a cached
-            // value instead of calling into wasm mid-frame (which would abort under
-            // ASYNCIFY if a frame is suspended in a fence wait).
-            EM_ASM({ Module._dataMin = $0; Module._dataMax = $1; },
-                   m_volume->getDataMin(), m_volume->getDataMax());
+            halfExtent = applyVolumeData(vol);
         } else {
             std::cerr << "[VolumeViewerWasm] no DICOM / NIfTI preload -> procedural\n";
         }
@@ -335,19 +334,8 @@ private:
         // identity shader the visual is identical to denoise-off; this just
         // proves the new pass routes correctly. Real A-trous lands in P2.2.
         m_volume->setDenoiseEnabled(true);
-        // Preset auto-pick:
-        //   CT (dataMin < -500)  -> CT-Bone (3), designed for HU [-1000, 3000]
-        //   MR (0 < dataMax < 4096, common range for T1 / T2) -> MR-T1 (5)
-        //   everything else (mammography, non-CT NIfTI) -> Cloud (1)
-        // MR-T1 has CSF-dark / GM-mid / WM-bright control points, so the
-        // fMRI / T1 anatomy actually reads as tissue instead of the uniform
-        // haze Cloud gives on the same data.
-        const float dmin = m_volume->getDataMin();
-        const float dmax = m_volume->getDataMax();
-        int defaultPreset = 1;                                   // Cloud fallback
-        if      (dmin < -500.0f)                    defaultPreset = 3;  // CT-Bone
-        else if (dmin >= 0.0f && dmax <= 4096.0f)   defaultPreset = 5;  // MR-T1
-        m_volume->setTFPreset(defaultPreset);
+        // Preset auto-pick already applied inside applyVolumeData() on the
+        // initial load; nothing to do here.
 
         recreateDummyDepth(m_width, m_height);
         if (!m_volume->createPipeline(m_dummyDepthView.get(), nullptr, m_swapchain->getFormat())) {
@@ -538,6 +526,7 @@ EMSCRIPTEN_BINDINGS(volume_viewer) {
     emscripten::function("currentPreset",     +[]() -> int   { return g_viewer ? g_viewer->currentPreset() : 0; });
     emscripten::function("currentWinC",       +[]() -> float { return g_viewer ? g_viewer->currentWinC()  : 0.0f; });
     emscripten::function("currentWinW",       +[]() -> float { return g_viewer ? g_viewer->currentWinW()  : 1.0f; });
+    emscripten::function("reloadUserDicom",   +[]() -> bool  { return g_viewer ? g_viewer->reloadUserDicom() : false; });
 
     // D3 stats — JS polls these from a setInterval (gated on Module._wasmBusy
     // per the ASYNCIFY discipline). Returned as individual scalars; JS packs

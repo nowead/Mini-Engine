@@ -29,6 +29,13 @@
     #status { position: fixed; left: 12px; bottom: 12px; color: #8b95a7; font-size: 11px; }
     #hint { position: fixed; left: 12px; top: 12px; color: #6f7a8c; font-size: 11px; }
     #stats { font-size: 11px; color: #cfd3dc; margin: 4px 0 0 0; line-height: 1.4; }
+    .upload-row { align-items: stretch; }
+    .upload-btn { display: block; padding: 6px 10px; color: white; border-radius: 4px;
+        cursor: pointer; flex: 1; text-align: center; font-size: 12px; }
+    .upload-btn.primary   { background: #2c3e50; }
+    .upload-btn.secondary { background: #34495e; }
+    .upload-file-input { display: none; }
+    #uploadStatus { font-size: 11px; color: #aaa; margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -39,6 +46,17 @@
     <div id="panel">
         <h1>CT / MRI Volume Viewer</h1>
         <div class="sub" id="subtitle">WebGPU · loading…</div>
+
+        <div class="sec">Load DICOM (runtime)</div>
+        <div class="row upload-row">
+            <label for="dicomUpload" class="upload-btn primary">Pick DICOM folder</label>
+            <input id="dicomUpload" type="file" webkitdirectory multiple class="upload-file-input">
+        </div>
+        <div class="row upload-row">
+            <label for="dicomUploadFiles" class="upload-btn secondary">Pick DICOM files</label>
+            <input id="dicomUploadFiles" type="file" multiple accept=".dcm,application/dicom" class="upload-file-input">
+        </div>
+        <div id="uploadStatus"></div>
 
         <div class="sec">Transfer function</div>
         <div class="row">
@@ -195,6 +213,71 @@
             document.getElementById('wBone').addEventListener('click', function() { setWin(300, 1500); });
             document.getElementById('wSoft').addEventListener('click', function() { setWin(40, 400); });
             document.getElementById('wLung').addEventListener('click', function() { setWin(-600, 1500); });
+
+            // R3 -- runtime DICOM upload. Read all files JS-side (async, wasm
+            // untouched), park until wasm is not busy, then batch-write to memfs
+            // and call Module.reloadUserDicom() exactly once. The busy gate
+            // matters because ASYNCIFY forbids re-entering wasm while another
+            // call is suspended in emscripten_sleep (fence wait).
+            var uploadStatus = document.getElementById('uploadStatus');
+            function waitWasmIdle() {
+                return new Promise(function(resolve) {
+                    (function step() {
+                        if (!Module._wasmBusy) resolve();
+                        else setTimeout(step, 50);
+                    })();
+                });
+            }
+            function ensureUserDir() {
+                try { Module.FS.mkdir('/user_dicom'); } catch (e) {}
+                // Purge previous upload so old series don't blend in.
+                try {
+                    var stale = Module.FS.readdir('/user_dicom');
+                    for (var i = 0; i < stale.length; ++i) {
+                        var n = stale[i];
+                        if (n === '.' || n === '..') continue;
+                        try { Module.FS.unlink('/user_dicom/' + n); } catch (e) {}
+                    }
+                } catch (e) {}
+            }
+            function handleFileList(fileList) {
+                if (!fileList || fileList.length === 0) return;
+                if (typeof Module.reloadUserDicom !== 'function' || !Module.FS) {
+                    uploadStatus.textContent = 'wasm not ready';
+                    return;
+                }
+                var files = Array.prototype.slice.call(fileList);
+                uploadStatus.textContent = 'reading ' + files.length + ' file(s)...';
+                var reads = files.map(function(f) { return f.arrayBuffer().then(function(buf) { return { name: f.name, buf: buf }; }); });
+                Promise.all(reads).then(function(items) {
+                    var total = items.reduce(function(a, b) { return a + b.buf.byteLength; }, 0);
+                    uploadStatus.textContent = 'writing ' + (total / 1024 / 1024).toFixed(1) + ' MB to memfs...';
+                    return waitWasmIdle().then(function() {
+                        ensureUserDir();
+                        for (var i = 0; i < items.length; ++i) {
+                            // Sanitize the name -- webkitdirectory gives 'folder/file.dcm'
+                            // paths; we flatten to a single directory since
+                            // loadDicomSeries collects all .dcm inside.
+                            var name = items[i].name.replace(/^.*[\\/]/, '') || ('slice_' + i + '.dcm');
+                            Module.FS.writeFile('/user_dicom/' + name, new Uint8Array(items[i].buf));
+                            items[i].buf = null;  // drop reference so GC can reclaim
+                        }
+                        var ok = false;
+                        try { ok = !!Module.reloadUserDicom(); } catch (e) {}
+                        uploadStatus.textContent = ok
+                            ? 'loaded ' + items.length + ' file(s) — ' + (total / 1024 / 1024).toFixed(1) + ' MB'
+                            : 'load failed (unsupported format or missing DICM magic?)';
+                    });
+                }).catch(function(err) {
+                    uploadStatus.textContent = 'error: ' + (err && err.message ? err.message : err);
+                });
+            }
+            document.getElementById('dicomUpload').addEventListener('change', function(ev) {
+                handleFileList(ev.target.files); ev.target.value = '';
+            });
+            document.getElementById('dicomUploadFiles').addEventListener('change', function(ev) {
+                handleFileList(ev.target.files); ev.target.value = '';
+            });
 
             // R2 UI sync -- wait for wasm to finish initialisation, then pull
             // the actual preset / window / data range and push into the HTML

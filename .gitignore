@@ -4,6 +4,10 @@
 *.nii.gz
 *.dcm
 
+# Test DICOM series bundled locally for the runtime upload flow (R3).
+# Fetch via scripts/fetch_test_dicom.py; contents are all public samples.
+/test_data/
+
 # Visual Studio
 .vs/
 *.vsidx

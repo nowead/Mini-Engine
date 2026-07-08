@@ -1030,6 +1030,10 @@ else()
         "SHELL:-s ASSERTIONS=1"
         "SHELL:-s DISABLE_EXCEPTION_CATCHING=0"
         "SHELL:-s ERROR_ON_UNDEFINED_SYMBOLS=0"
+        # R3: expose FS runtime helpers to JS so the shell can memfs-write
+        # user-uploaded DICOM bytes before calling reloadUserDicom().
+        "SHELL:-s EXPORTED_RUNTIME_METHODS=['FS','ccall','cwrap']"
+        "SHELL:-s FORCE_FILESYSTEM=1"
         "SHELL:-O2"
         "SHELL:--bind"
         "SHELL:--preload-file ${VV_SHADER_DIR}@/shaders"
