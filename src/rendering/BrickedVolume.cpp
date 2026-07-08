@@ -106,6 +106,11 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
     m_pageGrid  = glm::uvec3((w + kBrickSize - 1) / kBrickSize,
                              (h + kBrickSize - 1) / kBrickSize,
                              (d + kBrickSize - 1) / kBrickSize);
+    // Start with uniform L0 sizing. If we land in Static mode below, per-axis
+    // shrinking kicks in for axes with pageGrid == 1 (Option C thin-volume
+    // fix). Streaming keeps uniform because packBrickToStaging assumes 66^3.
+    m_brickInteriorL0 = glm::uvec3(kBrickSize, kBrickSize, kBrickSize);
+    m_brickHaloL0     = glm::uvec3(1u, 1u, 1u);
     const uint32_t totalPageEntries = m_pageGrid.x * m_pageGrid.y * m_pageGrid.z;
 
     // ------------------------------------------------------------------
@@ -139,10 +144,11 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
     // override the policy entirely.
     if (atlasGrid.x == 0 || atlasGrid.y == 0 || atlasGrid.z == 0) {
         atlasGrid = m_pageGrid;
-        auto atlasBytesOf = [](glm::uvec3 a) {
-            const uint64_t vx = static_cast<uint64_t>(a.x) * kBrickStored;
-            const uint64_t vy = static_cast<uint64_t>(a.y) * kBrickStored;
-            const uint64_t vz = static_cast<uint64_t>(a.z) * kBrickStored;
+        const glm::uvec3 bs0Local = m_brickInteriorL0 + 2u * m_brickHaloL0;
+        auto atlasBytesOf = [&](glm::uvec3 a) {
+            const uint64_t vx = static_cast<uint64_t>(a.x) * bs0Local.x;
+            const uint64_t vy = static_cast<uint64_t>(a.y) * bs0Local.y;
+            const uint64_t vz = static_cast<uint64_t>(a.z) * bs0Local.z;
             return vx * vy * vz * 2;  // R16Float
         };
         while (atlasBytesOf(atlasGrid) > kAutoAtlasBudgetBytes &&
@@ -162,52 +168,30 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
     }
     m_atlasGrid = atlasGrid;
 
-    const uint32_t atlasVoxelsX = atlasGrid.x * kBrickStored;
-    const uint32_t atlasVoxelsY = atlasGrid.y * kBrickStored;
-    const uint32_t atlasVoxelsZ = atlasGrid.z * kBrickStored;
-    const uint32_t totalSlots   = atlasGrid.x * atlasGrid.y * atlasGrid.z;
-
-    // ------------------------------------------------------------------
-    // 1. Build the atlas image + page table in CPU memory.
-    // ------------------------------------------------------------------
-    // Atlas storage: row-major (x-fastest) with WebGPU's 256-byte row alignment.
-    const uint32_t tightBytesPerRow = atlasVoxelsX * 2;
-#ifdef __EMSCRIPTEN__
-    const uint32_t paddedBytesPerRow = (tightBytesPerRow + 255u) & ~255u;
-#else
-    const uint32_t paddedBytesPerRow = tightBytesPerRow;
-#endif
-    const uint64_t atlasBytes =
-        static_cast<uint64_t>(paddedBytesPerRow) * atlasVoxelsY * atlasVoxelsZ;
-
-    // Initialise atlas with the empty value -- bricks we never write stay "air".
-    // (uint16_t per voxel; memset works for byte fills, so use std::fill on a
-    // uint16-typed view of the buffer for correctness.)
-    std::vector<uint8_t> atlasBuf;
-    atlasBuf.resize(atlasBytes);
-    {
-        // Fill each row's "live" prefix with emptyValueHalf; padding stays 0
-        // (never sampled because atlas dims are exactly atlasVoxelsX-wide).
-        for (uint32_t z = 0; z < atlasVoxelsZ; ++z) {
-            for (uint32_t y = 0; y < atlasVoxelsY; ++y) {
-                uint16_t* row = reinterpret_cast<uint16_t*>(
-                    atlasBuf.data() + (static_cast<uint64_t>(z) * atlasVoxelsY + y) * paddedBytesPerRow);
-                std::fill(row, row + atlasVoxelsX, emptyValueHalf);
-            }
-        }
-    }
-
-    std::vector<uint32_t> pageTable(totalPageEntries, kEmptySlot);
+    const uint32_t totalSlots = atlasGrid.x * atlasGrid.y * atlasGrid.z;
 
     // ------------------------------------------------------------------
     // Mode decision. Static when every non-empty brick fits the atlas
     // (v0 behaviour); Streaming when not. v1-3 alpha: the pre-scan already
     // ran (before atlas auto-sizing) so we just compare counts here.
+    //
+    // Option C thin-volume fix (this commit): once the mode is decided we
+    // adjust m_brickInteriorL0 / m_brickHaloL0. Static-only because the
+    // streaming pack still writes uniform 66^3 per brick; per-axis
+    // streaming is a follow-up.
     // ------------------------------------------------------------------
     if (nonEmptyCount <= totalSlots) {
         m_mode = Mode::StaticFullyLoaded;
+        m_brickInteriorL0 = glm::uvec3(
+            (m_pageGrid.x == 1) ? w : kBrickSize,
+            (m_pageGrid.y == 1) ? h : kBrickSize,
+            (m_pageGrid.z == 1) ? d : kBrickSize);
+        m_brickHaloL0 = glm::uvec3(m_pageGrid.x > 1 ? 1u : 0u,
+                                    m_pageGrid.y > 1 ? 1u : 0u,
+                                    m_pageGrid.z > 1 ? 1u : 0u);
     } else {
         m_mode = Mode::Streaming;
+        // m_brickInteriorL0 / m_brickHaloL0 already at uniform defaults.
         // Recommended atlasGrid for Static. Cube-root rounded up, clamped by
         // pageGrid. Memory estimate uses the same R16Float * kBrickStored^3
         // accounting as atlasBytesAllocated().
@@ -236,6 +220,32 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
             << "visible-set << atlas (zoom-in workflows on large volumes).";
     }
 
+    // Now that mode + per-axis L0 sizing are decided, compute the actual
+    // atlas voxel dimensions and allocate the CPU-side atlas buffer.
+    const glm::uvec3 bs0        = brickStoredL0();
+    const uint32_t atlasVoxelsX = atlasGrid.x * bs0.x;
+    const uint32_t atlasVoxelsY = atlasGrid.y * bs0.y;
+    const uint32_t atlasVoxelsZ = atlasGrid.z * bs0.z;
+    const uint32_t tightBytesPerRow = atlasVoxelsX * 2;
+#ifdef __EMSCRIPTEN__
+    const uint32_t paddedBytesPerRow = (tightBytesPerRow + 255u) & ~255u;
+#else
+    const uint32_t paddedBytesPerRow = tightBytesPerRow;
+#endif
+    const uint64_t atlasBytes =
+        static_cast<uint64_t>(paddedBytesPerRow) * atlasVoxelsY * atlasVoxelsZ;
+
+    std::vector<uint8_t> atlasBuf;
+    atlasBuf.resize(atlasBytes);
+    for (uint32_t z = 0; z < atlasVoxelsZ; ++z) {
+        for (uint32_t y = 0; y < atlasVoxelsY; ++y) {
+            uint16_t* row = reinterpret_cast<uint16_t*>(
+                atlasBuf.data() + (static_cast<uint64_t>(z) * atlasVoxelsY + y) * paddedBytesPerRow);
+            std::fill(row, row + atlasVoxelsX, emptyValueHalf);
+        }
+    }
+    std::vector<uint32_t> pageTable(totalPageEntries, kEmptySlot);
+
     // ------------------------------------------------------------------
     // 1c. Static-only packing pass. Streaming mode skips this entirely;
     // atlasBuf stays filled with emptyValueHalf and pageTable stays
@@ -259,16 +269,27 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
                     const uint32_t sx = slot % atlasGrid.x;
                     const uint32_t sy = (slot / atlasGrid.x) % atlasGrid.y;
                     const uint32_t sz =  slot / (atlasGrid.x * atlasGrid.y);
-                    const uint32_t aOriginX = sx * kBrickStored;
-                    const uint32_t aOriginY = sy * kBrickStored;
-                    const uint32_t aOriginZ = sz * kBrickStored;
+                    // Per-axis slot origin (bs0 already resolved via
+                    // brickStoredL0()). aOrigin marks the top-left of the
+                    // stored brick block including halo padding on both
+                    // sides -- so the interior starts at aOrigin + halo.
+                    const uint32_t aOriginX = sx * bs0.x;
+                    const uint32_t aOriginY = sy * bs0.y;
+                    const uint32_t aOriginZ = sz * bs0.z;
 
-                    // Copy the 66^3 brick (interior + 1-voxel halo) from source.
-                    const int srcX0 = static_cast<int>(bx * kBrickSize) - 1;
-                    const int srcY0 = static_cast<int>(by * kBrickSize) - 1;
-                    const int srcZ0 = static_cast<int>(bz * kBrickSize) - 1;
-                    for (uint32_t lz = 0; lz < kBrickStored; ++lz) {
-                        for (uint32_t ly = 0; ly < kBrickStored; ++ly) {
+                    // Per-axis brick pack. Halo axis contributes -halo starting
+                    // offset in source coords (so the halo voxel to the left of
+                    // the interior is clamped-copied from the neighboring brick
+                    // via srcVoxelHalfBits' std::clamp). When halo=0 on an axis
+                    // the loop just covers the interior extent.
+                    const int srcX0 = static_cast<int>(bx * kBrickSize)
+                                    - static_cast<int>(m_brickHaloL0.x);
+                    const int srcY0 = static_cast<int>(by * kBrickSize)
+                                    - static_cast<int>(m_brickHaloL0.y);
+                    const int srcZ0 = static_cast<int>(bz * kBrickSize)
+                                    - static_cast<int>(m_brickHaloL0.z);
+                    for (uint32_t lz = 0; lz < bs0.z; ++lz) {
+                        for (uint32_t ly = 0; ly < bs0.y; ++ly) {
                             uint16_t* dstRow = reinterpret_cast<uint16_t*>(
                                 atlasBuf.data()
                                 + (static_cast<uint64_t>(aOriginZ + lz) * atlasVoxelsY
@@ -276,7 +297,7 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
                                 + aOriginX * 2);
                             const int srcZ = srcZ0 + static_cast<int>(lz);
                             const int srcY = srcY0 + static_cast<int>(ly);
-                            for (uint32_t lx = 0; lx < kBrickStored; ++lx) {
+                            for (uint32_t lx = 0; lx < bs0.x; ++lx) {
                                 const int srcXcoord = srcX0 + static_cast<int>(lx);
                                 dstRow[lx] = srcVoxelHalfBits(buildView, srcXcoord, srcY, srcZ, w, h, d);
                             }
@@ -318,10 +339,12 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
     const uint32_t lodLevelsToAlloc = (m_mode == Mode::Streaming) ? kLodLevels : 1u;
     uint64_t totalAtlasBytes = 0;
     for (uint32_t lv = 0; lv < lodLevelsToAlloc; ++lv) {
+        // Option C: L0 uses per-axis stored size; L1..L3 stay uniform
+        // scalar (64>>lv)+2. Multi-LOD per-axis flexibility is a follow-up.
         const uint32_t brickStoredLod = kBrickStoredAtLod(lv);
-        const uint32_t voxelsX_lv = atlasGrid.x * brickStoredLod;
-        const uint32_t voxelsY_lv = atlasGrid.y * brickStoredLod;
-        const uint32_t voxelsZ_lv = atlasGrid.z * brickStoredLod;
+        const uint32_t voxelsX_lv = (lv == 0) ? (atlasGrid.x * bs0.x) : (atlasGrid.x * brickStoredLod);
+        const uint32_t voxelsY_lv = (lv == 0) ? (atlasGrid.y * bs0.y) : (atlasGrid.y * brickStoredLod);
+        const uint32_t voxelsZ_lv = (lv == 0) ? (atlasGrid.z * bs0.z) : (atlasGrid.z * brickStoredLod);
         const uint32_t tightRowLv = voxelsX_lv * 2;
 #ifdef __EMSCRIPTEN__
         const uint32_t paddedRowLv = (tightRowLv + 255u) & ~255u;
@@ -509,6 +532,14 @@ bool BrickedVolume::buildFromMmappedSource(rhi::RHIDevice* device, rhi::RHIQueue
     m_pageGrid = glm::uvec3((w + kBrickSize - 1) / kBrickSize,
                             (h + kBrickSize - 1) / kBrickSize,
                             (d + kBrickSize - 1) / kBrickSize);
+    // Per-axis L0 sizing (see build() for rationale).
+    m_brickInteriorL0 = glm::uvec3(
+        (m_pageGrid.x == 1) ? w : kBrickSize,
+        (m_pageGrid.y == 1) ? h : kBrickSize,
+        (m_pageGrid.z == 1) ? d : kBrickSize);
+    m_brickHaloL0 = glm::uvec3(m_pageGrid.x > 1 ? 1u : 0u,
+                                m_pageGrid.y > 1 ? 1u : 0u,
+                                m_pageGrid.z > 1 ? 1u : 0u);
     const uint32_t totalPageEntries = m_pageGrid.x * m_pageGrid.y * m_pageGrid.z;
 
     // Pre-scan: empty bricks identified by raw 16-bit pattern equality. The
@@ -532,10 +563,11 @@ bool BrickedVolume::buildFromMmappedSource(rhi::RHIDevice* device, rhi::RHIQueue
     // and shrink the longest axis until kAutoAtlasBudgetBytes fits.
     if (atlasGrid.x == 0 || atlasGrid.y == 0 || atlasGrid.z == 0) {
         atlasGrid = m_pageGrid;
-        auto atlasBytesOf = [](glm::uvec3 a) {
-            const uint64_t vx = static_cast<uint64_t>(a.x) * kBrickStored;
-            const uint64_t vy = static_cast<uint64_t>(a.y) * kBrickStored;
-            const uint64_t vz = static_cast<uint64_t>(a.z) * kBrickStored;
+        const glm::uvec3 bs0Local = m_brickInteriorL0 + 2u * m_brickHaloL0;
+        auto atlasBytesOf = [&](glm::uvec3 a) {
+            const uint64_t vx = static_cast<uint64_t>(a.x) * bs0Local.x;
+            const uint64_t vy = static_cast<uint64_t>(a.y) * bs0Local.y;
+            const uint64_t vz = static_cast<uint64_t>(a.z) * bs0Local.z;
             return vx * vy * vz * 2;
         };
         while (atlasBytesOf(atlasGrid) > kAutoAtlasBudgetBytes &&
@@ -571,13 +603,14 @@ bool BrickedVolume::buildFromMmappedSource(rhi::RHIDevice* device, rhi::RHIQueue
     // Allocate the four LOD atlases pre-filled with the empty value. Identical
     // to the corresponding block in build(); when build() is refactored to
     // share this, this duplicate goes away.
+    const glm::uvec3 bs0Sf     = brickStoredL0();  // Option C L0 per-axis
     const uint32_t lodLevelsToAlloc = kLodLevels;
     uint64_t totalAtlasBytes = 0;
     for (uint32_t lv = 0; lv < lodLevelsToAlloc; ++lv) {
         const uint32_t brickStoredLod = kBrickStoredAtLod(lv);
-        const uint32_t voxelsX_lv = atlasGrid.x * brickStoredLod;
-        const uint32_t voxelsY_lv = atlasGrid.y * brickStoredLod;
-        const uint32_t voxelsZ_lv = atlasGrid.z * brickStoredLod;
+        const uint32_t voxelsX_lv = (lv == 0) ? (atlasGrid.x * bs0Sf.x) : (atlasGrid.x * brickStoredLod);
+        const uint32_t voxelsY_lv = (lv == 0) ? (atlasGrid.y * bs0Sf.y) : (atlasGrid.y * brickStoredLod);
+        const uint32_t voxelsZ_lv = (lv == 0) ? (atlasGrid.z * bs0Sf.z) : (atlasGrid.z * brickStoredLod);
         const uint32_t tightRowLv = voxelsX_lv * 2;
 #ifdef __EMSCRIPTEN__
         const uint32_t paddedRowLv = (tightRowLv + 255u) & ~255u;

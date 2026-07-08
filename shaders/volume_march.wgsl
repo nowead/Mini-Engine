@@ -26,6 +26,9 @@ struct VolumeUBO {
     accum:     vec4<f32>,   // unused by march (used by path-trace accumulation)
     volSize:   vec4<f32>,   // M3-3 xyz = source volume voxel dims (brick indexing)
     atlasGrid: vec4<f32>,   // M3-3 xyz = atlas capacity in bricks (slot unpack)
+    envTop:    vec4<f32>,   // unused by march (path-trace P1)
+    envBot:    vec4<f32>,   // unused by march (path-trace P1)
+    brickInfo0: vec4<u32>,  // Option C xyz = L0 interior per axis, w = halo bitmask
 };
 
 @group(0) @binding(0) var<uniform> ubo: VolumeUBO;
@@ -43,6 +46,8 @@ struct VolumeUBO {
 // atlas. brickStored(lod) = (64>>lod)+2 = 66/34/18/10. The local position
 // inside the source brick is in [0, 64); divide by (1<<lod) for the
 // downsampled brick's interior.
+// Option C (2026-07-09): L0 per-axis brick sizing. brickInfo0.xyz = interior
+// per axis, .w = halo bitmask. L1..L3 keep the uniform (64>>lod)+2 formula.
 fn sampleVolume(uvw: vec3<f32>) -> f32 {
     let vp = clamp(uvw, vec3<f32>(0.0), vec3<f32>(0.999999)) * ubo.volSize.xyz;
     let brickIdx = vec3<i32>(vp) / 64;
@@ -56,16 +61,23 @@ fn sampleVolume(uvw: vec3<f32>) -> f32 {
     let lod  = page >> 30u;
 
     let atlasG      = vec3<i32>(ubo.atlasGrid.xyz);
-    let brickStored = i32(64u >> lod) + 2;
     let sx = i32(slot) % atlasG.x;
     let sy = (i32(slot) / atlasG.x) % atlasG.y;
     let sz = i32(slot) / (atlasG.x * atlasG.y);
-    let slotOrigin  = vec3<f32>(f32(sx * brickStored + 1),
-                                f32(sy * brickStored + 1),
-                                f32(sz * brickStored + 1));
+    let halo0     = vec3<i32>(i32(ubo.brickInfo0.w & 1u),
+                              i32((ubo.brickInfo0.w >> 1u) & 1u),
+                              i32((ubo.brickInfo0.w >> 2u) & 1u));
+    let interior0 = vec3<i32>(ubo.brickInfo0.xyz);
+    let stored0   = interior0 + halo0 * 2;
+    let uniStored = i32(64u >> lod) + 2;
+    let brickStored3 = select(vec3<i32>(uniStored), stored0, lod == 0u);
+    let brickHalo3   = select(vec3<i32>(1),         halo0,   lod == 0u);
+    let slotOrigin  = vec3<f32>(f32(sx * brickStored3.x + brickHalo3.x),
+                                f32(sy * brickStored3.y + brickHalo3.y),
+                                f32(sz * brickStored3.z + brickHalo3.z));
     let localFlod   = localF / f32(1u << lod);
     let atlasVox    = slotOrigin + localFlod;
-    let atlasUvw    = (atlasVox + vec3<f32>(0.5)) / vec3<f32>(atlasG * brickStored);
+    let atlasUvw    = (atlasVox + vec3<f32>(0.5)) / vec3<f32>(atlasG * brickStored3);
 
     if (lod == 0u) { return textureSampleLevel(volumeTex0, volumeSampler, atlasUvw, 0.0).r; }
     if (lod == 1u) { return textureSampleLevel(volumeTex1, volumeSampler, atlasUvw, 0.0).r; }

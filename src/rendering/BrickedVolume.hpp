@@ -223,7 +223,17 @@ public:
     glm::uvec3 volSize()    const { return m_volSize; }
     glm::uvec3 pageGrid()   const { return m_pageGrid; }
     glm::uvec3 atlasGrid()  const { return m_atlasGrid; }
-    glm::uvec3 atlasVoxels() const { return m_atlasGrid * kBrickStored; }
+    // Per-axis L0 brick sizing. For axes where pageGrid.axis > 1 the brick
+    // remains 64 interior + 1 halo either side = 66 stored (uniform behavior).
+    // For axes where pageGrid.axis == 1 the whole volume fits in a single
+    // brick on that axis, so interior shrinks to volSize.axis and halo drops
+    // to 0 (no neighbor to sample from, clamp-to-edge sampler covers the
+    // boundary). This is what collapses the +7754% thin-volume overhead the
+    // R4 baseline exposed.
+    glm::uvec3 brickInteriorL0() const { return m_brickInteriorL0; }
+    glm::uvec3 brickHaloL0()     const { return m_brickHaloL0; }
+    glm::uvec3 brickStoredL0()   const { return m_brickInteriorL0 + 2u * m_brickHaloL0; }
+    glm::uvec3 atlasVoxels()     const { return m_atlasGrid * brickStoredL0(); }
     uint32_t   usedSlots()  const {
         return m_usedSlotsPerLod[0] + m_usedSlotsPerLod[1]
              + m_usedSlotsPerLod[2] + m_usedSlotsPerLod[3];
@@ -239,12 +249,27 @@ public:
     // M3-3 v1 streaming budgets. v1-beta beta-4: sums over all LODs, weighting
     // each LOD by its (smaller) brick storage size.
     uint64_t atlasBytesAllocated() const {
+        // Static mode allocates L0 only; Streaming allocates all four LODs.
+        // Mirror the lodLevelsToAlloc logic in build() so the HUD reflects
+        // real GPU footprint, not a phantom worst case.
         const glm::uvec3 v = atlasVoxels();
-        return static_cast<uint64_t>(v.x) * v.y * v.z * 2;
+        uint64_t total = static_cast<uint64_t>(v.x) * v.y * v.z * 2;
+        if (m_mode == Mode::Streaming) {
+            for (uint32_t lv = 1; lv < kLodLevels; ++lv) {
+                const uint64_t stored = kBrickStoredAtLod(lv);
+                total += static_cast<uint64_t>(m_atlasGrid.x) * m_atlasGrid.y * m_atlasGrid.z
+                       * stored * stored * stored * 2;
+            }
+        }
+        return total;
     }
     uint64_t atlasBytesUsed() const {
         uint64_t total = 0;
-        for (uint32_t lv = 0; lv < kLodLevels; ++lv) {
+        // L0 uses per-axis storage.
+        const glm::uvec3 bs0 = brickStoredL0();
+        total += static_cast<uint64_t>(m_usedSlotsPerLod[0])
+               * bs0.x * bs0.y * bs0.z * 2;
+        for (uint32_t lv = 1; lv < kLodLevels; ++lv) {
             const uint64_t stored = kBrickStoredAtLod(lv);
             total += static_cast<uint64_t>(m_usedSlotsPerLod[lv]) * stored * stored * stored * 2;
         }
@@ -269,6 +294,12 @@ private:
     glm::uvec3 m_volSize{0};
     glm::uvec3 m_pageGrid{0};
     glm::uvec3 m_atlasGrid{0};
+    // Per-axis L0 sizing (Option C brick-shape flexibility). See
+    // brickStoredL0() / brickHaloL0() for the rule. build() and
+    // buildFromMmappedSource() compute these; if either stays at zero the
+    // volume is considered uninitialised and getters return meaningless.
+    glm::uvec3 m_brickInteriorL0{kBrickSize, kBrickSize, kBrickSize};
+    glm::uvec3 m_brickHaloL0    {1, 1, 1};
 
     // v1-2 streaming-mode state. Empty / default-constructed in Static mode.
     Mode m_mode = Mode::StaticFullyLoaded;

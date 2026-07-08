@@ -37,6 +37,7 @@ layout(set = 0, binding = 0) uniform VolumeUBO {
     vec4 atlasGrid;  // M3-3 xyz = atlas capacity in bricks (slot unpack)
     vec4 envTop;     // M4 v2 P1 rgb = sky top color, w = intensity multiplier
     vec4 envBot;     // M4 v2 P1 rgb = sky bottom color, w = enable flag (0/1)
+    uvec4 brickInfo0; // Option C xyz = L0 interior per axis, w = halo bitmask
 } ubo;
 
 layout(set = 0, binding = 1) uniform texture3D volumeTex0;    // brick atlas L0 (R16Float)
@@ -65,15 +66,23 @@ float sampleVolume(vec3 uvw) {
     uint lod  = page >> 30;
 
     ivec3 atlasG      = ivec3(ubo.atlasGrid.xyz);
-    int   brickStored = int(64u >> lod) + 2;
     int sx = int(slot) % atlasG.x;
     int sy = (int(slot) / atlasG.x) % atlasG.y;
     int sz = int(slot) / (atlasG.x * atlasG.y);
+    // Option C L0 per-axis stored size + halo offset.
+    ivec3 halo0     = ivec3(int(ubo.brickInfo0.w & 1u),
+                            int((ubo.brickInfo0.w >> 1u) & 1u),
+                            int((ubo.brickInfo0.w >> 2u) & 1u));
+    ivec3 interior0 = ivec3(ubo.brickInfo0.xyz);
+    ivec3 stored0   = interior0 + halo0 * 2;
+    int   uniStored = int(64u >> lod) + 2;
+    ivec3 brickStored3 = (lod == 0u) ? stored0 : ivec3(uniStored);
+    ivec3 brickHalo3   = (lod == 0u) ? halo0   : ivec3(1);
     vec3 localFlod = localF / float(1u << lod);
-    vec3 atlasVox  = vec3(float(sx * brickStored + 1),
-                          float(sy * brickStored + 1),
-                          float(sz * brickStored + 1)) + localFlod;
-    vec3 atlasUvw  = (atlasVox + 0.5) / vec3(atlasG * brickStored);
+    vec3 atlasVox  = vec3(float(sx * brickStored3.x + brickHalo3.x),
+                          float(sy * brickStored3.y + brickHalo3.y),
+                          float(sz * brickStored3.z + brickHalo3.z)) + localFlod;
+    vec3 atlasUvw  = (atlasVox + 0.5) / vec3(atlasG * brickStored3);
 
     if (lod == 0u) return texture(sampler3D(volumeTex0, volumeSampler), atlasUvw).r;
     if (lod == 1u) return texture(sampler3D(volumeTex1, volumeSampler), atlasUvw).r;

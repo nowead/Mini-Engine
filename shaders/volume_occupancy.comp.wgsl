@@ -13,6 +13,7 @@ struct OccUBO {
     gridDim:   vec4<u32>,   // xyz = grid dims (cells), w unused
     pageGrid:  vec4<u32>,   // M3-3 xyz = brick grid dims, w unused
     atlasGrid: vec4<u32>,   // M3-3 xyz = atlas capacity in bricks, w unused
+    brickInfo0: vec4<u32>,  // Option C xyz = L0 interior per axis, w = halo bitmask
 };
 
 @group(0) @binding(0) var<uniform> ubo: OccUBO;
@@ -32,9 +33,14 @@ fn fetchVoxel(v: vec3<u32>) -> f32 {
     let sx = slot % ubo.atlasGrid.x;
     let sy = (slot / ubo.atlasGrid.x) % ubo.atlasGrid.y;
     let sz =  slot / (ubo.atlasGrid.x * ubo.atlasGrid.y);
-    let atlasCoord = vec3<i32>(i32(sx * 66u + 1u + local.x),
-                               i32(sy * 66u + 1u + local.y),
-                               i32(sz * 66u + 1u + local.z));
+    // Option C L0 per-axis stored size + halo offset (see brickInfo0).
+    let halo0     = vec3<u32>(ubo.brickInfo0.w & 1u,
+                              (ubo.brickInfo0.w >> 1u) & 1u,
+                              (ubo.brickInfo0.w >> 2u) & 1u);
+    let stored0   = ubo.brickInfo0.xyz + halo0 * 2u;
+    let atlasCoord = vec3<i32>(i32(sx * stored0.x + halo0.x + local.x),
+                               i32(sy * stored0.y + halo0.y + local.y),
+                               i32(sz * stored0.z + halo0.z + local.z));
     return textureLoad(volumeTex, atlasCoord, 0).r;
 }
 

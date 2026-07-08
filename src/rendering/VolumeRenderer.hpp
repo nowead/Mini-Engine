@@ -66,6 +66,13 @@ public:
         glm::vec4 atlasGrid;   // xyz = atlas capacity in bricks (slot unpack); w spare
         glm::vec4 envTop;      // M4 v2 P1: rgb = sky top color, w = intensity multiplier
         glm::vec4 envBot;      // M4 v2 P1: rgb = sky bottom color, w = enable flag (0/1)
+        // Option C thin-volume fix (2026-07-09): per-axis L0 brick sizing.
+        // xyz = L0 interior voxels per brick, per axis (default 64,64,64;
+        // for single-brick axes with pageGrid==1 this shrinks to volSize.axis).
+        // w  = halo bitmask (bit 0 = x, bit 1 = y, bit 2 = z; 1 = halo present).
+        // L1..L3 keep the uniform (64>>lod)+2 formula in-shader; per-axis
+        // multi-LOD is a follow-up.
+        glm::uvec4 brickInfo0;
     };
 
     enum class RenderMode { Lambert = 0, PathTrace = 1 };

@@ -17,6 +17,7 @@ layout(set = 0, binding = 0) uniform OccUBO {
     uvec4 gridDim;    // xyz = grid dims (cells), w unused
     uvec4 pageGrid;   // M3-3 xyz = brick grid dims, w unused
     uvec4 atlasGrid;  // M3-3 xyz = atlas capacity in bricks, w unused
+    uvec4 brickInfo0; // Option C xyz = L0 interior per axis, w = halo bitmask
 } ubo;
 layout(set = 0, binding = 1) uniform texture3D volumeTex;     // M3-3 brick atlas (R16Float)
 layout(set = 0, binding = 2) uniform sampler   volSampler;    // texelFetch needs a combined sampler
@@ -42,9 +43,14 @@ float fetchVoxel(uvec3 v) {
     uint sx = slot % ubo.atlasGrid.x;
     uint sy = (slot / ubo.atlasGrid.x) % ubo.atlasGrid.y;
     uint sz =  slot / (ubo.atlasGrid.x * ubo.atlasGrid.y);
-    ivec3 atlasCoord = ivec3(sx * 66u + 1u + local.x,
-                             sy * 66u + 1u + local.y,
-                             sz * 66u + 1u + local.z);
+    // Option C L0 per-axis stored size + halo offset.
+    uvec3 halo0   = uvec3(ubo.brickInfo0.w & 1u,
+                          (ubo.brickInfo0.w >> 1u) & 1u,
+                          (ubo.brickInfo0.w >> 2u) & 1u);
+    uvec3 stored0 = ubo.brickInfo0.xyz + halo0 * 2u;
+    ivec3 atlasCoord = ivec3(sx * stored0.x + halo0.x + local.x,
+                             sy * stored0.y + halo0.y + local.y,
+                             sz * stored0.z + halo0.z + local.z);
     return texelFetch(sampler3D(volumeTex, volSampler), atlasCoord, 0).r;
 }
 

@@ -439,12 +439,32 @@ v1-β LOD + DICOM (Implicit VR + 압축) + Disk paging Steps 1-3 까지가 한 �
 
 ---
 
-### 현재 활성 방향 (2026-07-08~)
+### Brick shape flexibility 완료 (2026-07-09) — Tier 1 후보에서 선택
 
-실 MRI 검증 트랙이 원 프로젝트 목표를 충족했으므로 **활성 트랙 없음**.
-다음 트랙 방향은 사용자와 재협의 필요. 후보: 유예된 트랙 (M4 v2 P3.2 /
-P3.3 / P4 · JPEG-LS · DICOM mmap · 즉흥 폴리시) 재개 또는 신규 방향
-(예: HDR equirect IBL, 임상 워크플로우 통합, 대용량 TCIA CT).
+- R4 baseline 이 노출한 `+7754%` 얇은 볼륨 오버헤드 문제를 정면 해결.
+  Per-axis L0 brick 저장 크기 도입: `pageGrid.axis == 1` 인 축은 halo
+  없이 `volSize.axis` 만 저장, 다른 축은 기존 64+1 halo=66 유지. 결과:
+  - fMRI 64×64×10: atlas 66³ → **64×64×10**, +602% → +113%
+  - 매머그래피 256×1024×1: **+6919% → +6%**
+  - CT 512×512×1: **+6919% → +6%**
+  - Siemens MR 484×484×1: **+7754% → +19%**
+
+  단일-슬라이스 케이스 70× 메모리 절감. 시각 회귀 없음. Streaming pack
+  이 여전히 66³ 를 쓰므로 Option C 는 Static 모드에만 적용, Streaming
+  L1..L3 per-axis 는 후속. C++/UBO/5 셰이더 쌍 (WGSL + GLSL) 동시 갱신,
+  그리고 `atlasBytesAllocated()` 가 Static 모드에서 L1..L3 phantom 을
+  안 집계하도록 수정. 베이스라인:
+  [BASELINE_2026-07-09_BRICK_SHAPE.md](baselines/BASELINE_2026-07-09_BRICK_SHAPE.md).
+
+---
+
+### 현재 활성 방향 (2026-07-09~)
+
+Brick shape flexibility 로 R4 baseline 이 노출한 최대 갭이 해소되었고
+실 MRI 검증 트랙 (R1-R4) 도 완료 상태. **활성 트랙 없음.** 후보: 유예된
+트랙 (M4 v2 P3.2 / P3.3 / P4 · JPEG-LS · DICOM mmap · 즉흥 폴리시) 재개
+또는 신규 방향 (예: HDR equirect IBL, 임상 워크플로우 통합, 대용량 TCIA
+CT, Streaming per-axis 완성).
 
 ---
 

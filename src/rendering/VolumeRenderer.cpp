@@ -394,20 +394,24 @@ bool VolumeRenderer::buildOccupancy() {
 
     if (!m_occUBO) {
         rhi::BufferDesc ud{};
-        ud.size  = sizeof(uint32_t) * 16;
+        ud.size  = sizeof(uint32_t) * 20;   // 5 uvec4 slots (added brickInfo0)
         ud.usage = rhi::BufferUsage::Uniform | rhi::BufferUsage::MapWrite;
         ud.label = "VolumeOccUBO";
         m_occUBO = m_device->createBuffer(ud);
         if (!m_occUBO) return false;
     }
     // Layout matches the WGSL/GLSL volume_occupancy UBO declaration.
-    const glm::uvec3 pg = m_brick.pageGrid();
-    const glm::uvec3 ag = m_brick.atlasGrid();
-    const uint32_t u[16] = {
+    const glm::uvec3 pg  = m_brick.pageGrid();
+    const glm::uvec3 ag  = m_brick.atlasGrid();
+    const glm::uvec3 iL0 = m_brick.brickInteriorL0();
+    const glm::uvec3 hL0 = m_brick.brickHaloL0();
+    const uint32_t haloBits = (hL0.x & 1u) | ((hL0.y & 1u) << 1) | ((hL0.z & 1u) << 2);
+    const uint32_t u[20] = {
         m_volW, m_volH, m_volD, kCellSize,
         m_gridW, m_gridH, m_gridD, 0,
         pg.x, pg.y, pg.z, 0,
         ag.x, ag.y, ag.z, 0,
+        iL0.x, iL0.y, iL0.z, haloBits,
     };
     m_occUBO->write(u, sizeof(u));
 
@@ -416,14 +420,14 @@ bool VolumeRenderer::buildOccupancy() {
     const uint64_t pageBytes = m_brick.pageTableSize();
 #ifdef __EMSCRIPTEN__
     bg.entries = {
-        rhi::BindGroupEntry::Buffer(0, m_occUBO.get(), 0, sizeof(uint32_t) * 16),
+        rhi::BindGroupEntry::Buffer(0, m_occUBO.get(), 0, sizeof(uint32_t) * 20),
         rhi::BindGroupEntry::TextureView(1, m_brick.atlasView()),
         rhi::BindGroupEntry::Buffer(2, m_occBuffer.get(), 0, bufBytes),
         rhi::BindGroupEntry::Buffer(3, m_brick.pageTable(), 0, pageBytes),
     };
 #else
     bg.entries = {
-        rhi::BindGroupEntry::Buffer(0, m_occUBO.get(), 0, sizeof(uint32_t) * 16),
+        rhi::BindGroupEntry::Buffer(0, m_occUBO.get(), 0, sizeof(uint32_t) * 20),
         rhi::BindGroupEntry::TextureView(1, m_brick.atlasView()),
         rhi::BindGroupEntry::Sampler(2, m_sampler.get()),
         rhi::BindGroupEntry::Buffer(3, m_occBuffer.get(), 0, bufBytes),
@@ -1219,6 +1223,13 @@ void VolumeRenderer::updateUBO(uint32_t frameIndex, const glm::mat4& invView,
     // falls back to the v1 "black background" behaviour.
     ubo.envTop = glm::vec4(m_envTopColor, m_envIntensity);
     ubo.envBot = glm::vec4(m_envBotColor, m_envEnabled ? 1.0f : 0.0f);
+    // Option C thin-volume fix: publish per-axis L0 brick sizing so the
+    // sampleVolume shader helper can adapt its slot origin / atlas stride
+    // math on axes where pageGrid==1 dropped the halo.
+    const glm::uvec3 iL0  = m_brick.brickInteriorL0();
+    const glm::uvec3 hL0  = m_brick.brickHaloL0();
+    const uint32_t haloBits = (hL0.x & 1u) | ((hL0.y & 1u) << 1) | ((hL0.z & 1u) << 2);
+    ubo.brickInfo0 = glm::uvec4(iL0.x, iL0.y, iL0.z, haloBits);
 
     m_uniformBuffers[fi]->write(&ubo, sizeof(VolumeUBO));
 }
