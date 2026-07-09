@@ -458,13 +458,34 @@ v1-β LOD + DICOM (Implicit VR + 압축) + Disk paging Steps 1-3 까지가 한 �
 
 ---
 
+### Last-brick shrink 완료 (2026-07-09) — Option C 후속
+
+- Option C 잔여 오버헤드 (+6~19%) 를 close. Static + `atlasGrid == pageGrid`
+  구성에서 slot 을 position-based (slot == pageIdx) 로 전환하고, 각
+  multi-brick 축의 마지막 브릭이 outer halo 를 버리고 interior 를 실제
+  remainder 로 축소. 결과:
+  - Siemens MR 484×484×1: **+19% → +6%** (atlas 528² → 499²)
+  - fMRI 64×64×10: HUD 계산 drift 도 함께 해결, +113% → **-0.0%** (실측)
+  - CT 512×512×1 / Mammo 256×1024×1: 이미 64 정렬이라 outer halo 만 감소
+    (+6% → +6%, marginal)
+
+  네 시리즈 모두 dense 대비 ≤ +6%. 잔여는 각 축당 1 halo 층 (첫 브릭의
+  inner halo) 인데 clamp-to-edge sampling 을 유지하려면 필요한 이론적
+  하한. UBO 에 `atlasPhys0` uvec4 추가, 6 셰이더 쌍이 UV 정규화 시
+  이 값을 참조. Streaming pack + L1..L3 는 여전히 uniform 66³ (후속).
+  베이스라인:
+  [BASELINE_2026-07-09_LAST_BRICK_SHRINK.md](baselines/BASELINE_2026-07-09_LAST_BRICK_SHRINK.md).
+
+---
+
 ### 현재 활성 방향 (2026-07-09~)
 
-Brick shape flexibility 로 R4 baseline 이 노출한 최대 갭이 해소되었고
-실 MRI 검증 트랙 (R1-R4) 도 완료 상태. **활성 트랙 없음.** 후보: 유예된
-트랙 (M4 v2 P3.2 / P3.3 / P4 · JPEG-LS · DICOM mmap · 즉흥 폴리시) 재개
-또는 신규 방향 (예: HDR equirect IBL, 임상 워크플로우 통합, 대용량 TCIA
-CT, Streaming per-axis 완성).
+Brick shape flexibility 두 milestone (Option C 본체 + last-brick shrink) 으로
+R4 baseline 이 노출한 최대 갭이 해소되었고 실 MRI 검증 트랙 (R1-R4) 도
+완료 상태. **활성 트랙 없음.** 후보: 유예된 트랙 (M4 v2 P3.2 / P3.3 / P4 ·
+JPEG-LS · DICOM mmap · 즉흥 폴리시) 재개 또는 신규 방향 (예: HDR
+equirect IBL, 임상 워크플로우 통합, 대용량 TCIA CT, Streaming per-axis
+완성).
 
 ---
 

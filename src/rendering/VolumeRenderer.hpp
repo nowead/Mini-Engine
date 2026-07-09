@@ -73,6 +73,13 @@ public:
         // L1..L3 keep the uniform (64>>lod)+2 formula in-shader; per-axis
         // multi-LOD is a follow-up.
         glm::uvec4 brickInfo0;
+        // Last-brick shrink follow-up (2026-07-09): physical L0 atlas dims
+        // in voxels. Was atlasGrid * (interior + 2*halo); now truncates the
+        // last brick's outer halo + interior remainder when Static mode
+        // enables position-based slots. Shader uses this for the UV
+        // normalization (atlasUvw = (atlasVox + 0.5) / atlasPhys0.xyz).
+        // .w spare.
+        glm::uvec4 atlasPhys0;
     };
 
     enum class RenderMode { Lambert = 0, PathTrace = 1 };

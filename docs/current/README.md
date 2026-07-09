@@ -31,6 +31,7 @@ WebGPU 기반 차세대 클라이언트 사이드 **의료 볼륨 렌더러**로
 | [BASELINE_2026-06-10_DISK_PAGING_STEP5.md](medical-volume/baselines/BASELINE_2026-06-10_DISK_PAGING_STEP5.md) | Disk paging Step 5 measurement (1024³ 피크 6.57→2.30 GB -65%, 16 GB RAM에서 8 GB 데이터 가능성) |
 | [BASELINE_2026-07-08_REAL_MRI.md](medical-volume/baselines/BASELINE_2026-07-08_REAL_MRI.md) | 실 MRI 검증 (R4) — 4개 공개 시리즈, 런타임 업로드 경로 · atlas / CPU baseline · thin-volume overhead 관측 |
 | [BASELINE_2026-07-09_BRICK_SHAPE.md](medical-volume/baselines/BASELINE_2026-07-09_BRICK_SHAPE.md) | Brick shape flexibility (Option C) — 얇은 볼륨 overhead +7754% → +6~19%, 단일-슬라이스 케이스 70× 메모리 절감 |
+| [BASELINE_2026-07-09_LAST_BRICK_SHRINK.md](medical-volume/baselines/BASELINE_2026-07-09_LAST_BRICK_SHRINK.md) | Last-brick shrink (Option C 후속) — Siemens +19% → +6%; 네 R4 시리즈 모두 ≤ +6% vs dense |
 
 **M1 (실데이터 기반) 완료** (2026-05-29): R16Float 16비트 · window/level ·
 NIfTI 로더 + float 강도 경로 + 임상 윈도우 프리셋.

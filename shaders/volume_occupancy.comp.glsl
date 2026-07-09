@@ -18,6 +18,10 @@ layout(set = 0, binding = 0) uniform OccUBO {
     uvec4 pageGrid;   // M3-3 xyz = brick grid dims, w unused
     uvec4 atlasGrid;  // M3-3 xyz = atlas capacity in bricks, w unused
     uvec4 brickInfo0; // Option C xyz = L0 interior per axis, w = halo bitmask
+    // Last-brick shrink follow-up: physical L0 atlas dims. Occupancy uses
+    // integer texel coords (texelFetch), so this is unused here but the
+    // struct must stay in sync with the CPU-side OccUBO buffer size.
+    uvec4 atlasPhys0;
 } ubo;
 layout(set = 0, binding = 1) uniform texture3D volumeTex;     // M3-3 brick atlas (R16Float)
 layout(set = 0, binding = 2) uniform sampler   volSampler;    // texelFetch needs a combined sampler

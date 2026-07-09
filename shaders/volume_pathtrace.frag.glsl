@@ -38,6 +38,7 @@ layout(set = 0, binding = 0) uniform VolumeUBO {
     vec4 envTop;     // M4 v2 P1 rgb = sky top color, w = intensity multiplier
     vec4 envBot;     // M4 v2 P1 rgb = sky bottom color, w = enable flag (0/1)
     uvec4 brickInfo0; // Option C xyz = L0 interior per axis, w = halo bitmask
+    uvec4 atlasPhys0; // Last-brick shrink: xyz = physical L0 atlas dims, w spare
 } ubo;
 
 layout(set = 0, binding = 1) uniform texture3D volumeTex0;    // brick atlas L0 (R16Float)
@@ -82,7 +83,13 @@ float sampleVolume(vec3 uvw) {
     vec3 atlasVox  = vec3(float(sx * brickStored3.x + brickHalo3.x),
                           float(sy * brickStored3.y + brickHalo3.y),
                           float(sz * brickStored3.z + brickHalo3.z)) + localFlod;
-    vec3 atlasUvw  = (atlasVox + 0.5) / vec3(atlasG * brickStored3);
+    // Last-brick shrink follow-up: L0 atlas dims are CPU-computed physical
+    // size (last brick may drop outer halo + truncate interior). LOD 1..3
+    // keep the uniform atlasG * brickStored formula.
+    ivec3 atlasTotal0 = ivec3(ubo.atlasPhys0.xyz);
+    ivec3 atlasTotalN = atlasG * brickStored3;
+    ivec3 atlasTotal  = (lod == 0u) ? atlasTotal0 : atlasTotalN;
+    vec3 atlasUvw  = (atlasVox + 0.5) / vec3(atlasTotal);
 
     if (lod == 0u) return texture(sampler3D(volumeTex0, volumeSampler), atlasUvw).r;
     if (lod == 1u) return texture(sampler3D(volumeTex1, volumeSampler), atlasUvw).r;

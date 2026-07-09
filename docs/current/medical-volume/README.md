@@ -56,6 +56,7 @@ Mini-Engine implements it:
 | [BASELINE_2026-06-10_DISK_PAGING_STEP5.md](baselines/BASELINE_2026-06-10_DISK_PAGING_STEP5.md) | Disk paging Step 5 (1024³ peak 6.57 -> 2.30 GB, -65%) |
 | [BASELINE_2026-07-08_REAL_MRI.md](baselines/BASELINE_2026-07-08_REAL_MRI.md) | Real MRI verification (R4): 4 public series, runtime upload path, memory + CPU baselines |
 | [BASELINE_2026-07-09_BRICK_SHAPE.md](baselines/BASELINE_2026-07-09_BRICK_SHAPE.md) | Brick shape flexibility (Option C): thin-volume overhead +7754% → +6~19%, 70× memory reduction on single-slice cases |
+| [BASELINE_2026-07-09_LAST_BRICK_SHRINK.md](baselines/BASELINE_2026-07-09_LAST_BRICK_SHRINK.md) | Last-brick shrink (Option C tail): Siemens +19% → +6%; all four R4 series now ≤ +6% vs dense |
 
 ---
 

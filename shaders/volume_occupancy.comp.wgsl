@@ -14,6 +14,10 @@ struct OccUBO {
     pageGrid:  vec4<u32>,   // M3-3 xyz = brick grid dims, w unused
     atlasGrid: vec4<u32>,   // M3-3 xyz = atlas capacity in bricks, w unused
     brickInfo0: vec4<u32>,  // Option C xyz = L0 interior per axis, w = halo bitmask
+    // Last-brick shrink follow-up: physical L0 atlas dims. Occupancy uses
+    // integer texel coords (textureLoad), so this is unused here but the
+    // struct must stay in sync with the CPU-side OccUBO buffer size.
+    atlasPhys0: vec4<u32>,
 };
 
 @group(0) @binding(0) var<uniform> ubo: OccUBO;

@@ -233,7 +233,22 @@ public:
     glm::uvec3 brickInteriorL0() const { return m_brickInteriorL0; }
     glm::uvec3 brickHaloL0()     const { return m_brickHaloL0; }
     glm::uvec3 brickStoredL0()   const { return m_brickInteriorL0 + 2u * m_brickHaloL0; }
-    glm::uvec3 atlasVoxels()     const { return m_atlasGrid * brickStoredL0(); }
+
+    // Last-brick shrink (follow-up to Option C). When Static mode picks
+    // atlasGrid == pageGrid, slots are assigned position-based (slot ==
+    // pageIdx) so slot coord equals brick coord. In that layout the last
+    // brick along each axis with pageGrid > 1 can drop its outer halo (no
+    // neighbor to sample from) and truncate its interior to the actual
+    // remainder (volSize.axis - (pageGrid.axis - 1) * kBrickSize). Middle
+    // and first bricks stay uniform 66 stored to keep the shader's slot
+    // origin math a simple sx * uniformStored + halo.
+    glm::uvec3 brickInteriorLastL0() const { return m_brickInteriorLastL0; }
+    // Physical atlas dims in voxels (accounts for last-brick shrink when
+    // enabled; otherwise atlasGrid * brickStoredL0()).
+    glm::uvec3 atlasVoxels()  const { return m_atlasVoxelsL0; }
+    // True when slots are counter-assigned in raster order (uniform 66 per
+    // brick). False when position-based + last-brick shrink is active.
+    bool uniformSlotLayout()  const { return m_uniformSlotLayout; }
     uint32_t   usedSlots()  const {
         return m_usedSlotsPerLod[0] + m_usedSlotsPerLod[1]
              + m_usedSlotsPerLod[2] + m_usedSlotsPerLod[3];
@@ -265,10 +280,16 @@ public:
     }
     uint64_t atlasBytesUsed() const {
         uint64_t total = 0;
-        // L0 uses per-axis storage.
-        const glm::uvec3 bs0 = brickStoredL0();
-        total += static_cast<uint64_t>(m_usedSlotsPerLod[0])
-               * bs0.x * bs0.y * bs0.z * 2;
+        // L0 approximation: total physical voxels * used ratio. Exact when
+        // every slot is filled (dense Static); for sparse Static with
+        // position-based layout some slots are empty and this over-reports
+        // by the fraction of empty positions. Good enough for the HUD.
+        const uint32_t totalSlotsL0 = m_atlasGrid.x * m_atlasGrid.y * m_atlasGrid.z;
+        if (totalSlotsL0 > 0) {
+            const glm::uvec3 v = m_atlasVoxelsL0;
+            const uint64_t l0Total = static_cast<uint64_t>(v.x) * v.y * v.z * 2;
+            total += l0Total * m_usedSlotsPerLod[0] / totalSlotsL0;
+        }
         for (uint32_t lv = 1; lv < kLodLevels; ++lv) {
             const uint64_t stored = kBrickStoredAtLod(lv);
             total += static_cast<uint64_t>(m_usedSlotsPerLod[lv]) * stored * stored * stored * 2;
@@ -300,6 +321,16 @@ private:
     // volume is considered uninitialised and getters return meaningless.
     glm::uvec3 m_brickInteriorL0{kBrickSize, kBrickSize, kBrickSize};
     glm::uvec3 m_brickHaloL0    {1, 1, 1};
+    // Last-brick shrink state (Option C tail). m_brickInteriorLastL0
+    // matches m_brickInteriorL0 in uniform layout; when
+    // m_uniformSlotLayout == false, the last brick along each
+    // multi-brick axis stores (m_brickInteriorLastL0.axis + inner halo)
+    // voxels instead of the uniform 66. m_atlasVoxelsL0 is the physical
+    // L0 texture size and drives both the atlas allocation and the
+    // shader's atlasPhys UBO field.
+    glm::uvec3 m_brickInteriorLastL0{kBrickSize, kBrickSize, kBrickSize};
+    glm::uvec3 m_atlasVoxelsL0{0};
+    bool       m_uniformSlotLayout = true;
 
     // v1-2 streaming-mode state. Empty / default-constructed in Static mode.
     Mode m_mode = Mode::StaticFullyLoaded;

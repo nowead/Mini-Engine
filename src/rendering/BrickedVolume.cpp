@@ -189,9 +189,26 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
         m_brickHaloL0 = glm::uvec3(m_pageGrid.x > 1 ? 1u : 0u,
                                     m_pageGrid.y > 1 ? 1u : 0u,
                                     m_pageGrid.z > 1 ? 1u : 0u);
+        // Follow-up to Option C: last-brick shrink. When atlasGrid ==
+        // pageGrid slots become position-based (slot == pageIdx), so the
+        // last brick along each multi-brick axis can drop its outer halo
+        // and truncate its interior to the actual remainder. Middle/first
+        // bricks stay uniform 66 to keep the shader's slot-origin math a
+        // simple sx * uniformStored + halo.
+        m_uniformSlotLayout   = true;
+        m_brickInteriorLastL0 = m_brickInteriorL0;
+        if (m_atlasGrid == m_pageGrid) {
+            m_uniformSlotLayout = false;
+            m_brickInteriorLastL0 = glm::uvec3(
+                (m_pageGrid.x > 1) ? (w - (m_pageGrid.x - 1) * kBrickSize) : m_brickInteriorL0.x,
+                (m_pageGrid.y > 1) ? (h - (m_pageGrid.y - 1) * kBrickSize) : m_brickInteriorL0.y,
+                (m_pageGrid.z > 1) ? (d - (m_pageGrid.z - 1) * kBrickSize) : m_brickInteriorL0.z);
+        }
     } else {
         m_mode = Mode::Streaming;
         // m_brickInteriorL0 / m_brickHaloL0 already at uniform defaults.
+        m_uniformSlotLayout   = true;
+        m_brickInteriorLastL0 = m_brickInteriorL0;
         // Recommended atlasGrid for Static. Cube-root rounded up, clamped by
         // pageGrid. Memory estimate uses the same R16Float * kBrickStored^3
         // accounting as atlasBytesAllocated().
@@ -221,11 +238,22 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
     }
 
     // Now that mode + per-axis L0 sizing are decided, compute the actual
-    // atlas voxel dimensions and allocate the CPU-side atlas buffer.
-    const glm::uvec3 bs0        = brickStoredL0();
-    const uint32_t atlasVoxelsX = atlasGrid.x * bs0.x;
-    const uint32_t atlasVoxelsY = atlasGrid.y * bs0.y;
-    const uint32_t atlasVoxelsZ = atlasGrid.z * bs0.z;
+    // atlas voxel dimensions. `bs0` is the uniform per-axis stored size
+    // (Option C, 66 for multi-brick axes / volSize for pageGrid==1 axes);
+    // in shrink mode we replace the last brick's contribution along each
+    // multi-brick axis with (lastInterior + inner halo) instead of the
+    // full 66. m_atlasVoxelsL0 becomes the L0 texture's physical size
+    // and is used for allocation, HUD, and the shader's atlasPhys UBO.
+    const glm::uvec3 bs0 = brickStoredL0();
+    m_atlasVoxelsL0 = m_atlasGrid * bs0;
+    if (!m_uniformSlotLayout) {
+        if (m_pageGrid.x > 1) m_atlasVoxelsL0.x = (m_pageGrid.x - 1) * bs0.x + m_brickInteriorLastL0.x + m_brickHaloL0.x;
+        if (m_pageGrid.y > 1) m_atlasVoxelsL0.y = (m_pageGrid.y - 1) * bs0.y + m_brickInteriorLastL0.y + m_brickHaloL0.y;
+        if (m_pageGrid.z > 1) m_atlasVoxelsL0.z = (m_pageGrid.z - 1) * bs0.z + m_brickInteriorLastL0.z + m_brickHaloL0.z;
+    }
+    const uint32_t atlasVoxelsX = m_atlasVoxelsL0.x;
+    const uint32_t atlasVoxelsY = m_atlasVoxelsL0.y;
+    const uint32_t atlasVoxelsZ = m_atlasVoxelsL0.z;
     const uint32_t tightBytesPerRow = atlasVoxelsX * 2;
 #ifdef __EMSCRIPTEN__
     const uint32_t paddedBytesPerRow = (tightBytesPerRow + 255u) & ~255u;
@@ -261,18 +289,48 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
                     const bool hasData = (m_pageOccupancy[pageIdx >> 3] >> (pageIdx & 7)) & 1u;
                     if (!hasData) continue;
 
-                    const uint32_t slot = m_usedSlotsPerLod[0]++;
+                    // Slot assignment. Uniform layout: raster-order counter
+                    // (empty bricks skip, slot 0..N-1 is dense in the atlas
+                    // sub-grid). Position-based layout (shrink enabled): slot
+                    // == pageIdx so slot 3D coord matches brick coord and the
+                    // shader can identify "last brick along axis" from
+                    // brickIdx alone. Empty positions leave gaps in the
+                    // atlas texture but don't cost extra VRAM (already
+                    // allocated dense).
+                    uint32_t slot, sx, sy, sz;
+                    if (m_uniformSlotLayout) {
+                        slot = m_usedSlotsPerLod[0]++;
+                        sx = slot % atlasGrid.x;
+                        sy = (slot / atlasGrid.x) % atlasGrid.y;
+                        sz =  slot / (atlasGrid.x * atlasGrid.y);
+                    } else {
+                        slot = pageIdx;  // atlasGrid == pageGrid, so slot fits
+                        sx = bx; sy = by; sz = bz;
+                        ++m_usedSlotsPerLod[0];
+                    }
                     pageTable[pageIdx] = encodePage(slot, 0);  // Static always L0
 
-                    // Atlas slot origin (in voxels) for linear unpacking:
-                    // slot = sx + sy*Ax + sz*Ax*Ay.
-                    const uint32_t sx = slot % atlasGrid.x;
-                    const uint32_t sy = (slot / atlasGrid.x) % atlasGrid.y;
-                    const uint32_t sz =  slot / (atlasGrid.x * atlasGrid.y);
-                    // Per-axis slot origin (bs0 already resolved via
-                    // brickStoredL0()). aOrigin marks the top-left of the
-                    // stored brick block including halo padding on both
-                    // sides -- so the interior starts at aOrigin + halo.
+                    // Per-brick stored dims. Uniform layout uses bs0 for all
+                    // bricks; shrink layout truncates the last brick along
+                    // each multi-brick axis to (lastInterior + inner halo) so
+                    // the outer halo (no neighbor to sample from) is skipped.
+                    // Inner halo (m_brickHaloL0) still applies on both sides
+                    // for uniform bricks; shrink mode just cuts the outer
+                    // right/bottom/back side of the last brick.
+                    glm::uvec3 storedThis = bs0;
+                    if (!m_uniformSlotLayout) {
+                        if (m_pageGrid.x > 1 && bx == m_pageGrid.x - 1u)
+                            storedThis.x = m_brickInteriorLastL0.x + m_brickHaloL0.x;
+                        if (m_pageGrid.y > 1 && by == m_pageGrid.y - 1u)
+                            storedThis.y = m_brickInteriorLastL0.y + m_brickHaloL0.y;
+                        if (m_pageGrid.z > 1 && bz == m_pageGrid.z - 1u)
+                            storedThis.z = m_brickInteriorLastL0.z + m_brickHaloL0.z;
+                    }
+
+                    // Atlas slot origin (in voxels): uniform per-axis stride
+                    // bs0 for BOTH uniform and shrink layouts. Shrink mode
+                    // only reduces the last brick's WIDTH along an axis, not
+                    // its position, so the origin math is unchanged.
                     const uint32_t aOriginX = sx * bs0.x;
                     const uint32_t aOriginY = sy * bs0.y;
                     const uint32_t aOriginZ = sz * bs0.z;
@@ -288,8 +346,8 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
                                     - static_cast<int>(m_brickHaloL0.y);
                     const int srcZ0 = static_cast<int>(bz * kBrickSize)
                                     - static_cast<int>(m_brickHaloL0.z);
-                    for (uint32_t lz = 0; lz < bs0.z; ++lz) {
-                        for (uint32_t ly = 0; ly < bs0.y; ++ly) {
+                    for (uint32_t lz = 0; lz < storedThis.z; ++lz) {
+                        for (uint32_t ly = 0; ly < storedThis.y; ++ly) {
                             uint16_t* dstRow = reinterpret_cast<uint16_t*>(
                                 atlasBuf.data()
                                 + (static_cast<uint64_t>(aOriginZ + lz) * atlasVoxelsY
@@ -297,7 +355,7 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
                                 + aOriginX * 2);
                             const int srcZ = srcZ0 + static_cast<int>(lz);
                             const int srcY = srcY0 + static_cast<int>(ly);
-                            for (uint32_t lx = 0; lx < bs0.x; ++lx) {
+                            for (uint32_t lx = 0; lx < storedThis.x; ++lx) {
                                 const int srcXcoord = srcX0 + static_cast<int>(lx);
                                 dstRow[lx] = srcVoxelHalfBits(buildView, srcXcoord, srcY, srcZ, w, h, d);
                             }
@@ -339,12 +397,13 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
     const uint32_t lodLevelsToAlloc = (m_mode == Mode::Streaming) ? kLodLevels : 1u;
     uint64_t totalAtlasBytes = 0;
     for (uint32_t lv = 0; lv < lodLevelsToAlloc; ++lv) {
-        // Option C: L0 uses per-axis stored size; L1..L3 stay uniform
-        // scalar (64>>lv)+2. Multi-LOD per-axis flexibility is a follow-up.
+        // Option C + last-brick shrink: L0 uses m_atlasVoxelsL0 (per-axis
+        // stored + possibly last-brick truncated). L1..L3 stay uniform
+        // scalar (64>>lv)+2 -- multi-LOD per-axis flexibility is a follow-up.
         const uint32_t brickStoredLod = kBrickStoredAtLod(lv);
-        const uint32_t voxelsX_lv = (lv == 0) ? (atlasGrid.x * bs0.x) : (atlasGrid.x * brickStoredLod);
-        const uint32_t voxelsY_lv = (lv == 0) ? (atlasGrid.y * bs0.y) : (atlasGrid.y * brickStoredLod);
-        const uint32_t voxelsZ_lv = (lv == 0) ? (atlasGrid.z * bs0.z) : (atlasGrid.z * brickStoredLod);
+        const uint32_t voxelsX_lv = (lv == 0) ? m_atlasVoxelsL0.x : (atlasGrid.x * brickStoredLod);
+        const uint32_t voxelsY_lv = (lv == 0) ? m_atlasVoxelsL0.y : (atlasGrid.y * brickStoredLod);
+        const uint32_t voxelsZ_lv = (lv == 0) ? m_atlasVoxelsL0.z : (atlasGrid.z * brickStoredLod);
         const uint32_t tightRowLv = voxelsX_lv * 2;
 #ifdef __EMSCRIPTEN__
         const uint32_t paddedRowLv = (tightRowLv + 255u) & ~255u;
@@ -590,8 +649,13 @@ bool BrickedVolume::buildFromMmappedSource(rhi::RHIDevice* device, rhi::RHIQueue
         return false;
     }
 
-    // Streaming mode setup. Mirror the build() Streaming branch.
+    // Streaming mode setup. Mirror the build() Streaming branch. Streaming
+    // always uses uniform slot layout because packBrickToStaging writes
+    // 66^3 per brick; per-axis / last-brick shrink for streaming is a
+    // follow-up.
     m_mode = Mode::Streaming;
+    m_uniformSlotLayout   = true;
+    m_brickInteriorLastL0 = m_brickInteriorL0;
     m_emptyValueHalf = emptyValueHalf;
     m_pageTableHost.assign(totalPageEntries, kEmptySlot);
     for (auto& states : m_slotStates) states.assign(totalSlots, AtlasSlotState{});
@@ -604,13 +668,14 @@ bool BrickedVolume::buildFromMmappedSource(rhi::RHIDevice* device, rhi::RHIQueue
     // to the corresponding block in build(); when build() is refactored to
     // share this, this duplicate goes away.
     const glm::uvec3 bs0Sf     = brickStoredL0();  // Option C L0 per-axis
+    m_atlasVoxelsL0 = m_atlasGrid * bs0Sf;         // Streaming: uniform, no shrink
     const uint32_t lodLevelsToAlloc = kLodLevels;
     uint64_t totalAtlasBytes = 0;
     for (uint32_t lv = 0; lv < lodLevelsToAlloc; ++lv) {
         const uint32_t brickStoredLod = kBrickStoredAtLod(lv);
-        const uint32_t voxelsX_lv = (lv == 0) ? (atlasGrid.x * bs0Sf.x) : (atlasGrid.x * brickStoredLod);
-        const uint32_t voxelsY_lv = (lv == 0) ? (atlasGrid.y * bs0Sf.y) : (atlasGrid.y * brickStoredLod);
-        const uint32_t voxelsZ_lv = (lv == 0) ? (atlasGrid.z * bs0Sf.z) : (atlasGrid.z * brickStoredLod);
+        const uint32_t voxelsX_lv = (lv == 0) ? m_atlasVoxelsL0.x : (atlasGrid.x * brickStoredLod);
+        const uint32_t voxelsY_lv = (lv == 0) ? m_atlasVoxelsL0.y : (atlasGrid.y * brickStoredLod);
+        const uint32_t voxelsZ_lv = (lv == 0) ? m_atlasVoxelsL0.z : (atlasGrid.z * brickStoredLod);
         const uint32_t tightRowLv = voxelsX_lv * 2;
 #ifdef __EMSCRIPTEN__
         const uint32_t paddedRowLv = (tightRowLv + 255u) & ~255u;

@@ -27,6 +27,7 @@ struct VolumeUBO {
     envTop:    vec4<f32>,   // M4 v2 P1 rgb = sky top color, w = intensity multiplier
     envBot:    vec4<f32>,   // M4 v2 P1 rgb = sky bottom color, w = enable flag (0/1)
     brickInfo0: vec4<u32>,  // Option C xyz = L0 interior per axis, w = halo bitmask
+    atlasPhys0: vec4<u32>,  // Last-brick shrink: xyz = physical L0 atlas dims, w spare
 };
 
 @group(0) @binding(0) var<uniform> ubo: VolumeUBO;
@@ -73,7 +74,13 @@ fn sampleVolume(uvw: vec3<f32>) -> f32 {
                                f32(sz * brickStored3.z + brickHalo3.z));
     let localFlod = localF / f32(1u << lod);
     let atlasVox  = slotOrigin + localFlod;
-    let atlasUvw  = (atlasVox + vec3<f32>(0.5)) / vec3<f32>(atlasG * brickStored3);
+    // Last-brick shrink follow-up: for LOD 0 the atlas texture size is the
+    // CPU-computed physical dim (last brick may drop its outer halo + shrink
+    // interior). LOD 1..3 keep the uniform atlasG * stored formula.
+    let atlasTotal0 = vec3<i32>(ubo.atlasPhys0.xyz);
+    let atlasTotalN = atlasG * brickStored3;
+    let atlasTotal  = select(atlasTotalN, atlasTotal0, lod == 0u);
+    let atlasUvw    = (atlasVox + vec3<f32>(0.5)) / vec3<f32>(atlasTotal);
     if (lod == 0u) { return textureSampleLevel(volumeTex0, volumeSampler, atlasUvw, 0.0).r; }
     if (lod == 1u) { return textureSampleLevel(volumeTex1, volumeSampler, atlasUvw, 0.0).r; }
     if (lod == 2u) { return textureSampleLevel(volumeTex2, volumeSampler, atlasUvw, 0.0).r; }
