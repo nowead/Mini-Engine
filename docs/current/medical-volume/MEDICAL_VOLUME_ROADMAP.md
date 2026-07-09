@@ -1,11 +1,15 @@
 # Mini-Engine — 의료 볼륨 렌더링 방향 계획서
 
-**작성일**: 2026-05-29
-**관점**: 엔진을 **WebGPU 기반 차세대 클라이언트 사이드 의료 볼륨 렌더러**로
-끌고 가되, **네이티브 Vulkan을 한 기능도 빠뜨리지 않고 동등하게(dual-backend
-parity)** 유지한다. WebGPU는 *배포·시연*의 차별화이고, Vulkan은 *개발·검증·
-프로파일링*의 1차 백엔드다 — 모든 기능은 Vulkan에서 검증 레이어로 먼저
-완성하고 WebGPU로 포팅한다.
+**작성일**: 2026-05-29 (원본) · **재정비**: 2026-07-10
+**관점 (재정비 후)**: **저사양 PC · 모바일 · 태블릿 브라우저 (WebGPU + WASM)
+에서 대용량 실 CT/MRI 를 유의미한 fps/메모리로 렌더링** — 접근성 축의 성능
+차별화. 원 목표 원문 및 스코프 경계는 §5 말미
+[스코프 재정비 (2026-07-10)](#스코프-재정비-2026-07-10--원-목표-lens-재정렬) 참조.
+**네이티브 Vulkan 은 개발·검증·프로파일링 1차 백엔드로 dual-backend parity 유지**.
+
+**Mini-Engine 스코프 경계**: 렌더링/그래픽 엔진. 임상 워크플로우 도구
+(MPR · 측정 · 워크리스트 · 주석) 는 **스코프 밖** — 필요하면 상위 앱
+프로젝트로 분리.
 
 ---
 
@@ -478,63 +482,124 @@ v1-β LOD + DICOM (Implicit VR + 압축) + Disk paging Steps 1-3 까지가 한 �
 
 ---
 
-### 현재 활성 방향 (2026-07-09~)
+### 스코프 재정비 (2026-07-10) — 원 목표 lens 재정렬
 
-Brick shape flexibility 두 milestone (Option C 본체 + last-brick shrink) 으로
-R4 baseline 이 노출한 최대 갭이 해소되었고 실 MRI 검증 트랙 (R1-R4) 도
-완료 상태. **활성 트랙 없음.** 후보: 유예된 트랙 (M4 v2 P3.2 / P3.3 / P4 ·
-JPEG-LS · DICOM mmap · 즉흥 폴리시) 재개 또는 신규 방향 (예: HDR
-equirect IBL, 임상 워크플로우 통합, 대용량 TCIA CT, Streaming per-axis
-완성).
+**원 목표 재확인** (사용자 명시):
 
----
+> 현재 의료업계는 고사양 워크스테이션 하나에서만 대용량 CT/MRI 를 확인하는
+> 형태다. 이걸 사양이 낮은 PC · 모바일 · 태블릿 등에서도 WebGPU + WASM 을
+> 이용해 렌더링해서 쉽게 볼 수 있게 하는 것 = **접근성 축의 성능 차별화**.
 
-### (지난 문단 유지 — 실 MRI 트랙 진행 순서 기록)
+**스코프 경계**:
 
-### 실 MRI 검증 트랙 (2026-07-07~) — 원 계획
+- Mini-Engine 은 **렌더링/그래픽 엔진 프로젝트**. 임상 워크플로우 도구
+  (MPR 3분할 · 측정 ruler/angle/ROI · DICOM 워크리스트 · 주석 · 십자선
+  동기화 등) 는 **이 프로젝트 스코프 밖**. 필요하면 상위 앱 프로젝트로 분리.
+- 성공 기준: **저사양 하드웨어 (Intel iGPU 노트북 · Chromebook · Android/iOS
+  모바일) 에서 대용량 실 CT/MRI** 가 유의미한 fps/메모리로 도는가.
 
-**결정**: M4 v2 P3.1 도달 시점에서 프로젝트의 원 목표 — "실제 MRI 영상을
-유의미한 프레임과 메모리로 화면에 띄우기" — 를 정면으로 밟기 위해 pivot.
-지금까지 M1~M4 v2 P3.1 이 인프라(로더 9종·brick atlas·multi-LOD·streaming·
-disk paging·path-trace polish)를 다졌고, 남은 갭은 **실 MR 데이터로의 시각
-검증** 과 **사용자 입력 경로** 이다.
+이전 실 MRI 검증 트랙 (R1-R4, 2026-07-07~2026-07-08) 은 완료 —
+사용자가 자신의 DICOM 폴더를 브라우저에 드래그하여 렌더까지의 경로를
+데스크톱에서 확보. Option C + Last-brick shrink (2026-07-09) 로 얇은 볼륨
+오버헤드 정착. 그러나 **저사양·모바일** 축에서는 실측이 하나도 없음 →
+이 재정비의 동기.
 
-**진행 순서** (계획서: [REAL_MRI_VERIFICATION_PLAN.md](plans/REAL_MRI_VERIFICATION_PLAN.md))
+### 현재 위치 진단 (원 목표 lens)
+
+지금까지의 인프라 트랙 (brick atlas · multi-LOD · streaming · disk paging ·
+Option C · last-brick shrink · path-trace · empty-space skipping) 은 원 목표에
+**정확히 부합** — 접근성 확대의 근간을 제공. 다만 **실측이 데스크톱 dGPU 에만
+국한** 이 최대 제약.
+
+| 갭 | 내용 |
+| --- | --- |
+| **A** (최대) | 저사양/모바일 실측 부재. Intel iGPU · Android · iOS 실측 = 0 |
+| **B** | 브라우저 대용량 페이징 부재. 네이티브만 `MmappedFile`, 브라우저는 memfs 전량 로드 → WASM heap 4 GB 한계 |
+| **C** | 실 임상 규모 데이터 실측 부재. pydicom-data 484×484×1 이 검증 최대 |
+| **D** | 사양별 자동 policy 부재. 옵션 (atlas · LOD · path-trace · denoise · K budget) 모두 개발자 수동 |
+
+### 유예 항목 재평가
+
+원 목표 lens (저사양·모바일 접근성) 로 다시 보면 이전 유예 판단이 다수 뒤집힘:
+
+| 항목 | 이전 판단 | 재평가 |
+| --- | --- | --- |
+| **P3.2 adaptive SPP by motion** | 유예 | **★★★★ 저사양 GPU 이동 시 fps 유지 핵심** |
+| **Async CPU pack** (worker) | 유예 | **★★★★ 저사양 CPU · 모바일 main thread 부담 감소** |
+| **Streaming per-axis** (Option C 확장) | 유예 | **★★★★ 브라우저 대용량 시 메모리 절감** |
+| **Adaptive K budget** | 유예 | ★★★ 정착 후 부하 감소, 배터리·모바일 |
+| P3.3 SVGF | 유예 | ★★ 인프라 큼, P3.2 로 대체 가능 |
+| LOD 경계 seam 완화 | 유예 | ★★ 시각 아티팩트, 저사양 접근성엔 marginal |
+| HDR equirect IBL | 유예 | ★ 여전히 부수적 |
+| JPEG-LS | 유예 | ★ 임상 희귀 transfer syntax, 성능 무관 |
+
+### 세 개의 축
+
+#### 축 X: 저사양/모바일 실측 (갭 A · D 정면)
 
 | Step | 작업 | 예상 |
 | --- | --- | --- |
-| **R1** | 실 MR 시리즈 (pydicom-data / IXI / OSF) 번들 + preload + MR-T1·T2 preset 렌더 검증 | 0.5~1 세션 |
-| **R2** | (조건부) MR-T1 / T2 preset LUT 재튜닝 — R1이 임상 signal 대비 어색하면 | 0.5~1 세션 |
-| **R3** | `<input type="file">` 런타임 DICOM 업로드 — ASYNCIFY safe 패턴 (`Module._wasmBusy`) | 2 세션 |
-| **R4** | 실 MR 사이즈에서 FPS + 메모리 HUD 보강 + `baselines/BASELINE_<date>_REAL_MRI.md` | 0.5~1 세션 |
+| **X1** | 모바일 WebGPU 지원 매트릭스 조사 (Android Chrome / iOS Safari 상태 · feature flag) | 0.5 세션 |
+| **X2** | 실측 하네스 — adapter info + GPU tier heuristic + baseline 자동 캡처 | 1 세션 |
+| **X3** | Intel iGPU 노트북 + Android 폰 실측 (기존 4시리즈) + baseline 문서 | 1~2 세션 |
+| **X4** | 사양 티어별 자동 policy (LOD 상한 · path-trace on/off · denoise 세기 · K budget) | 2 세션 |
 
-**유예된 트랙** (계획서 유지, 필요 시 재개):
+#### 축 Y: 브라우저 대용량 페이징 (갭 B · C 정면)
 
-- **M4 v2 P3.2** — adaptive SPP by camera motion (성능 최적화, P3.1 이후 시각 임팩트 낮음)
-- **M4 v2 P3.3** — SVGF temporal reprojection (2-3 세션 인프라, first-hit 렌더 타겟 추가 필요)
-- **M4 v2 P4** — HDR equirect IBL (`IBLManager` WASM 이식)
-- **JPEG-LS (charls)** — 임상 희귀 transfer syntax
+| Step | 작업 | 예상 |
+| --- | --- | --- |
+| **Y1** | File System Access API + Streams — chunk read (memfs 전량 로드 회피) | 2 세션 |
+| **Y2** | IndexedDB / OPFS — decoded brick cache (재방문 시 파싱 스킵) | 2 세션 |
+| **Y3** | TCIA 공개 대용량 CT (~300 MB, 512×512×500+) 로드/streaming 실측 + baseline | 1~2 세션 |
 
----
+#### 축 Z: 저사양 렌더 최적화 (재평가된 유예)
 
-**즉흥 폴리시 후보 (로드맵 명시 안 됨, 후순위)** — v1-β 작업 중 발견된 개선점.
-차별화 핵심 아니므로 위 차별화 후보가 마무리된 뒤 시각 만족도/성능에 따라 선택:
+| Step | 작업 | 예상 |
+| --- | --- | --- |
+| **Z1** | Adaptive SPP by camera motion (구 P3.2) — 드래그 중 SPP↓ 로 저사양 fps 유지 | 1~2 세션 |
+| **Z2** | Async CPU pack (worker thread) — Streaming 진입 시 main thread frame time 회복 | 2 세션 |
+| **Z3** | Adaptive K budget — 정착 후 upload/frame↓ | 0.5 세션 |
+| **Z4** | (선택) Streaming per-axis — Option C 를 Streaming pack 까지 확장 | 2~3 세션 |
 
-- **LOD 경계 seam 완화** — v1-β 가장 거슬리는 시각 아티팩트. dual-LOD blending(±2배
-  성능 비용) 또는 region-based selection으로 인접 brick 같은 LOD 강제.
-- **Async CPU pack (B-3)** — `V1_BETA_AND_MR_PLAN §4`의 deferred 항목. main thread
-  frame 시간 단축. 현재 K=64 budget으로 Case C zoom-in 72 ms / zoom-out 39 ms 차지.
-- **Adaptive K budget** — 정착 후 K↓로 FPS 향상. ~2-3시간.
-- **Screen-pixel-aware LOD selection** — 현재 distance 임계값을 fov + height 기반
-  스크린 픽셀당 voxel 비율로 정밀화 (계획서 §4 LOD β-6 표현).
-- **CPU pack SIMD (B-2)** — interior memcpy는 컴파일러가 이미 vectorize함. boundary
-  brick의 clamp 경로만 남는데 비중 작음 → 후보 우선순위 가장 낮음.
+### 명시적 폐기 · 저순위
 
-**다음 세션 진입점**: 이 문서 §2 마일스톤 상세 + 위 후보 목록. 사용자
-인터페이스 / 빌드 / 조작은 [VIEWERS.md](VIEWERS.md) 참조. 코드 진입은
+원 목표 (저사양·모바일 접근성) lens 로 우선순위가 낮음. 필요 시 별도 결정으로 재개:
+
+- **임상 워크플로우 도구화** — MPR 3분할 · 측정 (ruler/angle/ROI) · DICOM
+  워크리스트 · 주석 · 십자선 동기화 등. **Mini-Engine 스코프 밖.** 필요하면
+  상위 앱 프로젝트로 분리.
+- **HDR equirect IBL** (구 M4 v2 P4) — 렌더링 미술. 저사양 접근성엔 부수적.
+- **JPEG-LS transfer syntax** — 임상 희귀 케이스. 성능 무관.
+- **M4 v2 P3.3 SVGF temporal reprojection** — 인프라 크고 P3.2 (Z1) 로 상당 부분 대체 가능.
+- **LOD 경계 seam 완화** — 시각 아티팩트. 저사양 접근성엔 marginal.
+- **CPU pack SIMD (B-2)** — interior memcpy 는 이미 컴파일러가 vectorize.
+- **Screen-pixel-aware LOD selection** — 현 distance 임계값이 충분한 정도.
+
+### 현재 활성 방향 (2026-07-10~)
+
+**활성 트랙 없음** — 축 X/Y/Z 중 시작 순서 결정 대기.
+
+세 가지 안:
+
+- **[X 먼저]** — "지금 코드가 저사양에서 도나?" 를 정직하게 실측. 결과에 따라
+  Y/Z 우선순위 재조정. 안전.
+- **[Y 먼저]** — 브라우저 페이징 없으면 큰 파일 못 여니까 이것부터. 인프라 큼.
+- **[Z 먼저]** — 이미 있는 인프라 최적화 (adaptive SPP · async pack). 짧고 확실.
+
+**다음 세션 진입점**: 이 재정비 섹션. 인프라 세부는 §2 마일스톤 참조. 사용자
+인터페이스 / 빌드 / 조작은 [VIEWERS.md](VIEWERS.md). 코드 진입은
 `src/rendering/VolumeRenderer.{hpp,cpp}` + `src/rendering/BrickedVolume.{hpp,cpp}`
 (엔진 코어), `tests/volume_viewer.cpp` (네이티브 뷰어), `tests/volume_viewer_wasm.cpp`
 (브라우저 뷰어).
+
+### 지난 R4 트랙 참조 (완료 기록)
+
+- 실 MRI 검증 트랙 (R1-R4, 2026-07-07~08) — 계획서
+  [REAL_MRI_VERIFICATION_PLAN.md](plans/REAL_MRI_VERIFICATION_PLAN.md),
+  결과 [BASELINE_2026-07-08_REAL_MRI.md](baselines/BASELINE_2026-07-08_REAL_MRI.md).
+- Option C + Last-brick shrink (2026-07-09) — R4 가 노출한 얇은 볼륨 오버헤드
+  갭을 해소하여 네 시리즈 모두 dense 대비 ≤ +6% 로 정착. Streaming per-axis
+  확장은 축 Z4 로 이관.
 
 ---
 
