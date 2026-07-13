@@ -41,7 +41,8 @@ Mini-Engine implements it:
 | [DICOM_JPEG_LEGACY_PLAN.md](plans/DICOM_JPEG_LEGACY_PLAN.md) | DICOM JPEG Baseline / Extended / Lossless P14·SV1 (libjpeg-turbo, native) |
 | [WASM_LIBJPEG_TURBO_PLAN.md](plans/WASM_LIBJPEG_TURBO_PLAN.md) | WASM libjpeg-turbo build (browser JPEG legacy) |
 | [PATH_TRACE_POLISH_PLAN.md](plans/PATH_TRACE_POLISH_PLAN.md) | M4 v2 path-trace polish — IBL + A-trous denoiser + accumulation cap (P1..P3.1 done; P3.2/P3.3 deferred) |
-| [REAL_MRI_VERIFICATION_PLAN.md](plans/REAL_MRI_VERIFICATION_PLAN.md) | **Active** — real MR bundle + preset tuning + runtime DICOM upload + FPS/memory HUD (R1..R4) |
+| [REAL_MRI_VERIFICATION_PLAN.md](plans/REAL_MRI_VERIFICATION_PLAN.md) | real MR bundle + preset tuning + runtime DICOM upload + FPS/memory HUD (R1..R4) — 완료 |
+| [X1_MOBILE_WEBGPU_MATRIX.md](plans/X1_MOBILE_WEBGPU_MATRIX.md) | **Active** (축 X 저사양/모바일) — mobile WebGPU 지원 매트릭스 + 엔진 스택 호환성 진단 + X3 실측 방법론 |
 
 ---
 
