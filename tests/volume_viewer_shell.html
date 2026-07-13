@@ -36,12 +36,45 @@
     .upload-btn.secondary { background: #34495e; }
     .upload-file-input { display: none; }
     #uploadStatus { font-size: 11px; color: #aaa; margin-top: 4px; }
+
+    /* X2 -- Device profile + benchmark panel (top-left, collapsible). */
+    #devPanel { position: fixed; top: 12px; left: 12px; max-width: 340px;
+        background: rgba(16,19,26,0.92); border: 1px solid #2a3140; border-radius: 10px;
+        padding: 10px 12px; font-size: 11px; color: #cfd3dc;
+        -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+    #devPanel summary { cursor: pointer; color: #7fa7ff; text-transform: uppercase;
+        letter-spacing: .04em; -webkit-user-select: none; user-select: none;
+        margin: 0; padding: 2px 0; }
+    #devPanel pre { margin: 6px 0; max-height: 220px; overflow: auto;
+        font-family: ui-monospace, Consolas, monospace; font-size: 10.5px;
+        color: #cfd3dc; white-space: pre-wrap; word-break: break-word; }
+    #devPanel .tier { font-weight: 600; color: #ffcb6b; }
+    #devPanel button { margin-right: 6px; }
+    #benchStatus { color: #ffcb6b; margin-top: 4px; font-weight: 600; }
 </style>
 </head>
 <body>
     <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
     <div id="hint">Drag: orbit &nbsp;|&nbsp; Scroll: zoom</div>
     <div id="status">Downloading…</div>
+
+    <!-- X2 -- Device profile + benchmark harness. Adapter/limits capture is
+         independent of the wasm-side WebGPU context (both go through the same
+         navigator.gpu proxy) and runs immediately on page load so mobile
+         devices without WebGPU still get a useful "unsupported" JSON. The
+         benchmark runner triggers only on ?bench=1 to keep the default page
+         behavior identical. Placement: top-left so it doesn't collide with
+         the main control panel top-right. -->
+    <details id="devPanel">
+        <summary>Device profile</summary>
+        <div class="tier" id="devTier">tier: capturing…</div>
+        <pre id="devProfileBody">capturing…</pre>
+        <button type="button" id="copyProfileBtn">Copy profile</button>
+        <button type="button" id="runBenchBtn">Run benchmark</button>
+        <div id="benchStatus" hidden></div>
+        <pre id="benchResultsBody" hidden></pre>
+        <button type="button" id="copyBenchBtn" hidden>Copy results</button>
+    </details>
 
     <div id="panel">
         <h1>CT / MRI Volume Viewer</h1>
@@ -149,6 +182,238 @@
             requestAnimationFrame(_flushPending);
         }
         requestAnimationFrame(_flushPending);
+
+        // ============================================================
+        // X2 -- Device profile + tier heuristic + benchmark harness.
+        // Profile capture is wasm-independent (goes through the same
+        // navigator.gpu that Dawn wraps inside wasm; multiple
+        // requestAdapter calls are fine). Runs on page load so devices
+        // without WebGPU still get a useful "unsupported" record.
+        // Benchmark cycles render modes on the CURRENTLY loaded volume
+        // -- volume selection stays a manual step (X3 methodology has
+        // the tester run one benchmark per series).
+        // ============================================================
+        var devProfile = { captured: false, tier: 'unknown' };
+
+        function classifyTier(gpu, ua) {
+            // Rough heuristic from X1 support matrix; refined by X4 once
+            // X3 real-device numbers are in. Returns one of:
+            //   'high' | 'mid-desktop' | 'mobile-high' | 'mobile-mid'
+            //   | 'mobile-low' | 'unsupported'
+            if (!gpu) return 'unsupported';
+            var d = ((gpu.info && (gpu.info.description || gpu.info.device)) || '').toLowerCase();
+            var v = ((gpu.info && gpu.info.vendor) || '').toLowerCase();
+            var isMobileUA = /android|iphone|ipad|ipod/i.test(ua || '');
+            if (isMobileUA) {
+                if (/apple/.test(v) || /apple/.test(d)) return 'mobile-high';
+                if (/adreno\s*[7-9]|mali-g[89]|snapdragon\s*(8|9)/.test(d)) return 'mobile-high';
+                if (/adreno\s*6|mali-g7/.test(d)) return 'mobile-mid';
+                return 'mobile-low';
+            }
+            if (/intel/.test(v) && /(iris|uhd|hd graphics)/.test(d)) return 'mid-desktop';
+            if (/nvidia|geforce|rtx|gtx|amd|radeon|arc/.test(d) || /nvidia|amd/.test(v)) return 'high';
+            return 'mid-desktop';
+        }
+
+        function captureDeviceProfile() {
+            var out = {
+                capturedAt: new Date().toISOString(),
+                ua: navigator.userAgent,
+                screen: { w: screen.width, h: screen.height, dpr: window.devicePixelRatio },
+                viewport: { w: window.innerWidth, h: window.innerHeight },
+                gpu: null,
+                tier: 'unsupported'
+            };
+            var finish = function(err) {
+                if (err) out.error = String(err);
+                out.tier = classifyTier(out.gpu, out.ua);
+                devProfile = out; devProfile.captured = true;
+                var body = document.getElementById('devProfileBody');
+                var tier = document.getElementById('devTier');
+                if (body) body.textContent = JSON.stringify(out, null, 2);
+                if (tier) tier.textContent = 'tier: ' + out.tier;
+                try { localStorage.setItem('mini-engine.devProfile', JSON.stringify(out)); } catch (e) {}
+                console.log('[X2] device profile:', out);
+            };
+            if (!navigator.gpu) { finish('navigator.gpu missing'); return; }
+            navigator.gpu.requestAdapter().then(function(adapter) {
+                if (!adapter) { finish('requestAdapter returned null'); return; }
+                // adapter.info is a getter on modern impls; some older paths
+                // require adapter.requestAdapterInfo(). Handle both.
+                var infoP = adapter.info ? Promise.resolve(adapter.info)
+                          : (adapter.requestAdapterInfo ? adapter.requestAdapterInfo() : Promise.resolve({}));
+                infoP.then(function(info) {
+                    var features = [];
+                    try { adapter.features.forEach(function(f) { features.push(f); }); } catch (e) {}
+                    var limits = {};
+                    // Copy the interesting subset -- adapter.limits has ~30 fields.
+                    ['maxTextureDimension2D','maxTextureDimension3D','maxTextureArrayLayers',
+                     'maxStorageBufferBindingSize','maxUniformBufferBindingSize','maxBufferSize',
+                     'maxComputeInvocationsPerWorkgroup','maxComputeWorkgroupSizeX',
+                     'maxComputeWorkgroupsPerDimension','maxSamplersPerShaderStage',
+                     'maxSampledTexturesPerShaderStage'
+                    ].forEach(function(k) { if (k in adapter.limits) limits[k] = adapter.limits[k]; });
+                    out.gpu = {
+                        info: {
+                            vendor: (info && info.vendor) || '',
+                            architecture: (info && info.architecture) || '',
+                            device: (info && info.device) || '',
+                            description: (info && info.description) || ''
+                        },
+                        features: features,
+                        limits: limits,
+                        isFallback: adapter.isFallbackAdapter === true
+                    };
+                    finish();
+                }, function(e) { finish(e && e.message || e); });
+            }, function(e) { finish(e && e.message || e); });
+        }
+        captureDeviceProfile();
+
+        function copyText(t) {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(t).catch(function() { _copyFallback(t); });
+            } else { _copyFallback(t); }
+        }
+        function _copyFallback(t) {
+            var ta = document.createElement('textarea');
+            ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0';
+            document.body.appendChild(ta); ta.select();
+            try { document.execCommand('copy'); } catch (e) {}
+            document.body.removeChild(ta);
+        }
+        document.getElementById('copyProfileBtn').addEventListener('click', function() {
+            copyText(document.getElementById('devProfileBody').textContent || '');
+        });
+        document.getElementById('copyBenchBtn').addEventListener('click', function() {
+            copyText(document.getElementById('benchResultsBody').textContent || '');
+        });
+
+        // Benchmark: cycles render mode presets, samples lastRenderMs at
+        // 100 ms intervals during dwell, summarises mean/p50/p95/p99/max.
+        // No camera orbit (keeps the harness simple; user can orbit
+        // manually and re-run if the moving-camera case is needed).
+        var BENCH_MODES = [
+            { label: 'lambert',  renderMode: 0, spp: 8, denoise: false },
+            { label: 'pt_spp1',  renderMode: 1, spp: 1, denoise: false },
+            { label: 'pt_spp4',  renderMode: 1, spp: 4, denoise: false },
+            { label: 'pt_spp8',  renderMode: 1, spp: 8, denoise: true  }
+        ];
+        function benchDwellSec() {
+            var v = parseFloat(new URLSearchParams(location.search).get('dwell') || '10');
+            return (v > 0 && v < 120) ? v : 10;
+        }
+        function benchAutoRunRequested() {
+            return new URLSearchParams(location.search).get('bench') === '1';
+        }
+        function summariseSamples(a) {
+            if (!a.length) return { n: 0 };
+            var s = a.slice().sort(function(x, y) { return x - y; });
+            var sum = 0; for (var i = 0; i < s.length; ++i) sum += s[i];
+            return {
+                n: s.length, mean: sum / s.length,
+                min: s[0], p50: s[Math.floor(s.length * 0.50)],
+                p95: s[Math.floor(s.length * 0.95)],
+                p99: s[Math.floor(s.length * 0.99)],
+                max: s[s.length - 1]
+            };
+        }
+        function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
+        function waitForWasmReady(timeoutMs) {
+            // Poll until wasm is loaded, a volume is up, and at least one
+            // frame has recorded a render cost. Resolves true when ready,
+            // false on timeout.
+            var deadline = performance.now() + (timeoutMs || 20000);
+            return new Promise(function(resolve) {
+                (function poll() {
+                    var ready = (typeof Module !== 'undefined' &&
+                                 typeof Module.lastRenderMs === 'function' &&
+                                 !Module._wasmBusy &&
+                                 Module.volW() > 0 &&
+                                 Module.lastRenderMs() > 0);
+                    if (ready) { resolve(true); return; }
+                    if (performance.now() >= deadline) { resolve(false); return; }
+                    setTimeout(poll, 250);
+                })();
+            });
+        }
+        function runBenchmark() {
+            var dwell = benchDwellSec();
+            var status = document.getElementById('benchStatus');
+            var body = document.getElementById('benchResultsBody');
+            var copyBtn = document.getElementById('copyBenchBtn');
+            var runBtn = document.getElementById('runBenchBtn');
+            runBtn.disabled = true;
+            status.hidden = false;
+            status.textContent = 'waiting for wasm + volume + first frame…';
+            return waitForWasmReady(20000).then(function(ok) {
+                if (!ok) {
+                    status.textContent = 'wasm not ready after 20s — load a volume then retry';
+                    runBtn.disabled = false;
+                    return null;
+                }
+                return _runBenchmarkCore(dwell, status, body, copyBtn, runBtn);
+            });
+        }
+        function _runBenchmarkCore(dwell, status, body, copyBtn, runBtn) {
+            var result = {
+                startedAt: new Date().toISOString(),
+                device: devProfile,
+                volume: {
+                    w: Module.volW(), h: Module.volH(), d: Module.volD(),
+                    pageX: Module.pageX(), pageY: Module.pageY(), pageZ: Module.pageZ(),
+                    atlasX: Module.atlasX(), atlasY: Module.atlasY(), atlasZ: Module.atlasZ(),
+                    denseMB: Module.denseMB(), atlasMBAlloc: Module.atlasMBAlloc()
+                },
+                dwellSec: dwell, modes: []
+            };
+            var chain = Promise.resolve();
+            BENCH_MODES.forEach(function(m, i) {
+                chain = chain.then(function() {
+                    status.textContent = 'mode ' + (i + 1) + '/' + BENCH_MODES.length +
+                                         ': ' + m.label + ' (' + dwell + 's)…';
+                    _queue('setRenderMode', m.renderMode);
+                    _queue('setSpp', m.spp);
+                    _queue('setDenoise', m.denoise);
+                    return wait(1500);  // warm-up: shader swap + accum reset
+                }).then(function() {
+                    var samples = [];
+                    var end = performance.now() + dwell * 1000;
+                    return (function tick() {
+                        if (performance.now() >= end) {
+                            result.modes.push({
+                                label: m.label, spp: m.spp, denoise: m.denoise,
+                                renderMode: m.renderMode, frameMs: summariseSamples(samples)
+                            });
+                            return;
+                        }
+                        if (!Module._wasmBusy) {
+                            try { var ms = Module.lastRenderMs(); if (ms > 0) samples.push(ms); } catch (e) {}
+                        }
+                        return wait(100).then(tick);
+                    })();
+                });
+            });
+            return chain.then(function() {
+                result.finishedAt = new Date().toISOString();
+                body.textContent = JSON.stringify(result, null, 2);
+                body.hidden = false; copyBtn.hidden = false;
+                status.textContent = 'done — ' + result.modes.length + ' modes × ' + dwell + 's';
+                try { localStorage.setItem('mini-engine.benchResult', JSON.stringify(result)); } catch (e) {}
+                console.log('[X2] benchmark result:', result);
+                runBtn.disabled = false;
+                return result;
+            });
+        }  // _runBenchmarkCore
+        document.getElementById('runBenchBtn').addEventListener('click', runBenchmark);
+
+        // Auto-run when ?bench=1 is in the URL. runBenchmark itself already
+        // waits for wasm+volume+first-frame via waitForWasmReady, so we just
+        // fire it once the page settles (the extra timeout lets the default
+        // preloaded DICOM finish decoding on slow devices).
+        if (benchAutoRunRequested()) {
+            setTimeout(function() { runBenchmark(); }, 2000);
+        }
 
         function bindRange(id, valId, prec, fn) {
             var el = document.getElementById(id), v = document.getElementById(valId);
