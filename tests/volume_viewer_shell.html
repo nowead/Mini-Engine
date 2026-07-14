@@ -233,6 +233,73 @@
             return 'mid-desktop';
         }
 
+        // X4 -- tier-based auto policy. Applied once after the device profile
+        // capture completes. Adjusts slider defaults and max attributes so
+        // mobile users don't get slapped with pt_spp8+denoise on first
+        // switch to Path-traced. Render mode default stays Lambert on all
+        // tiers (user picks Path-traced explicitly); tier only pre-sets the
+        // parameters so the switch lands in a sane place.
+        //
+        // Wasm-side knobs (atlas cap, LOD cap, K budget) are v2+ -- they
+        // require new EMSCRIPTEN_BINDINGS. This v1 covers only the shell-
+        // reachable knobs (SPP, bounces, denoise, adaptiveSpp).
+        var TIER_POLICY = {
+            'high':         { spp: 8, sppMax: 32, bounces: 2, bouncesMax: 4, denoise: true,  adaptive: true },
+            'mid-desktop':  { spp: 4, sppMax: 16, bounces: 2, bouncesMax: 4, denoise: false, adaptive: true },
+            'mobile-high':  { spp: 4, sppMax: 8,  bounces: 2, bouncesMax: 3, denoise: false, adaptive: true },
+            'mobile-mid':   { spp: 1, sppMax: 4,  bounces: 1, bouncesMax: 2, denoise: false, adaptive: true },
+            'mobile-low':   { spp: 1, sppMax: 2,  bounces: 1, bouncesMax: 2, denoise: false, adaptive: true },
+            'unsupported':  { spp: 1, sppMax: 1,  bounces: 0, bouncesMax: 0, denoise: false, adaptive: true }
+        };
+        function effectiveTier(detected) {
+            // ?tier=<name> overrides the classifier -- useful for A/B testing
+            // a policy on a device that doesn't match the target tier.
+            var forced = new URLSearchParams(location.search).get('tier');
+            if (forced && TIER_POLICY[forced]) return forced;
+            return TIER_POLICY[detected] ? detected : 'mid-desktop';
+        }
+        function applyTierPolicy(detectedTier) {
+            var tier = effectiveTier(detectedTier);
+            var p = TIER_POLICY[tier];
+            // SPP slider: cap max, clamp value.
+            var spp = document.getElementById('spp');
+            var sppv = document.getElementById('sppv');
+            spp.max = String(p.sppMax);
+            var sppVal = Math.min(p.spp, p.sppMax);
+            spp.value = String(sppVal);
+            sppv.textContent = String(sppVal);
+            if (typeof _targetSpp !== 'undefined') _targetSpp = sppVal;
+            // Bounces slider: cap max, clamp value.
+            var b = document.getElementById('bounces');
+            var bv = document.getElementById('bouncesv');
+            b.max = String(p.bouncesMax);
+            var bVal = Math.min(p.bounces, p.bouncesMax);
+            b.value = String(bVal);
+            bv.textContent = String(bVal);
+            // Denoise checkbox.
+            document.getElementById('denoise').checked = p.denoise;
+            // Adaptive SPP checkbox (Z1 state mirror).
+            document.getElementById('adaptiveSpp').checked = p.adaptive;
+            if (typeof _adaptiveSpp !== 'undefined') _adaptiveSpp = p.adaptive;
+            // Queue to wasm -- flushes on rAF once wasm is ready.
+            _queue('setSpp', sppVal);
+            _queue('setBounces', bVal);
+            _queue('setDenoise', p.denoise);
+            // Reflect in the device panel.
+            var tierEl = document.getElementById('devTier');
+            if (tierEl) {
+                var line = 'tier: ' + tier +
+                    (forced === tier ? ' (forced via ?tier=)' :
+                        (detectedTier !== tier ? ' (detected: ' + detectedTier + ')' : '')) +
+                    '  ·  policy: SPP ' + p.spp + '/max ' + p.sppMax +
+                    ', bounces ' + p.bounces + '/max ' + p.bouncesMax +
+                    ', denoise ' + (p.denoise ? 'on' : 'off') +
+                    ', adaptive ' + (p.adaptive ? 'on' : 'off');
+                tierEl.textContent = line;
+            }
+            console.log('[X4] policy applied for tier=' + tier + ':', p);
+        }
+
         function captureDeviceProfile() {
             var out = {
                 capturedAt: new Date().toISOString(),
@@ -252,6 +319,9 @@
                 if (tier) tier.textContent = 'tier: ' + out.tier;
                 try { localStorage.setItem('mini-engine.devProfile', JSON.stringify(out)); } catch (e) {}
                 console.log('[X2] device profile:', out);
+                // X4 -- apply tier policy once the tier is known. Overrides
+                // the tier line's text with the applied policy summary.
+                try { applyTierPolicy(out.tier); } catch (e) { console.warn('[X4] apply failed:', e); }
             };
             if (!navigator.gpu) { finish('navigator.gpu missing'); return; }
             navigator.gpu.requestAdapter().then(function(adapter) {
