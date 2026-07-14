@@ -540,8 +540,8 @@ Option C · last-brick shrink · path-trace · empty-space skipping) 은 원 목
 | Step | 작업 | 예상 |
 | --- | --- | --- |
 | **X1** ✅ | 모바일 WebGPU 지원 매트릭스 조사 (Android Chrome / iOS Safari 상태 · feature flag) — [계획서](plans/X1_MOBILE_WEBGPU_MATRIX.md) | 완료 |
-| **X2** | 실측 하네스 — adapter info + GPU tier heuristic + baseline 자동 캡처 | 1 세션 |
-| **X3** | Intel iGPU 노트북 + Android 폰 실측 (기존 4시리즈) + baseline 문서 | 1~2 세션 |
+| **X2** ✅ | 실측 하네스 — adapter info + GPU tier heuristic + baseline 자동 캡처 (`?bench=1&dwell=N`) | 완료 |
+| **X3** 🟡 | 실 기기 실측 + baseline 문서 — draft [BASELINE_2026-07-14_MOBILE_MATRIX.md](baselines/BASELINE_2026-07-14_MOBILE_MATRIX.md) 에 T-high + T-mobile-high(iPhone iOS 18.7 KakaoTalk) 캡처, Android + Intel iGPU + Safari.app control 은 append 예정 | 진행 중 |
 | **X4** | 사양 티어별 자동 policy (LOD 상한 · path-trace on/off · denoise 세기 · K budget) | 2 세션 |
 
 #### 축 Y: 브라우저 대용량 페이징 (갭 B · C 정면)

@@ -58,6 +58,7 @@ Mini-Engine implements it:
 | [BASELINE_2026-07-08_REAL_MRI.md](baselines/BASELINE_2026-07-08_REAL_MRI.md) | Real MRI verification (R4): 4 public series, runtime upload path, memory + CPU baselines |
 | [BASELINE_2026-07-09_BRICK_SHAPE.md](baselines/BASELINE_2026-07-09_BRICK_SHAPE.md) | Brick shape flexibility (Option C): thin-volume overhead +7754% → +6~19%, 70× memory reduction on single-slice cases |
 | [BASELINE_2026-07-09_LAST_BRICK_SHRINK.md](baselines/BASELINE_2026-07-09_LAST_BRICK_SHRINK.md) | Last-brick shrink (Option C tail): Siemens +19% → +6%; all four R4 series now ≤ +6% vs dense |
+| [BASELINE_2026-07-14_MOBILE_MATRIX.md](baselines/BASELINE_2026-07-14_MOBILE_MATRIX.md) | **draft** — X3 mobile matrix 초안: RTX 4070 (T-high) + iPhone iOS 18.7 KakaoTalk WKWebView (T-mobile-high) 최초 측정. iOS 18 WebGPU 실작동 확인, 저부하에선 iPhone > RTX 역전, pt_spp8+denoise 는 iPhone 24 fps 붕괴. |
 
 ---
 

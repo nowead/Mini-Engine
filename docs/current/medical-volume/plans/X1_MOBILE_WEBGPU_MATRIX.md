@@ -24,7 +24,7 @@
 | 플랫폼 | 상태 | 하드웨어 요구 | 커버리지 (2026 Q1 기준) |
 | --- | --- | --- | --- |
 | **Chrome for Android** | ✅ 121~ 안정 | Android 12+, Qualcomm Adreno 6xx+ 또는 ARM Mali-G78+; Imagination GPU 139~ | ~78% |
-| **Safari iOS/iPadOS** | ✅ 26.0 안정 (2025 fall) | iOS/iPadOS 26+ | OS 롤아웃 진행 중 |
+| **Safari iOS/iPadOS** | ✅ 26.0 정식 · **⚠ iOS 18+ 도 experimental 로 이미 활성** (실측 확인) | iOS/iPadOS 26 정식; iOS 18 은 WKWebView + experimental flag 조건부 | OS 26 롤아웃 진행 중; 18+ 는 앱별 |
 | **Safari visionOS** | ✅ 26 | visionOS 26+ | — |
 | **Samsung Internet** | ✅ 24~ | Adreno 6xx+ | Galaxy 기기 상당수 |
 | **Opera Mobile** | ✅ 80~ | Chrome for Android 와 유사 | — |
@@ -38,8 +38,11 @@
 
 - **Android Chrome (Adreno 6xx+ / Mali-G78+)** — 최대 실사용 타깃, 커버리지
   넓음. X3 실측의 primary device.
-- **iOS Safari (iPhone/iPad iOS 26+)** — 커버리지는 아직 OS 롤아웃 중이나
-  Apple ecosystem 도달을 위해 필수. X3 실측 secondary device.
+- **iOS Safari (iPhone/iPad iOS 26+)** — 정식 완전 지원. **iOS 18+ WKWebView
+  경로 도 실측 상 동작 확인** (2026-07-14 카카오톡 in-app 브라우저에서 iPhone
+  iOS 18.7 성공, [BASELINE_2026-07-14_MOBILE_MATRIX.md](../baselines/BASELINE_2026-07-14_MOBILE_MATRIX.md)).
+  즉 iOS 커버리지가 예상보다 넓음 — WebGPU 활성 웹뷰를 쓰는 앱을 통하면 iOS
+  18+ 사용자도 접근 가능.
 - **Chromebook (Android Chrome 기반)** — 저사양 데스크톱 대체재. Adreno/Mali
   없이 Intel iGPU 인 모델도 있음 (Chromium 데스크톱 Intel Gen12+ 경로).
 - **Firefox Android** — flag off 이므로 실측 대상에서 제외.
