@@ -24,7 +24,7 @@
 | 플랫폼 | 상태 | 하드웨어 요구 | 커버리지 (2026 Q1 기준) |
 | --- | --- | --- | --- |
 | **Chrome for Android** | ✅ 121~ 안정 | Android 12+, Qualcomm Adreno 6xx+ 또는 ARM Mali-G78+; Imagination GPU 139~ | ~78% |
-| **Safari iOS/iPadOS** | ✅ 26.0 정식 · **⚠ iOS 18+ 도 experimental 로 이미 활성** (실측 확인) | iOS/iPadOS 26 정식; iOS 18 은 WKWebView + experimental flag 조건부 | OS 26 롤아웃 진행 중; 18+ 는 앱별 |
+| **Safari iOS/iPadOS** | ✅ **iOS 18+ Safari.app + WKWebView 양쪽 기본 활성** (실측: Safari 26.5 on iOS 18.7, flag 조작 불필요) · iOS 26+ 은 정식 완전 지원 | iOS/iPadOS 18+ (Safari 26 branding); OS 26 이 정식 완전 지원 | Safari 앱이 OS 와 분리 릴리즈되어 iOS 18 사용자도 대부분 도달 |
 | **Safari visionOS** | ✅ 26 | visionOS 26+ | — |
 | **Samsung Internet** | ✅ 24~ | Adreno 6xx+ | Galaxy 기기 상당수 |
 | **Opera Mobile** | ✅ 80~ | Chrome for Android 와 유사 | — |
@@ -38,11 +38,13 @@
 
 - **Android Chrome (Adreno 6xx+ / Mali-G78+)** — 최대 실사용 타깃, 커버리지
   넓음. X3 실측의 primary device.
-- **iOS Safari (iPhone/iPad iOS 26+)** — 정식 완전 지원. **iOS 18+ WKWebView
-  경로 도 실측 상 동작 확인** (2026-07-14 카카오톡 in-app 브라우저에서 iPhone
-  iOS 18.7 성공, [BASELINE_2026-07-14_MOBILE_MATRIX.md](../baselines/BASELINE_2026-07-14_MOBILE_MATRIX.md)).
-  즉 iOS 커버리지가 예상보다 넓음 — WebGPU 활성 웹뷰를 쓰는 앱을 통하면 iOS
-  18+ 사용자도 접근 가능.
+- **iOS Safari (iPhone/iPad)** — **iOS 18+ Safari.app 및 WKWebView 양쪽에서
+  기본 활성** 실측 확인 (2026-07-14, iPhone iOS 18.7 · Safari.app 26.5 및 카톡
+  WKWebView, [BASELINE_2026-07-14_MOBILE_MATRIX.md](../baselines/BASELINE_2026-07-14_MOBILE_MATRIX.md)).
+  Apple 이 Safari 를 OS 와 분리 릴리즈하면서 Safari 26 이 iOS 18 위에서 이미
+  기본 동작. iOS 커버리지가 이 문서 최초 작성 시 예상보다 훨씬 넓음. 다만 같은
+  하드웨어 · WebKit 임에도 브라우저별 성능 프로파일 차이가 있음
+  (관측 4 참조) → X4 policy 는 UA (Safari.app vs WKWebView) 도 참고 시그널로.
 - **Chromebook (Android Chrome 기반)** — 저사양 데스크톱 대체재. Adreno/Mali
   없이 Intel iGPU 인 모델도 있음 (Chromium 데스크톱 Intel Gen12+ 경로).
 - **Firefox Android** — flag off 이므로 실측 대상에서 제외.

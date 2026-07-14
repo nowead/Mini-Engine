@@ -541,7 +541,7 @@ Option C · last-brick shrink · path-trace · empty-space skipping) 은 원 목
 | --- | --- | --- |
 | **X1** ✅ | 모바일 WebGPU 지원 매트릭스 조사 (Android Chrome / iOS Safari 상태 · feature flag) — [계획서](plans/X1_MOBILE_WEBGPU_MATRIX.md) | 완료 |
 | **X2** ✅ | 실측 하네스 — adapter info + GPU tier heuristic + baseline 자동 캡처 (`?bench=1&dwell=N`) | 완료 |
-| **X3** 🟡 | 실 기기 실측 + baseline 문서 — draft [BASELINE_2026-07-14_MOBILE_MATRIX.md](baselines/BASELINE_2026-07-14_MOBILE_MATRIX.md) 에 T-high + T-mobile-high(iPhone iOS 18.7 KakaoTalk) 캡처, Android + Intel iGPU + Safari.app control 은 append 예정 | 진행 중 |
+| **X3** 🟡 | 실 기기 실측 + baseline 문서 — [BASELINE_2026-07-14_MOBILE_MATRIX.md](baselines/BASELINE_2026-07-14_MOBILE_MATRIX.md) 에 T-high · T-mobile-high(a) iPhone KakaoTalk WKWebView · T-mobile-high(b) iPhone Safari.app 26.5 캡처. Android + Intel iGPU 는 append 예정 | 진행 중 |
 | **X4** | 사양 티어별 자동 policy (LOD 상한 · path-trace on/off · denoise 세기 · K budget) | 2 세션 |
 
 #### 축 Y: 브라우저 대용량 페이징 (갭 B · C 정면)
@@ -556,7 +556,7 @@ Option C · last-brick shrink · path-trace · empty-space skipping) 은 원 목
 
 | Step | 작업 | 예상 |
 | --- | --- | --- |
-| **Z1** | Adaptive SPP by camera motion (구 P3.2) — 드래그 중 SPP↓ 로 저사양 fps 유지 | 1~2 세션 |
+| **Z1** ✅ | Adaptive SPP by camera motion (구 P3.2) — 드래그 중 SPP↓ 로 저사양 fps 유지. 커밋 `8ce5a9b`; RTX 4070 검증 완료; iPhone Safari 상호작용 중 mean 9-10 ms (정지 pt_spp8 38 ms 대비 4× 회복) | 완료 |
 | **Z2** | Async CPU pack (worker thread) — Streaming 진입 시 main thread frame time 회복 | 2 세션 |
 | **Z3** | Adaptive K budget — 정착 후 upload/frame↓ | 0.5 세션 |
 | **Z4** | (선택) Streaming per-axis — Option C 를 Streaming pack 까지 확장 | 2~3 세션 |
@@ -577,14 +577,15 @@ Option C · last-brick shrink · path-trace · empty-space skipping) 은 원 목
 
 ### 현재 활성 방향 (2026-07-10~)
 
-**활성 트랙 없음** — 축 X/Y/Z 중 시작 순서 결정 대기.
+**X → Z 순서로 진행 중** (X 실측 병렬로 Z 최적화 이미 착수):
 
-세 가지 안:
-
-- **[X 먼저]** — "지금 코드가 저사양에서 도나?" 를 정직하게 실측. 결과에 따라
-  Y/Z 우선순위 재조정. 안전.
-- **[Y 먼저]** — 브라우저 페이징 없으면 큰 파일 못 여니까 이것부터. 인프라 큼.
-- **[Z 먼저]** — 이미 있는 인프라 최적화 (adaptive SPP · async pack). 짧고 확실.
+- ✅ X1 · X2 · Z1 완료. X3 draft baseline 에 T-high + iPhone 두 브라우저 (KakaoTalk
+  WKWebView · Safari.app 26.5) 캡처.
+- 🟡 X3 append 대기 (Android Chrome / Intel iGPU — 기기 확보 시).
+- ⏭ **다음 코드 세션 후보**: Z2 (async CPU pack, main thread 부담 감소) 또는
+  X4 (tier auto policy) 또는 Y1 (브라우저 File System Access chunk paging).
+  현재 데이터로 Z2 가 iPhone pt_spp8+denoise 42ms 개선 후속 케이스에 적절.
+- pt_spp4 브라우저 격차 (관측 4) 는 정성적 항목으로 baseline follow-up 유지.
 
 **다음 세션 진입점**: 이 재정비 섹션. 인프라 세부는 §2 마일스톤 참조. 사용자
 인터페이스 / 빌드 / 조작은 [VIEWERS.md](VIEWERS.md). 코드 진입은

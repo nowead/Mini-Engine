@@ -23,42 +23,46 @@ Intel iGPU 노트북 · Safari.app iOS) 는 append 예정.
 | Tier | 기기 | 브라우저 | UA (요약) |
 | --- | --- | --- | --- |
 | **T-high** | Windows 데스크톱 dGPU | Chrome 150 | Windows 10, NVIDIA RTX 4070 (Lovelace) |
-| **T-mobile-high** | iPhone (A17 급 추정) | KakaoTalk **in-app WKWebView** | iOS 18.7, WebKit 605 |
+| **T-mobile-high (a)** | iPhone (A17 급 추정) | KakaoTalk **in-app WKWebView** | iOS 18.7, WebKit 605, KAKAOTALK/26.5.6 (INAPP) |
+| **T-mobile-high (b)** | 같은 iPhone | **Safari.app 26.5** (정식) | iOS 18.7, WebKit 605, `Version/26.5 Mobile/15E148 Safari/604.1` |
 
 **Append 예정**:
 
 - T-mid-desktop — Intel iGPU (Iris Xe · UHD)
 - T-mobile-mid — Android Chrome (Adreno 6xx / Mali-G7x)
-- T-mobile-high (control) — Safari.app 정식 (카톡 웹뷰 vs 표준 Safari 차이 확인)
 
 ---
 
 ## 프레임 타임 크로스 티어 (dwell=10 s)
 
-| Mode | Cfg | T-high mean/max (ms) | T-mobile-high mean/max (ms) | 비율 (mob/high) |
-| --- | --- | ---:| ---:|:---:|
-| lambert       | SPP=8 (참고, no PT)      | 3.84 / 4.60 | **1.43 / 2.24** | **0.37×** (mob 우세) |
-| pt_spp1       | path-trace, no denoise   | 2.19 / 3.02 | 1.57 / 1.95     | 0.72× |
-| pt_spp4       | path-trace, no denoise   | 3.42 / 4.39 | 4.01 / **19.27** | 1.17× (mob 큰 jitter) |
-| pt_spp8       | path-trace + A-trous     | 5.12 / 6.50 | **42.4 / 53.3**  | 8.28× (mob 붕괴) |
+| Mode | Cfg | T-high mean/max (ms) | mobile-high(a) KakaoTalk WKWebView | mobile-high(b) Safari.app 26.5 |
+| --- | --- | ---:| ---:| ---:|
+| lambert   | SPP=8 (참고, no PT)    | 3.84 / 4.60 | **1.43 / 2.24** | 1.57 / 3.33 |
+| pt_spp1   | path-trace, no denoise | 2.19 / 3.02 | 1.57 / 1.95     | 1.67 / 1.96 |
+| pt_spp4   | path-trace, no denoise | 3.42 / 4.39 | 4.01 / **19.27** | **12.84 / 24.60** (3× WKWebView) |
+| pt_spp8   | path-trace + A-trous   | 5.12 / 6.50 | **42.4 / 53.3**  | **38.16 / 42.69** |
 
-**iPhone 샘플 수**: lambert 89 · pt_spp1 89 · pt_spp4 66 · pt_spp8 14
-(pt_spp8 은 프레임당 ~700 ms → 폴 간격 100 ms 이 프레임을 못 따라잡음. mean 자체는
-정확, 통계 신뢰도만 낮음.)
+**iPhone 샘플 수**:
+- KakaoTalk WKWebView — lambert 89 · pt_spp1 89 · pt_spp4 66 · pt_spp8 14
+- Safari.app — lambert 92 · pt_spp1 85 · pt_spp4 43 · pt_spp8 11
+
+pt_spp8 은 iPhone 두 브라우저 공히 프레임당 ~700 ms → 폴 간격 100 ms 이 프레임을
+못 따라잡음. mean 자체는 정확, 통계 신뢰도만 낮음.
 
 ## 관측 · 결정 근거
 
-### 관측 1 — iOS 18.7 에서 WebGPU 이미 동작
+### 관측 1 — iOS 18.7 에서 WebGPU **기본 활성** (Safari.app + WKWebView 양쪽)
 
-X1 매트릭스에는 "Safari 26 (iOS 26)+ 부터 완전 지원" 이라고 적었으나, 실측 결과
-**iOS 18.7 (WebKit 605) + KakaoTalk in-app WKWebView 에서 정상 동작**. Adapter info,
-15 개 features, limits 모두 정상 노출. iOS 18 부터 experimental flag 뒤에 이미
-implemented 되어 있었고, KakaoTalk WKWebView 가 이를 켜둔 상태로 보임. Safari.app
-정식에선 사용자 flag 조작 필요 여부는 별도 확인 필요.
+X1 매트릭스에는 "Safari 26 (iOS 26)+ 부터 완전 지원" 이라고 적었으나, 실측 결과:
 
-**함의**: iOS 커버리지가 X1 예상보다 넓음. iOS 18+ 사용자 (전체 iPhone 사용자의
-높은 비중) 도 WebGPU 웹뷰가 활성화된 앱을 통해 렌더 가능. → X1 매트릭스 정정
-필요 (본 커밋에 포함).
+- **iOS 18.7 + Safari.app 26.5** (`Version/26.5 Mobile/15E148 Safari/604.1`) —
+  별도 flag 조작 없이 즉시 동작. Adapter info, 15 features, limits 모두 정상.
+- **iOS 18.7 + KakaoTalk in-app WKWebView** — 동일 (WebKit 공통 기반).
+
+Safari 앱 버전 넘버 (`26.5`) 는 iOS 버전 (`18.7`) 과 어긋나 있음 — Apple 이
+Safari 를 26 브랜드로 앞선 릴리즈. WebKit 자체는 605 시리즈. 즉 **iOS 18 사용자
+대다수가 이미 WebGPU 접근 가능**. X1 매트릭스의 "iOS 26+" 는 과보수적, 실사용
+커버리지는 훨씬 넓음. → X1 iOS 행 정정 (본 커밋에 포함).
 
 ### 관측 2 — 저부하에선 iPhone > RTX 4070
 
@@ -81,17 +85,40 @@ unified memory + Metal 저지연 파이프라인이 dGPU 의 PCIe 왕복보다 �
 - 사용자가 명시적으로 켜는 옵션으로 남기되, SPP 상한 (mobile 티어 4 등) 을
   강제하는 UI 게이팅 검토 필요.
 
-### 관측 4 — pt_spp4 iPhone jitter (p50 1.9 → p99 19 ms)
+### 관측 4 — pt_spp4 iPhone: WKWebView 4 ms vs Safari.app 12.8 ms (3× 격차)
 
-pt_spp1 은 p99 1.95 로 안정적이었는데 pt_spp4 는 p50 1.9 · p95 15 · p99 19 로
-스파이크. 원인 미확정, 후보:
+카톡 WKWebView 는 mean 4.01 ms (p95 15 ms 스파이크는 있지만 baseline 은 낮음),
+Safari.app 26.5 는 mean 12.84 ms (p50 12 ms, 즉 상시). 같은 iPhone / 같은 iOS /
+같은 WebKit 605 임에도 3× 차이. pt_spp1 · pt_spp8 은 두 브라우저 거의 동일하고
+pt_spp4 만 격차.
 
-- **Thermal throttling** — 벤치 20~30 초 시점 (모드 3 진입) 발열 시작
-- **Shader compile on-demand** — path-trace 파이프라인 spec 상 변경마다 지연
-- **KakaoTalk WKWebView 특유 스케줄러 간섭** — 표준 Safari 와 비교 필요
+원인 후보 (미확정):
 
-`?bench=1&dwell=20` 으로 늘려서 재확인 시 스파이크가 초반에만 있는지 (컴파일)
-후반에만 있는지 (thermal) 판별 가능. 다음 세션의 후속 액션.
+- **Path-trace 파이프라인 shader compile 캐시 차이** — 두 브라우저가 서로 다른
+  cache 사용, 재컴파일 트리거 상황이 다름. 카톡은 pt_spp1 을 앞서 컴파일 → pt_spp4
+  는 SPP loop 이 다른 파이프라인이나 재사용 성공, Safari 는 재컴파일 발생 등.
+- **Foreground/background scheduling 차이** — Safari.app 의 URL bar / 시스템
+  UI overhead 가 WKWebView 보다 큼.
+- **Sample selection artifact** — Safari.app 은 43 샘플로 KakaoTalk 66 대비
+  적음. Warm-up 부족 가능성. `?dwell=20` 재실행으로 확인 필요.
+
+**함의**: 동일 하드웨어에서도 브라우저별 성능 프로파일이 다를 수 있음 → X4
+policy 는 UA 뿐 아니라 실측 pilot burst 로 tier fine-tuning 필요할 수도 있음
+(future work).
+
+### 관측 5 — Z1 (adaptive SPP by motion) 데스크톱 검증 완료
+
+같은 세션에서 Z1 (adaptive SPP by motion, 커밋 `8ce5a9b`) 데스크톱 검증:
+
+- Path-traced SPP=8 + denoise, RTX 4070: 정지 ~5 ms → 드래그 중 ~2 ms → 릴리즈
+  250 ms 후 ~5-6.5 ms (accum reset 오차 안).
+- adaptive off 토글: 드래그 중에도 ~5 ms 유지 (control).
+
+iPhone Safari.app 벤치에선 adaptive on 상태로 순수 벤치 (motion 없음) 는
+pt_spp8+denoise 38 ms 그대로 (adaptive 트리거 안 됨 = 정확한 baseline 캡처).
+Ring-buffer 통계는 사용자 상호작용 중 mean 9-10 ms 로 낮춰지는 것이 스크린샷에
+잡힘 — 간접적으로 Z1 mobile 임팩트 확인. 정식 mobile Z1 baseline (드래그 중 프레임
+타임 히스토그램) 은 후속 세션에서 별도 캡처 가능.
 
 ---
 
@@ -127,7 +154,7 @@ pt_spp1 은 p99 1.95 로 안정적이었는데 pt_spp4 는 p50 1.9 · p95 15 · 
 }
 ```
 
-### T-mobile-high (KakaoTalk in-app WKWebView · iPhone iOS 18.7 · Apple GPU)
+### T-mobile-high (a) — KakaoTalk in-app WKWebView · iPhone iOS 18.7 · Apple GPU
 
 ```json
 {
@@ -155,7 +182,21 @@ pt_spp1 은 p99 1.95 로 안정적이었는데 pt_spp4 는 p50 1.9 · p95 15 · 
 }
 ```
 
-**주목할 limit 차이**:
+### T-mobile-high (b) — Safari.app 26.5 · 같은 iPhone iOS 18.7 · Apple GPU
+
+Adapter info · features · limits 는 T-mobile-high (a) 와 **완전히 동일** (동일한
+WebKit / Metal 스택). UA 만 다름:
+
+```text
+Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15
+(KHTML, like Gecko) Version/26.5 Mobile/15E148 Safari/604.1
+```
+
+`Version/26.5` 가 Safari 앱 브랜딩 버전 (iOS 18 위에 Safari 26 이 나온 것 —
+Apple 이 Safari 를 OS 와 분리된 릴리즈 사이클로 앞선 것). 그러나 프레임 타임은
+pt_spp4 에서 3× 격차 발생 — 관측 4 참조.
+
+**주목할 limit 차이** (RTX vs iPhone; iPhone 두 브라우저는 동일):
 
 - `maxStorageBufferBindingSize`: RTX 2 GiB vs iPhone 1 GiB — 우리 page table 은
   1024³ 볼륨에서도 64 KiB 이라 둘 다 여유 매우 큼.
@@ -193,10 +234,16 @@ X1 이 제안한 초안:
 
 ## Follow-ups
 
-1. **X1 매트릭스 정정**: iOS 18 실측 결과 반영 (본 커밋 포함).
-2. **jitter 조사**: iPhone `?dwell=20` 재실행 → 초반/후반 분포 비교.
-3. **Safari.app control test**: 같은 iPhone iOS 18.7 에서 정식 Safari 로 재실측
-   → WKWebView (카톡) 과 비교.
-4. **Android · Intel iGPU** 실측 후 본 문서 append.
-5. **대용량 볼륨 실측**: 축 Y 완료 후 T-mobile-high 에서 512×512×N 실 CT
+1. ~~**X1 매트릭스 정정**: iOS 18 실측 결과 반영~~ ✅ 완료 (본 커밋 포함,
+   Safari.app · WKWebView 양쪽 확인).
+2. ~~**Safari.app control test**~~ ✅ 완료 (본 append). 예상 밖 결과 —
+   pt_spp4 만 3× 격차, 관측 4 로 별도 조사 항목 유지.
+3. **pt_spp4 브라우저 격차 조사**: `?dwell=20` 재실행 후 sample warm-up
+   충분 상태에서 재측정, 여전히 3× 이면 pipeline compile cache 차이로
+   결론 짓고 X4 policy 는 UA (WKWebView vs Safari.app) 도 참고 시그널로.
+4. **Z1 mobile 명시적 baseline**: 정지 pt_spp8 42 ms → 드래그 중 프레임
+   타임 분포 캡처. 벤치 하네스에 "auto-orbit" 모드 추가하면 자동화 가능
+   (지금 harness 는 정지 벤치만).
+5. **Android · Intel iGPU** 실측 후 본 문서 append (준비된 기기 없음).
+6. **대용량 볼륨 실측**: 축 Y 완료 후 T-mobile-high 에서 512×512×N 실 CT
    재실측. 지금은 fMRI 만이라 atlas·LOD·streaming policy 검증 불가.
