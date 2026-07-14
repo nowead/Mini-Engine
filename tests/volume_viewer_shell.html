@@ -12,8 +12,22 @@
     #canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
     #panel { position: fixed; top: 12px; right: 12px; width: 280px;
         background: rgba(16,19,26,0.92); border: 1px solid #2a3140; border-radius: 10px;
-        padding: 14px 16px; -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
-    #panel h1 { font-size: 14px; margin: 0 0 2px; }
+        padding: 14px 16px; -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+        max-height: calc(100vh - 24px); overflow-y: auto; }
+    #panel.collapsed #panelBody { display: none; }
+    #panel.collapsed { padding: 6px 10px; }
+    #panelToggle { position: absolute; top: 6px; right: 8px; width: 28px; height: 24px;
+        line-height: 20px; padding: 0; font-size: 16px; cursor: pointer;
+        background: transparent; border: 1px solid #2a3140; color: #cfd3dc;
+        border-radius: 4px; }
+    #panelToggle:hover { background: #1a2030; }
+    /* On narrow screens (phones) start collapsed and shrink; devPanel takes
+       the top-left so both fit without covering the canvas. */
+    @media (max-width: 640px) {
+        #panel { width: min(72vw, 260px); font-size: 12px; padding: 10px 12px; }
+        #devPanel { max-width: 60vw; }
+    }
+    #panel h1 { font-size: 14px; margin: 0 0 2px; padding-right: 32px; }
     #panel .sub { color: #8b95a7; font-size: 11px; margin-bottom: 10px; }
     .sec { color: #7fa7ff; font-size: 11px; text-transform: uppercase;
         letter-spacing: .04em; margin: 12px 0 6px; border-top: 1px solid #232a36; padding-top: 8px; }
@@ -77,8 +91,10 @@
     </details>
 
     <div id="panel">
+        <button type="button" id="panelToggle" title="Collapse/expand panel" aria-label="Toggle panel">−</button>
         <h1>CT / MRI Volume Viewer</h1>
         <div class="sub" id="subtitle">WebGPU · loading…</div>
+        <div id="panelBody">
 
         <div class="sec">Load DICOM (runtime)</div>
         <div class="row upload-row">
@@ -165,6 +181,7 @@
 
         <div class="sec">Stats (M3-3)</div>
         <pre id="stats">loading…</pre>
+        </div><!-- /panelBody -->
     </div>
 
     <script>
@@ -406,6 +423,23 @@
             });
         }  // _runBenchmarkCore
         document.getElementById('runBenchBtn').addEventListener('click', runBenchmark);
+
+        // Right-panel collapse toggle. Auto-collapse on narrow screens so
+        // the top-left device profile / benchmark output stays reachable.
+        (function() {
+            var panel = document.getElementById('panel');
+            var btn = document.getElementById('panelToggle');
+            function setCollapsed(c) {
+                panel.classList.toggle('collapsed', c);
+                btn.textContent = c ? '+' : '−';
+            }
+            if (window.matchMedia && window.matchMedia('(max-width: 640px)').matches) {
+                setCollapsed(true);
+            }
+            btn.addEventListener('click', function() {
+                setCollapsed(!panel.classList.contains('collapsed'));
+            });
+        })();
 
         // Auto-run when ?bench=1 is in the URL. runBenchmark itself already
         // waits for wasm+volume+first-frame via waitForWasmReady, so we just
