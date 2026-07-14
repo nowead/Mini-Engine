@@ -164,6 +164,7 @@
         <div class="row"><span class="lbl">SPP</span>
             <input type="range" id="spp" aria-label="Samples per pixel" min="1" max="32" step="1" value="8" disabled>
             <span class="val" id="sppv">8</span></div>
+        <label class="tog"><input type="checkbox" id="adaptiveSpp" checked disabled> Adaptive SPP (motion)</label>
         <div class="row"><span class="lbl">Aniso g</span>
             <input type="range" id="aniso" aria-label="Phase-function anisotropy" min="-0.9" max="0.9" step="0.05" value="0.4" disabled>
             <span class="val" id="anisov">0.40</span></div>
@@ -490,8 +491,72 @@
                 document.getElementById('denoise').disabled = !pt;
                 document.getElementById('accumCap').disabled = !pt;
                 document.getElementById('accumReset').disabled = !pt;
+                document.getElementById('adaptiveSpp').disabled = !pt;
+                // Mode swap: bail out of motion state so the new mode starts
+                // clean (Lambert ignores SPP anyway; this is just hygiene).
+                if (!pt && _inMotion) { _endMotion(); }
             });
-            bindRange('spp',     'sppv',     0, 'setSpp');
+
+            // Z1 -- adaptive SPP by camera motion. During drag/scroll we drop
+            // SPP to motionSpp (1) so path-trace stays interactive on
+            // mid/low-end GPUs (iPhone pt_spp8=42 ms observed in X3). When
+            // motion settles, restore the user's slider value and let the
+            // progressive accumulator build back up.
+            //
+            // JS-only: canvas events fire alongside Emscripten/GLFW's own
+            // wasm-side handlers (we do not stopPropagation), and setSpp
+            // already triggers accum reset on the wasm side.
+            var _adaptiveSpp = true;
+            var _targetSpp = parseInt(document.getElementById('spp').value, 10) || 8;
+            var _motionSpp = 1;
+            var _inMotion = false;
+            var _motionTimer = null;
+            var _motionDebounceMs = 250;
+            function _isPathTrace() {
+                return document.getElementById('mode').value === '1';
+            }
+            function _applySpp() {
+                var eff = (_adaptiveSpp && _inMotion && _isPathTrace()) ? _motionSpp : _targetSpp;
+                _queue('setSpp', eff);
+            }
+            function _beginMotion() {
+                if (!_adaptiveSpp || !_isPathTrace()) return;
+                if (!_inMotion) { _inMotion = true; _applySpp(); }
+                if (_motionTimer) clearTimeout(_motionTimer);
+                _motionTimer = setTimeout(_endMotion, _motionDebounceMs);
+            }
+            function _endMotion() {
+                _inMotion = false;
+                if (_motionTimer) { clearTimeout(_motionTimer); _motionTimer = null; }
+                _applySpp();
+            }
+            // SPP slider now routes through _targetSpp so motion overrides
+            // don't clobber the user's requested value.
+            (function() {
+                var el = document.getElementById('spp'), v = document.getElementById('sppv');
+                el.addEventListener('input', function() {
+                    var x = parseInt(this.value, 10);
+                    v.textContent = String(x);
+                    _targetSpp = x;
+                    _applySpp();
+                });
+            })();
+            document.getElementById('adaptiveSpp').addEventListener('change', function() {
+                _adaptiveSpp = this.checked;
+                if (!_adaptiveSpp && _inMotion) { _endMotion(); }
+            });
+            // Motion sources: pointer drag (mouse + pen + touch), wheel,
+            // touchmove. pointermove only counts when a button is pressed,
+            // so passive hover doesn't trigger draft mode.
+            (function() {
+                var c = document.getElementById('canvas');
+                c.addEventListener('pointerdown', _beginMotion);
+                c.addEventListener('pointermove', function(e) { if (e.buttons > 0) _beginMotion(); });
+                c.addEventListener('pointerup',    _beginMotion);
+                c.addEventListener('pointercancel', _beginMotion);
+                c.addEventListener('wheel',      _beginMotion, { passive: true });
+                c.addEventListener('touchmove',  _beginMotion, { passive: true });
+            })();
             bindRange('aniso',   'anisov',   2, 'setAniso');
             bindRange('bounces', 'bouncesv', 0, 'setBounces');
             document.getElementById('denoise').addEventListener('change', function() { _queue('setDenoise', this.checked); });
