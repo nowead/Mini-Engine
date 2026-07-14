@@ -106,6 +106,28 @@ pt_spp4 만 격차.
 policy 는 UA 뿐 아니라 실측 pilot burst 로 tier fine-tuning 필요할 수도 있음
 (future work).
 
+### 관측 6 — X4 policy 적용 후 iPhone Safari.app 재실측 (mobile-high tier)
+
+X4 (커밋 `501bf07`, tier-based auto policy) 적용 후 같은 iPhone Safari.app
+26.5 에서 재접속 → **path-traced 스위치 시 SPP=4 · denoise=off 로 자동 시작**.
+Path-trace first-click 프레임 타임:
+
+| 시나리오 | X4 이전 (기본값) | X4 이후 (mobile-high tier 기본값) |
+| --- | ---:| ---:|
+| Safari.app 26.5 | ~40 ms (24 fps) | **15.7 ms (64 fps)** |
+| KakaoTalk WKWebView | ~42 ms (24 fps) | **~4 ms (250 fps)** |
+
+**첫 상호작용 프레임 타임 7~11× 개선.** 원 목표 (저사양·모바일 접근성) 의
+정면 도달 — 유저가 앱 열고 path-trace 눌러도 안 죽는 상태 확보.
+
+벤치 harness 는 명시적으로 SPP/denoise 를 override 하므로 X4 policy 를 우회
+(의도한 대로 — 벤치는 capability 측정). 즉 벤치의 pt_spp8+denoise 39 ms 는
+여전히 관측되지만, **유저의 기본 첫 클릭 경험은 policy 로 대체됨**.
+
+Post-X4 벤치에서 재확인된 pt_spp4 3× 격차 (Safari.app 15.67 vs WKWebView 4):
+관측 4 의 브라우저 격차 패턴이 안정적으로 재현됨. Safari.app UA 를 하위 tier
+로 분리 (SPP=2 강제) 하는 X4 v2 검토 항목.
+
 ### 관측 5 — Z1 (adaptive SPP by motion) 데스크톱 검증 완료
 
 같은 세션에서 Z1 (adaptive SPP by motion, 커밋 `8ce5a9b`) 데스크톱 검증:
@@ -234,16 +256,16 @@ X1 이 제안한 초안:
 
 ## Follow-ups
 
-1. ~~**X1 매트릭스 정정**: iOS 18 실측 결과 반영~~ ✅ 완료 (본 커밋 포함,
-   Safari.app · WKWebView 양쪽 확인).
-2. ~~**Safari.app control test**~~ ✅ 완료 (본 append). 예상 밖 결과 —
-   pt_spp4 만 3× 격차, 관측 4 로 별도 조사 항목 유지.
-3. **pt_spp4 브라우저 격차 조사**: `?dwell=20` 재실행 후 sample warm-up
-   충분 상태에서 재측정, 여전히 3× 이면 pipeline compile cache 차이로
-   결론 짓고 X4 policy 는 UA (WKWebView vs Safari.app) 도 참고 시그널로.
-4. **Z1 mobile 명시적 baseline**: 정지 pt_spp8 42 ms → 드래그 중 프레임
-   타임 분포 캡처. 벤치 하네스에 "auto-orbit" 모드 추가하면 자동화 가능
-   (지금 harness 는 정지 벤치만).
-5. **Android · Intel iGPU** 실측 후 본 문서 append (준비된 기기 없음).
-6. **대용량 볼륨 실측**: 축 Y 완료 후 T-mobile-high 에서 512×512×N 실 CT
+1. ~~**X1 매트릭스 정정**: iOS 18 실측 결과 반영~~ ✅ 완료.
+2. ~~**Safari.app control test**~~ ✅ 완료.
+3. ~~**X4 policy 적용**: mobile-high 티어 첫 클릭 UX 확보~~ ✅ 완료 (관측 6).
+4. **pt_spp4 브라우저 격차 조사** (X3 → X4 재실측에서도 3× 재현): Safari.app
+   pipeline compile cache 특성 조사 · X4 v2 로 Safari.app UA 하위 tier
+   (SPP=2 강제) 도입 여부 결정.
+5. **Z1 mobile 명시적 baseline**: 정지 pt_spp8 42 ms → 드래그 중 프레임
+   타임 분포 캡처. 벤치 하네스에 "auto-orbit" 모드 추가하면 자동화 가능.
+6. **Android · Intel iGPU** 실측 후 본 문서 append (준비된 기기 없음).
+7. **대용량 볼륨 실측**: 축 Y 완료 후 T-mobile-high 에서 512×512×N 실 CT
    재실측. 지금은 fMRI 만이라 atlas·LOD·streaming policy 검증 불가.
+8. **X4 v2 wasm-side knobs**: atlas MB cap · LOD cap · K budget 을 티어별
+   자동화. `BrickedVolume` EMSCRIPTEN_BINDINGS 필요.

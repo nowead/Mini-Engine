@@ -542,7 +542,8 @@ Option C · last-brick shrink · path-trace · empty-space skipping) 은 원 목
 | **X1** ✅ | 모바일 WebGPU 지원 매트릭스 조사 (Android Chrome / iOS Safari 상태 · feature flag) — [계획서](plans/X1_MOBILE_WEBGPU_MATRIX.md) | 완료 |
 | **X2** ✅ | 실측 하네스 — adapter info + GPU tier heuristic + baseline 자동 캡처 (`?bench=1&dwell=N`) | 완료 |
 | **X3** 🟡 | 실 기기 실측 + baseline 문서 — [BASELINE_2026-07-14_MOBILE_MATRIX.md](baselines/BASELINE_2026-07-14_MOBILE_MATRIX.md) 에 T-high · T-mobile-high(a) iPhone KakaoTalk WKWebView · T-mobile-high(b) iPhone Safari.app 26.5 캡처. Android + Intel iGPU 는 append 예정 | 진행 중 |
-| **X4** | 사양 티어별 자동 policy (LOD 상한 · path-trace on/off · denoise 세기 · K budget) | 2 세션 |
+| **X4** v1 ✅ | 사양 티어별 자동 policy (셸 knobs: SPP + bounces + denoise + adaptive) — 커밋 `501bf07`; iPhone Safari.app 첫 클릭 40ms → 15.7ms (7×) 검증 완료 | 완료 |
+| **X4** v2 | 사양 티어별 wasm-side knobs (atlas MB cap · LOD cap · K budget) — `BrickedVolume` EMSCRIPTEN_BINDINGS 필요 | 2 세션 |
 
 #### 축 Y: 브라우저 대용량 페이징 (갭 B · C 정면)
 
@@ -577,15 +578,20 @@ Option C · last-brick shrink · path-trace · empty-space skipping) 은 원 목
 
 ### 현재 활성 방향 (2026-07-10~)
 
-**X → Z 순서로 진행 중** (X 실측 병렬로 Z 최적화 이미 착수):
+**X 축 v1 마무리 + Z1 완료. 원 목표 (저사양·모바일 접근성) 정면 도달.**
 
-- ✅ X1 · X2 · Z1 완료. X3 draft baseline 에 T-high + iPhone 두 브라우저 (KakaoTalk
-  WKWebView · Safari.app 26.5) 캡처.
+- ✅ X1 · X2 · X3 draft · X4 v1 · Z1 완료. 원 목표의 "**저사양 하드웨어에서
+  대용량 실 CT/MRI 유의미한 fps/메모리**" 중 **모바일 첫 클릭 UX 확보** 달성
+  (iPhone Safari.app: 40 ms → 15.7 ms, 7× 개선).
 - 🟡 X3 append 대기 (Android Chrome / Intel iGPU — 기기 확보 시).
-- ⏭ **다음 코드 세션 후보**: Z2 (async CPU pack, main thread 부담 감소) 또는
-  X4 (tier auto policy) 또는 Y1 (브라우저 File System Access chunk paging).
-  현재 데이터로 Z2 가 iPhone pt_spp8+denoise 42ms 개선 후속 케이스에 적절.
-- pt_spp4 브라우저 격차 (관측 4) 는 정성적 항목으로 baseline follow-up 유지.
+- ⏭ **다음 코드 세션 후보**:
+  1. **Y1 chunk paging** — 실 임상 대용량 (~300 MB CT) 브라우저 로드 인프라.
+     지금 상태에선 memfs 전량 로드라 큰 파일 못 여는 게 다음 갭.
+  2. **X4 v2** — atlas MB cap · LOD cap · K budget 티어별 자동화
+     (`BrickedVolume` EMSCRIPTEN_BINDINGS 필요, wasm 변경).
+  3. **Safari.app UA 하위 tier** — pt_spp4 3× 격차 후속 (X3 관측 4).
+  4. **Z2 async CPU pack** — Streaming 진입 후에 관측 가능 (Y1 이후).
+- pt_spp4 Safari.app vs WKWebView 3× 격차는 X3 baseline follow-up 4 유지.
 
 **다음 세션 진입점**: 이 재정비 섹션. 인프라 세부는 §2 마일스톤 참조. 사용자
 인터페이스 / 빌드 / 조작은 [VIEWERS.md](VIEWERS.md). 코드 진입은

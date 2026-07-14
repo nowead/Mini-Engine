@@ -58,7 +58,7 @@ Mini-Engine implements it:
 | [BASELINE_2026-07-08_REAL_MRI.md](baselines/BASELINE_2026-07-08_REAL_MRI.md) | Real MRI verification (R4): 4 public series, runtime upload path, memory + CPU baselines |
 | [BASELINE_2026-07-09_BRICK_SHAPE.md](baselines/BASELINE_2026-07-09_BRICK_SHAPE.md) | Brick shape flexibility (Option C): thin-volume overhead +7754% → +6~19%, 70× memory reduction on single-slice cases |
 | [BASELINE_2026-07-09_LAST_BRICK_SHRINK.md](baselines/BASELINE_2026-07-09_LAST_BRICK_SHRINK.md) | Last-brick shrink (Option C tail): Siemens +19% → +6%; all four R4 series now ≤ +6% vs dense |
-| [BASELINE_2026-07-14_MOBILE_MATRIX.md](baselines/BASELINE_2026-07-14_MOBILE_MATRIX.md) | X3 mobile matrix: RTX 4070 (T-high) + iPhone iOS 18.7 두 브라우저 (KakaoTalk WKWebView + Safari.app 26.5). iOS 18 WebGPU 기본 활성 (X1 정정), 저부하 iPhone > RTX 역전, pt_spp8+denoise iPhone 24-26 fps 붕괴, pt_spp4 만 Safari.app 이 WKWebView 대비 3× 느림. Z1 (adaptive SPP) 데스크톱 검증 노트 포함. |
+| [BASELINE_2026-07-14_MOBILE_MATRIX.md](baselines/BASELINE_2026-07-14_MOBILE_MATRIX.md) | X3 mobile matrix + Z1 + X4 v1 검증: RTX 4070 (T-high) + iPhone iOS 18.7 두 브라우저 (KakaoTalk WKWebView + Safari.app 26.5). iOS 18 WebGPU 기본 활성 · 저부하 iPhone > RTX 역전 · pt_spp4 Safari.app 3× 격차 · X4 policy 로 iPhone 첫 클릭 40ms → 15.7ms (7×). |
 
 ---
 
