@@ -50,6 +50,13 @@
     .upload-btn.secondary { background: #34495e; }
     .upload-file-input { display: none; }
     #uploadStatus { font-size: 11px; color: #aaa; margin-top: 4px; }
+    /* Y-C server-fetch row inputs. */
+    .server-row { gap: 4px; }
+    .server-input { padding: 4px 6px; background: #1a2030; color: #e6e9ef;
+        border: 1px solid #2a3140; border-radius: 4px; font-size: 12px; min-width: 0; }
+    #serverUrl   { flex: 2; }
+    #serverCount { width: 60px; }
+    #serverLoadBtn { flex: 0.9; }
 
     /* X2 -- Device profile + benchmark panel (top-left, collapsible). */
     #devPanel { position: fixed; top: 12px; left: 12px; max-width: 340px;
@@ -104,6 +111,19 @@
         <div class="row upload-row">
             <label for="dicomUploadFiles" class="upload-btn secondary">Pick DICOM files</label>
             <input id="dicomUploadFiles" type="file" multiple accept=".dcm,application/dicom" class="upload-file-input">
+        </div>
+        <!-- Y-C: fetch a series from the same-origin server (typically
+             build_wasm/<subdir>/slice_XXXX.dcm). Skip the file transfer to
+             mobile devices; just place the series in the served dir and hit
+             Load. Filename pattern matches make_synthetic_dicom.py output. -->
+        <div class="row upload-row server-row">
+            <input id="serverUrl" class="server-input" type="text" value="/synth_ct/"
+                placeholder="URL prefix" aria-label="Server URL prefix"
+                title="URL prefix that contains slice_XXXX.dcm">
+            <input id="serverCount" class="server-input" type="number" value="256"
+                min="1" max="9999" aria-label="Slice count"
+                title="Number of slices to fetch">
+            <button type="button" id="serverLoadBtn" class="upload-btn secondary">Load</button>
         </div>
         <div id="uploadStatus"></div>
 
@@ -693,47 +713,44 @@
                     }
                 } catch (e) {}
             }
-            // Y1a -- sequential read+write. Previously used Promise.all so all
-            // N files were held in JS heap simultaneously (300 MB clinical CT
-            // → 300 MB JS heap peak plus another 300 MB copy on memfs write).
-            // Sequential drops JS heap peak to one file at a time. memfs still
-            // accumulates the whole series -- Y1b (two-pass streaming with a
-            // wasm-side per-slice API) is where the wasm-heap peak drops. UI
-            // yields every 32 files so very large series (500+ slices) don't
-            // freeze the browser between progress updates.
-            async function handleFileList(fileList) {
-                if (!fileList || fileList.length === 0) return;
+            // Y1a -- sequential read+write. Y-C -- fetch alternative. Both paths
+            // share a common loop (loadFromByteSource) so JS heap peak stays at
+            // one file regardless of source. memfs still accumulates the whole
+            // series -- Y1b (two-pass streaming with a wasm-side per-slice API)
+            // is where the wasm-heap peak drops. Periodic setTimeout(0) yield
+            // every 32 files so very large series (500+ slices) don't freeze
+            // the browser between progress updates.
+            //
+            // nextBytes: async function(i) -> {name, buf}. Called per slice;
+            // buf is an ArrayBuffer; name will be sanitized to a flat memfs path.
+            async function loadFromByteSource(sourceLabel, count, nextBytes,
+                                              maxWaitMs) {
                 if (typeof Module.queueUserDicomReload !== 'function' || !Module.FS) {
                     uploadStatus.textContent = 'wasm not ready';
                     return;
                 }
-                var files = Array.prototype.slice.call(fileList);
                 var t0 = performance.now();
                 var totalBytes = 0;
-
                 try {
                     await waitWasmIdle();
                     ensureUserDir();
-                    for (var i = 0; i < files.length; ++i) {
+                    for (var i = 0; i < count; ++i) {
                         uploadStatus.textContent =
-                            'reading ' + i + '/' + files.length + ' files · ' +
+                            sourceLabel + ' ' + i + '/' + count + ' · ' +
                             (totalBytes / 1024 / 1024).toFixed(1) + ' MB';
-                        var buf = await files[i].arrayBuffer();
-                        totalBytes += buf.byteLength;
+                        var got = await nextBytes(i);
+                        totalBytes += got.buf.byteLength;
                         // Recheck wasm idle: a render frame may have run during
-                        // the arrayBuffer await, so _wasmBusy could have flipped.
+                        // the await, so _wasmBusy could have flipped.
                         while (Module._wasmBusy) {
                             await new Promise(function(r) { setTimeout(r, 25); });
                         }
-                        // Sanitize the name -- webkitdirectory gives 'folder/file.dcm'
-                        // paths; we flatten to a single directory since
-                        // loadDicomSeries collects all .dcm inside.
-                        var name = files[i].name.replace(/^.*[\\/]/, '') || ('slice_' + i + '.dcm');
-                        Module.FS.writeFile('/user_dicom/' + name, new Uint8Array(buf));
-                        buf = null;   // release JS-side reference for GC
-                        // Periodic yield so the browser can service other
-                        // events (progress paint, incoming pointer, etc.) on
-                        // very large series.
+                        // Sanitize the name -- webkitdirectory gives
+                        // 'folder/file.dcm' paths; we flatten to a single dir
+                        // since loadDicomSeries collects all .dcm inside.
+                        var name = got.name.replace(/^.*[\\/]/, '') || ('slice_' + i + '.dcm');
+                        Module.FS.writeFile('/user_dicom/' + name, new Uint8Array(got.buf));
+                        got.buf = null;   // release JS-side reference for GC
                         if ((i & 31) === 31) {
                             await new Promise(function(r) { setTimeout(r, 0); });
                         }
@@ -744,7 +761,7 @@
                 }
                 var tRead = performance.now();
                 uploadStatus.textContent =
-                    'decoding ' + files.length + ' file(s) · ' +
+                    'decoding ' + count + ' file(s) · ' +
                     (totalBytes / 1024 / 1024).toFixed(1) + ' MB...';
                 // Queue the reload -- wasm picks it up at the start of the next
                 // render() frame, BEFORE beginFrame(). Doing the load here
@@ -753,9 +770,8 @@
                 // (queue->waitIdle during texture upload), the poll then
                 // re-enters wasm and trips the "multiple async operations" abort.
                 try { Module.queueUserDicomReload(); } catch (e) {}
-                // Poll for completion: the render loop sets lastReloadStatus
-                // to 1 (ok) or 2 (fail) once done.
-                var maxWait = 15000, deadline = performance.now() + maxWait;
+                var maxWait = maxWaitMs || 15000;
+                var deadline = performance.now() + maxWait;
                 (function poll() {
                     if (Module._wasmBusy) { setTimeout(poll, 50); return; }
                     var st = 0;
@@ -771,10 +787,10 @@
                     var tLoad = performance.now();
                     if (st === 1) {
                         uploadStatus.textContent =
-                            'loaded ' + files.length + ' file(s) · ' +
-                            (totalBytes / 1024 / 1024).toFixed(2) + ' MB · read+write ' +
-                            (tRead - t0).toFixed(0) + ' ms + decode ' +
-                            (tLoad - tRead).toFixed(0) + ' ms';
+                            'loaded ' + count + ' file(s) · ' +
+                            (totalBytes / 1024 / 1024).toFixed(2) + ' MB · ' +
+                            sourceLabel + '+write ' + (tRead - t0).toFixed(0) +
+                            ' ms + decode ' + (tLoad - tRead).toFixed(0) + ' ms';
                         syncFromWasm();
                         frameStats.reset();
                     } else {
@@ -782,11 +798,55 @@
                     }
                 })();
             }
+
+            function handleFileList(fileList) {
+                if (!fileList || fileList.length === 0) return;
+                var files = Array.prototype.slice.call(fileList);
+                return loadFromByteSource('reading', files.length,
+                    async function(i) {
+                        var buf = await files[i].arrayBuffer();
+                        return { name: files[i].name, buf: buf };
+                    });
+            }
+
+            // Y-C -- fetch a DICOM series from the same origin (typically
+            // build_wasm/<subdir>/slice_XXXX.dcm). Sequential fetch keeps JS
+            // heap peak at one file, matching Y1a's file-picker path. Useful
+            // for repeatable mobile measurement: no manual file transfer, just
+            // reopen the URL. Filenames follow the make_synthetic_dicom.py
+            // pattern (slice_0000.dcm..slice_(N-1).dcm zero-padded).
+            function handleServerFetch(urlPrefix, count) {
+                if (!urlPrefix) urlPrefix = '/synth_ct/';
+                if (!urlPrefix.endsWith('/')) urlPrefix += '/';
+                var pad = Math.max(4, String(count - 1).length);
+                // 128 MB over cloudflared tunnel + decode can push past 15 s
+                // easily; give the load 60 s before flagging as timed out.
+                return loadFromByteSource('fetching', count,
+                    async function(i) {
+                        var name = 'slice_' + String(i).padStart(pad, '0') + '.dcm';
+                        var resp = await fetch(urlPrefix + name);
+                        if (!resp.ok) {
+                            throw new Error(name + ': HTTP ' + resp.status);
+                        }
+                        var buf = await resp.arrayBuffer();
+                        return { name: name, buf: buf };
+                    },
+                    60000);
+            }
             document.getElementById('dicomUpload').addEventListener('change', function(ev) {
                 handleFileList(ev.target.files); ev.target.value = '';
             });
             document.getElementById('dicomUploadFiles').addEventListener('change', function(ev) {
                 handleFileList(ev.target.files); ev.target.value = '';
+            });
+            document.getElementById('serverLoadBtn').addEventListener('click', function() {
+                var url = document.getElementById('serverUrl').value.trim();
+                var count = parseInt(document.getElementById('serverCount').value, 10);
+                if (!url || !(count > 0)) {
+                    uploadStatus.textContent = 'server load: URL and positive count required';
+                    return;
+                }
+                handleServerFetch(url, count);
             });
 
             // R2 UI sync -- named so R3's upload flow can call it again after
