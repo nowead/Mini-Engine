@@ -216,14 +216,32 @@
         function classifyTier(gpu, ua) {
             // Rough heuristic from X1 support matrix; refined by X4 once
             // X3 real-device numbers are in. Returns one of:
-            //   'high' | 'mid-desktop' | 'mobile-high' | 'mobile-mid'
+            //   'high' | 'mid-desktop'
+            //   | 'mobile-high' | 'mobile-high-safari' | 'mobile-mid'
             //   | 'mobile-low' | 'unsupported'
+            //
+            // X4 v1.5 note: iOS Apple GPU has a browser-specific split.
+            // Safari.app hits pt_spp4 ~15 ms (64 fps) while WKWebView paths
+            // (KakaoTalk, LINE, etc.) hit pt_spp4 ~4 ms (250 fps) on the
+            // same device / WebKit / Metal (X3 baseline observation 4). We
+            // don't know the root cause (pipeline compile cache diff most
+            // likely), but the delta is stable so Safari.app gets its own
+            // sub-tier with SPP capped at 2.
             if (!gpu) return 'unsupported';
             var d = ((gpu.info && (gpu.info.description || gpu.info.device)) || '').toLowerCase();
             var v = ((gpu.info && gpu.info.vendor) || '').toLowerCase();
-            var isMobileUA = /android|iphone|ipad|ipod/i.test(ua || '');
+            var uaStr = ua || '';
+            var isMobileUA = /android|iphone|ipad|ipod/i.test(uaStr);
             if (isMobileUA) {
-                if (/apple/.test(v) || /apple/.test(d)) return 'mobile-high';
+                if (/apple/.test(v) || /apple/.test(d)) {
+                    // Safari.app on iOS: has Version/N.M and no known in-app
+                    // browser markers. WKWebView paths generally lack
+                    // Version/ or carry app-name tags.
+                    var isSafariApp =
+                        /Version\/[\d.]+.*Mobile.*Safari/i.test(uaStr) &&
+                        !/(KAKAOTALK|LINE|FBAN|FBAV|Instagram|Twitter|WebView|Snapchat|WeChat|Naver)/i.test(uaStr);
+                    return isSafariApp ? 'mobile-high-safari' : 'mobile-high';
+                }
                 if (/adreno\s*[7-9]|mali-g[89]|snapdragon\s*(8|9)/.test(d)) return 'mobile-high';
                 if (/adreno\s*6|mali-g7/.test(d)) return 'mobile-mid';
                 return 'mobile-low';
@@ -244,12 +262,13 @@
         // require new EMSCRIPTEN_BINDINGS. This v1 covers only the shell-
         // reachable knobs (SPP, bounces, denoise, adaptiveSpp).
         var TIER_POLICY = {
-            'high':         { spp: 8, sppMax: 32, bounces: 2, bouncesMax: 4, denoise: true,  adaptive: true },
-            'mid-desktop':  { spp: 4, sppMax: 16, bounces: 2, bouncesMax: 4, denoise: false, adaptive: true },
-            'mobile-high':  { spp: 4, sppMax: 8,  bounces: 2, bouncesMax: 3, denoise: false, adaptive: true },
-            'mobile-mid':   { spp: 1, sppMax: 4,  bounces: 1, bouncesMax: 2, denoise: false, adaptive: true },
-            'mobile-low':   { spp: 1, sppMax: 2,  bounces: 1, bouncesMax: 2, denoise: false, adaptive: true },
-            'unsupported':  { spp: 1, sppMax: 1,  bounces: 0, bouncesMax: 0, denoise: false, adaptive: true }
+            'high':                { spp: 8, sppMax: 32, bounces: 2, bouncesMax: 4, denoise: true,  adaptive: true },
+            'mid-desktop':         { spp: 4, sppMax: 16, bounces: 2, bouncesMax: 4, denoise: false, adaptive: true },
+            'mobile-high':         { spp: 4, sppMax: 8,  bounces: 2, bouncesMax: 3, denoise: false, adaptive: true },
+            'mobile-high-safari':  { spp: 2, sppMax: 4,  bounces: 2, bouncesMax: 3, denoise: false, adaptive: true },
+            'mobile-mid':          { spp: 1, sppMax: 4,  bounces: 1, bouncesMax: 2, denoise: false, adaptive: true },
+            'mobile-low':          { spp: 1, sppMax: 2,  bounces: 1, bouncesMax: 2, denoise: false, adaptive: true },
+            'unsupported':         { spp: 1, sppMax: 1,  bounces: 0, bouncesMax: 0, denoise: false, adaptive: true }
         };
         function effectiveTier(detected) {
             // ?tier=<name> overrides the classifier -- useful for A/B testing
