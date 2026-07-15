@@ -549,9 +549,12 @@ Option C · last-brick shrink · path-trace · empty-space skipping) 은 원 목
 
 | Step | 작업 | 예상 |
 | --- | --- | --- |
-| **Y1** | File System Access API + Streams — chunk read (memfs 전량 로드 회피) | 2 세션 |
+| **Y1a** ✅ | Sequential DICOM 업로드 + 진행률 (Promise.all 제거) — 커밋 `86211bf`; JS heap peak 300MB → 1MB, memfs peak 는 여전히 전체 | 완료 |
+| **Y1b** | 2-pass 스트리밍 (wasm per-slice API) — memfs peak 도 1 파일로 축소. **Y3 mobile 결과 후 필요 여부 재판단** | 2 세션 (조건부) |
 | **Y2** | IndexedDB / OPFS — decoded brick cache (재방문 시 파싱 스킵) | 2 세션 |
-| **Y3** | TCIA 공개 대용량 CT (~300 MB, 512×512×500+) 로드/streaming 실측 + baseline | 1~2 세션 |
+| **Y3** desktop ✅ | 128 MB 합성 CT 로드 검증 (512×512×256) — [BASELINE_2026-07-15_SYNTHETIC_128MB.md](baselines/BASELINE_2026-07-15_SYNTHETIC_128MB.md). Static 모드 진입, +9% overhead, 11.3s 총. Y1b 필요성 판단 정지 상태. | 완료 (desktop) |
+| **Y3** mobile 🟡 | 같은 128 MB 를 iPhone Safari 로드 (옵션 C server-fetch 유틸 추가 후) + 필요 시 512×512×500 (~256 MB) 스트레스 | 진행 대기 |
+| **Y-C** | 셸 "Load from server URL" 유틸 (~30 라인) — 폰 재접속만으로 반복 실측 | 0.5 세션 |
 
 #### 축 Z: 저사양 렌더 최적화 (재평가된 유예)
 
@@ -578,20 +581,26 @@ Option C · last-brick shrink · path-trace · empty-space skipping) 은 원 목
 
 ### 현재 활성 방향 (2026-07-10~)
 
-**X 축 v1 마무리 + Z1 완료. 원 목표 (저사양·모바일 접근성) 정면 도달.**
+**X v1 + Z1 + X4 v1.5 + Y1a + Y3 desktop 완료. 원 목표 (저사양·모바일 접근성)
+"모바일 첫 클릭 UX 확보" 도달 + "대용량" 데스크톱 검증 확보.**
 
-- ✅ X1 · X2 · X3 draft · X4 v1 · Z1 완료. 원 목표의 "**저사양 하드웨어에서
-  대용량 실 CT/MRI 유의미한 fps/메모리**" 중 **모바일 첫 클릭 UX 확보** 달성
-  (iPhone Safari.app: 40 ms → 15.7 ms, 7× 개선).
-- 🟡 X3 append 대기 (Android Chrome / Intel iGPU — 기기 확보 시).
-- ⏭ **다음 코드 세션 후보**:
-  1. **Y1 chunk paging** — 실 임상 대용량 (~300 MB CT) 브라우저 로드 인프라.
-     지금 상태에선 memfs 전량 로드라 큰 파일 못 여는 게 다음 갭.
-  2. **X4 v2** — atlas MB cap · LOD cap · K budget 티어별 자동화
-     (`BrickedVolume` EMSCRIPTEN_BINDINGS 필요, wasm 변경).
-  3. **Safari.app UA 하위 tier** — pt_spp4 3× 격차 후속 (X3 관측 4).
-  4. **Z2 async CPU pack** — Streaming 진입 후에 관측 가능 (Y1 이후).
-- pt_spp4 Safari.app vs WKWebView 3× 격차는 X3 baseline follow-up 4 유지.
+- ✅ X1 · X2 · X3 draft · X4 v1 · X4 v1.5 · Z1 · Y1a · Y3 desktop 완료.
+  - 모바일 첫 클릭 UX (iPhone Safari.app 40 → 15.7 ms, 7×)
+  - Safari.app 하위 tier (SPP=2) 로 pt_spp4 3× 격차 완화
+  - Y1a JS heap peak 300MB → 1MB
+  - Y3 desktop: 128 MB 합성 CT Static 모드 로드 성공, +9% overhead, 11.3 s
+    ([BASELINE_2026-07-15_SYNTHETIC_128MB.md](baselines/BASELINE_2026-07-15_SYNTHETIC_128MB.md))
+- 🟡 미해결: X3 append (Android/iGPU), Y3 mobile (옵션 C 후), pt_spp4 gap 원인
+- ⏭ **다음 코드 세션 후보** (우선순위):
+  1. **Y-C (server fetch 유틸, 0.5 세션)** — 폰에 파일 전송 없이 반복 실측 가능.
+     Y3 mobile 실측 전제 조건.
+  2. **Y3 mobile 실측** — Y-C 후 iPhone Safari 로 128 MB 로드 → Y1b 필요 여부
+     정직하게 판단.
+  3. **X4 v2 wasm-side knobs** — Y3 mobile 에서 Streaming 자동 진입 관측되면
+     정당화, 아니면 여전히 speculative.
+  4. **Z2 async CPU pack** — 여전히 Streaming 관측 후 관측 대상. Y3 결과 대기.
+- pt_spp4 Safari.app vs WKWebView 3× 격차는 X4 v1.5 로 policy 관점 완화됐고
+  원인 조사는 별도 follow-up.
 
 **다음 세션 진입점**: 이 재정비 섹션. 인프라 세부는 §2 마일스톤 참조. 사용자
 인터페이스 / 빌드 / 조작은 [VIEWERS.md](VIEWERS.md). 코드 진입은

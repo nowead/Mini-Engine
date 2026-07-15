@@ -33,6 +33,7 @@ WebGPU 기반 차세대 클라이언트 사이드 **의료 볼륨 렌더러**로
 | [BASELINE_2026-07-09_BRICK_SHAPE.md](medical-volume/baselines/BASELINE_2026-07-09_BRICK_SHAPE.md) | Brick shape flexibility (Option C) — 얇은 볼륨 overhead +7754% → +6~19%, 단일-슬라이스 케이스 70× 메모리 절감 |
 | [BASELINE_2026-07-09_LAST_BRICK_SHRINK.md](medical-volume/baselines/BASELINE_2026-07-09_LAST_BRICK_SHRINK.md) | Last-brick shrink (Option C 후속) — Siemens +19% → +6%; 네 R4 시리즈 모두 ≤ +6% vs dense |
 | [BASELINE_2026-07-14_MOBILE_MATRIX.md](medical-volume/baselines/BASELINE_2026-07-14_MOBILE_MATRIX.md) | 축 X3/Z1/X4 v1 — RTX 4070 + iPhone iOS 18.7 (KakaoTalk WKWebView · Safari.app 26.5). iOS 18 WebGPU 기본 활성 · 저부하 iPhone > RTX · pt_spp4 브라우저 3× 격차 · X4 policy 로 iPhone 첫 클릭 40ms → 15.7ms (7×) |
+| [BASELINE_2026-07-15_SYNTHETIC_128MB.md](medical-volume/baselines/BASELINE_2026-07-15_SYNTHETIC_128MB.md) | 축 Y3 first-cut (desktop) — 512×512×256 합성 CT 128 MB 로드, Static 모드 (+9% overhead), 11.3 s 총 · 원 목표 "대용량" 첫 검증 · 모바일 재실측은 옵션 C 추가 후 |
 
 **M1 (실데이터 기반) 완료** (2026-05-29): R16Float 16비트 · window/level ·
 NIfTI 로더 + float 강도 경로 + 임상 윈도우 프리셋.
