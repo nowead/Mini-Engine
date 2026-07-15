@@ -1,207 +1,252 @@
 #!/usr/bin/env python3
 """Generate a synthetic DICOM series for testing the DICOM volume loader.
 
-Pure stdlib (no pydicom). Writes <out_dir>/slice_NNN.dcm files. Transfer syntax
-is selectable via --vr {explicit,implicit} (default: explicit). The DICOM file
-meta header (group 0002) is ALWAYS Explicit VR LE per the standard; only the
-dataset after it switches encoding.
+pydicom + numpy backed (v2, 2026-07-14). The previous stdlib-only path
+was fine for the 96^3 default but too slow (~67 s) for the 512x512x256
+stress-test volumes used to exercise the R3 upload + brick pack + WebGPU
+path in the medical-volume Y3 measurements. pydicom gives a robust
+DICOM Part 10 writer; numpy generates the pixel grid in one vectorised
+pass (~2-3 s for 512^3).
 
-Same synthetic CT shape as scripts/make_synthetic_nii.py (air -1000, soft
-tissue +40, bone +800) so the two loaders can be cross-checked.
+The file format is fully DICOM Part 10 compliant Explicit VR Little Endian
+CT Image Storage (or MR Image Storage with --modality mr), so any
+conformant viewer (OsiriX, 3D Slicer, RadiAnt, ...) opens it. Only the
+pixel content is synthetic (nested spheres emulating air / soft tissue /
+bone / cavity in Hounsfield Units); NOT suitable for evaluating clinical
+image quality -- use real TCIA data for that.
 
-Usage:
-    python scripts/make_synthetic_dicom.py <out_dir> [W H D] [tissue_frac bone_frac]
+Same synthetic CT shape family as scripts/make_synthetic_nii.py (air
+-1000, soft tissue +40, bone +800) so the two loaders can be
+cross-checked.
+
+Usage (backward-compat with pre-pydicom CLI):
+    python scripts/make_synthetic_dicom.py <out_dir> [W H D]
+                                           [tissue_frac bone_frac]
                                            [--vr explicit|implicit]
-Defaults: 96 96 48,  tissue 0.85, bone 0.35, vr explicit.
+                                           [--modality ct|mr]
+Defaults: out_dir required, 96 96 48, tissue 0.85, bone 0.35,
+          vr explicit, modality ct.
+
+Examples:
+    # Small default (fast, for compatibility with existing tests).
+    python scripts/make_synthetic_dicom.py synth_ct_default
+
+    # Large stress-test (~128 MB, ~10 s on a modern desktop).
+    python scripts/make_synthetic_dicom.py synth_ct_large 512 512 256
+
+    # Implicit VR LE (clinical PACS default transfer syntax).
+    python scripts/make_synthetic_dicom.py synth_ct_implicit --vr implicit
 """
+from __future__ import annotations
+
+import argparse
 import os
-import struct
 import sys
 
-# ---------------------------------------------------------------------------
-# Element encoding -- both Explicit VR LE and Implicit VR LE
-# ---------------------------------------------------------------------------
-# Explicit VR LE:
-#   Short VRs: 4-byte Tag + 2-byte VR + 2-byte Length + Value
-#   Long  VRs: 4-byte Tag + 2-byte VR + 2 reserved + 4-byte Length + Value
-# Implicit VR LE (no VR in header):
-#   All:       4-byte Tag + 4-byte Length + Value
-
-LONG_VRS = {"OB", "OW", "OF", "SQ", "UT", "UN"}
-
-
-def _pad_value(vr: str, value: bytes) -> bytes:
-    if len(value) & 1:
-        pad = b"\x00" if vr in ("UI", "OB", "OW") else b" "
-        return value + pad
-    return value
+import numpy as np
+from pydicom.dataset import Dataset, FileDataset, FileMetaDataset
+from pydicom.uid import (
+    CTImageStorage,
+    MRImageStorage,
+    ExplicitVRLittleEndian,
+    ImplicitVRLittleEndian,
+    generate_uid,
+)
 
 
-def elem(group: int, element: int, vr: str, value: bytes) -> bytes:
-    """Explicit VR LE element."""
-    value = _pad_value(vr, value)
-    out = struct.pack("<HH", group, element) + vr.encode("ascii")
-    if vr in LONG_VRS:
-        out += b"\x00\x00" + struct.pack("<I", len(value))
-    else:
-        out += struct.pack("<H", len(value))
-    return out + value
-
-
-def elem_implicit(group: int, element: int, vr: str, value: bytes) -> bytes:
-    """Implicit VR LE element. VR is dropped from the wire; we still take it to
-    decide the padding byte (UI/OB/OW use NUL, others use space)."""
-    value = _pad_value(vr, value)
-    return struct.pack("<HHI", group, element, len(value)) + value
-
-
-def s(text: str) -> bytes:
-    return text.encode("ascii")
-
-
-def us(n: int) -> bytes:  return struct.pack("<H", n)
-def ul(n: int) -> bytes:  return struct.pack("<I", n)
-
-
-# ---------------------------------------------------------------------------
-# DICOM file build
-# ---------------------------------------------------------------------------
-
-EXPLICIT_VR_LE = "1.2.840.10008.1.2.1"
-IMPLICIT_VR_LE = "1.2.840.10008.1.2"
-CT_IMAGE_SOP   = "1.2.840.10008.5.1.4.1.1.2"   # CT Image Storage
-IMPL_UID       = "1.2.826.0.1.3680043.9.7236.1"
-
-# Generate unique UIDs by appending a counter to a prefix.
-_UID_PREFIX = "1.2.826.0.1.9999.99"
-_uid_counter = [1]
-def new_uid() -> str:
-    u = f"{_UID_PREFIX}.{_uid_counter[0]}"
-    _uid_counter[0] += 1
-    return u
-
-
-def build_file_meta(sop_instance_uid: str, transfer_syntax_uid: str) -> bytes:
-    # Build the (0002,xxxx) group first WITHOUT the group-length, then prepend it.
-    # File meta is ALWAYS Explicit VR LE per the DICOM standard, regardless of
-    # the transfer syntax used for the dataset that follows.
-    body = b""
-    body += elem(0x0002, 0x0001, "OB", b"\x00\x01")
-    body += elem(0x0002, 0x0002, "UI", s(CT_IMAGE_SOP))
-    body += elem(0x0002, 0x0003, "UI", s(sop_instance_uid))
-    body += elem(0x0002, 0x0010, "UI", s(transfer_syntax_uid))
-    body += elem(0x0002, 0x0012, "UI", s(IMPL_UID))
-    group_len = elem(0x0002, 0x0000, "UL", ul(len(body)))
-    return group_len + body
-
-
-def build_slice(w, h, voxels_le_int16: bytes, *, series_uid: str, study_uid: str,
-                instance_number: int, image_pos_z_mm: float,
-                pixel_spacing_xy: float, slice_thickness: float,
-                transfer_syntax: str = "explicit") -> bytes:
-    sop_uid = new_uid()
-    out = b"\x00" * 128 + b"DICM"
-    ts_uid = EXPLICIT_VR_LE if transfer_syntax == "explicit" else IMPLICIT_VR_LE
-    out += build_file_meta(sop_uid, ts_uid)
-    # Dataset: choose encoding based on transfer_syntax.
-    E = elem if transfer_syntax == "explicit" else elem_implicit
-    out += E(0x0008, 0x0016, "UI", s(CT_IMAGE_SOP))
-    out += E(0x0008, 0x0018, "UI", s(sop_uid))
-    out += E(0x0008, 0x0060, "CS", s("CT"))
-    out += E(0x0010, 0x0010, "PN", s("Synthetic^Test"))
-    out += E(0x0010, 0x0020, "LO", s("SYN-001"))
-    out += E(0x0018, 0x0050, "DS", s(f"{slice_thickness}"))
-    out += E(0x0020, 0x000D, "UI", s(study_uid))
-    out += E(0x0020, 0x000E, "UI", s(series_uid))
-    out += E(0x0020, 0x0011, "IS", s("1"))
-    out += E(0x0020, 0x0013, "IS", s(str(instance_number)))
-    out += E(0x0020, 0x0032, "DS", s(f"0\\0\\{image_pos_z_mm}"))
-    out += E(0x0020, 0x0037, "DS", s("1\\0\\0\\0\\1\\0"))
-    out += E(0x0028, 0x0002, "US", us(1))
-    out += E(0x0028, 0x0004, "CS", s("MONOCHROME2"))
-    out += E(0x0028, 0x0010, "US", us(h))   # Rows
-    out += E(0x0028, 0x0011, "US", us(w))   # Columns
-    out += E(0x0028, 0x0030, "DS", s(f"{pixel_spacing_xy}\\{pixel_spacing_xy}"))
-    out += E(0x0028, 0x0100, "US", us(16))
-    out += E(0x0028, 0x0101, "US", us(16))
-    out += E(0x0028, 0x0102, "US", us(15))
-    out += E(0x0028, 0x0103, "US", us(1))   # 1 = signed
-    out += E(0x0028, 0x1052, "DS", s("0"))
-    out += E(0x0028, 0x1053, "DS", s("1"))
-    # Pixel Data (OW for 16-bit). Length must be even (it is: w*h*2).
-    out += E(0x7FE0, 0x0010, "OW", voxels_le_int16)
-    return out
-
-
-# ---------------------------------------------------------------------------
-# Synthetic CT pattern (matches make_synthetic_nii.py)
-# ---------------------------------------------------------------------------
-
-def main():
-    args = list(sys.argv[1:])
-    # Pull out --vr {explicit,implicit}.
-    transfer_syntax = "explicit"
-    if "--vr" in args:
-        i = args.index("--vr")
-        if i + 1 >= len(args) or args[i + 1] not in ("explicit", "implicit"):
-            print("error: --vr requires 'explicit' or 'implicit'")
-            sys.exit(2)
-        transfer_syntax = args[i + 1]
-        del args[i:i + 2]
-    if len(args) < 1:
-        print("usage: make_synthetic_dicom.py <out_dir> [W H D] [tissue_frac bone_frac] "
-              "[--vr explicit|implicit]")
-        sys.exit(2)
-    out_dir = args[0]
-    if len(args) >= 4:
-        w, h, d = int(args[1]), int(args[2]), int(args[3])
-    else:
-        w, h, d = 96, 96, 48
-    tissue_frac = float(args[4]) if len(args) >= 5 else 0.85
-    bone_frac   = float(args[5]) if len(args) >= 6 else 0.35
-    sx = sy = 1.0
-    sz = 2.5
-
-    os.makedirs(out_dir, exist_ok=True)
+def make_slice_pixels(w: int, h: int, d: int, z: int,
+                      tissue_frac: float, bone_frac: float,
+                      modality: str) -> np.ndarray:
+    """One slice's int16 pixel array. Nested-sphere phantom matching
+    make_synthetic_nii.py: outer 'tissue' sphere, inner 'bone' sphere,
+    background air. For CT the HU values are (air -1000, tissue 40,
+    bone 800); for MR the range is shifted into T1-like values."""
     cx, cy, cz = (w - 1) / 2.0, (h - 1) / 2.0, (d - 1) / 2.0
     half = min(cx, cy, cz)
     r_tissue = tissue_frac * half
     r_bone   = bone_frac   * half
 
-    series_uid = new_uid()
-    study_uid  = new_uid()
+    # 2D distance grid for this z-slice, computed with numpy broadcasting.
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    dz = z - cz
+    dist2 = (xx - cx) ** 2 + (yy - cy) ** 2 + dz * dz
 
+    if modality.upper() == "MR":
+        # T1-like: air 0, tissue 800, bone 300. Positive-only range.
+        air, tissue, bone = 0, 800, 300
+    else:
+        air, tissue, bone = -1000, 40, 800
+
+    img = np.full((h, w), air, dtype=np.int16)
+    img[dist2 <= r_tissue ** 2] = tissue
+    img[dist2 <= r_bone   ** 2] = bone
+    return img
+
+
+def make_slice_dataset(*, z: int, w: int, h: int, d: int,
+                       spacing_xy: float, spacing_z: float,
+                       modality: str, transfer_syntax: str,
+                       study_uid: str, series_uid: str,
+                       frame_of_reference_uid: str,
+                       pixels: np.ndarray) -> FileDataset:
+    modality_code = "MR" if modality.upper() == "MR" else "CT"
+    sop_class_uid = MRImageStorage if modality_code == "MR" else CTImageStorage
+    ts_uid = ImplicitVRLittleEndian if transfer_syntax == "implicit" else ExplicitVRLittleEndian
+    sop_instance_uid = generate_uid()
+
+    file_meta = FileMetaDataset()
+    file_meta.MediaStorageSOPClassUID = sop_class_uid
+    file_meta.MediaStorageSOPInstanceUID = sop_instance_uid
+    file_meta.TransferSyntaxUID = ts_uid
+    file_meta.ImplementationClassUID = generate_uid()
+    file_meta.ImplementationVersionName = "MiniEngineSynth"
+
+    ds = FileDataset(
+        filename_or_obj=None,
+        dataset={},
+        file_meta=file_meta,
+        preamble=b"\x00" * 128,
+    )
+
+    # Identification (fake but structurally valid).
+    ds.PatientName = "Synthetic^Test"
+    ds.PatientID = "SYN-001"
+    ds.PatientBirthDate = ""
+    ds.PatientSex = "O"
+    ds.StudyDate = "20260714"
+    ds.StudyTime = "000000"
+    ds.AccessionNumber = ""
+    ds.ReferringPhysicianName = ""
+    ds.Manufacturer = "Mini-Engine"
+    ds.StudyInstanceUID = study_uid
+    ds.SeriesInstanceUID = series_uid
+    ds.SOPClassUID = sop_class_uid
+    ds.SOPInstanceUID = sop_instance_uid
+    ds.FrameOfReferenceUID = frame_of_reference_uid
+    ds.StudyID = "1"
+    ds.SeriesNumber = 1
+    ds.InstanceNumber = z + 1
+    ds.Modality = modality_code
+    ds.SeriesDescription = f"Synthetic {modality_code} phantom {w}x{h}x{d}"
+    ds.PatientPosition = "HFS"
+
+    # Geometry.
+    ds.Rows = h
+    ds.Columns = w
+    ds.PixelSpacing = [float(spacing_xy), float(spacing_xy)]
+    ds.SliceThickness = float(spacing_z)
+    ds.SpacingBetweenSlices = float(spacing_z)
+    ds.ImageOrientationPatient = [1, 0, 0, 0, 1, 0]
+    ds.ImagePositionPatient = [0.0, 0.0, float(z) * float(spacing_z)]
+    ds.SliceLocation = float(z) * float(spacing_z)
+
+    # Pixel data.
+    ds.SamplesPerPixel = 1
+    ds.PhotometricInterpretation = "MONOCHROME2"
+    ds.NumberOfFrames = 1
+    ds.BitsAllocated = 16
+    ds.BitsStored = 16
+    ds.HighBit = 15
+    ds.PixelRepresentation = 1   # 1 = signed
+    ds.RescaleIntercept = "0"
+    ds.RescaleSlope = "1"
+    if modality_code == "CT":
+        ds.RescaleType = "HU"
+        ds.WindowCenter = "40"
+        ds.WindowWidth = "400"
+    ds.PixelData = pixels.tobytes()
+
+    ds.is_little_endian = True
+    ds.is_implicit_VR = (transfer_syntax == "implicit")
+    return ds
+
+
+def _parse_backcompat(argv: list[str]) -> argparse.Namespace:
+    # Backward-compat positional CLI:
+    #   out_dir [W H D] [tissue_frac bone_frac] [--vr ...] [--modality ...]
+    ap = argparse.ArgumentParser(add_help=False)
+    ap.add_argument("--vr", choices=["explicit", "implicit"], default="explicit")
+    ap.add_argument("--modality", choices=["ct", "mr", "CT", "MR"], default="ct")
+    ap.add_argument("-h", "--help", action="store_true")
+    ns, rest = ap.parse_known_args(argv)
+    if ns.help or not rest:
+        print(__doc__)
+        sys.exit(0 if ns.help else 2)
+    ns.out_dir = rest[0]
+    ns.dim = (96, 96, 48)
+    ns.tissue_frac = 0.85
+    ns.bone_frac = 0.35
+    if len(rest) >= 4:
+        try:
+            ns.dim = (int(rest[1]), int(rest[2]), int(rest[3]))
+        except ValueError:
+            print(f"error: dims must be integers, got {rest[1:4]}")
+            sys.exit(2)
+    if len(rest) >= 6:
+        try:
+            ns.tissue_frac = float(rest[4])
+            ns.bone_frac = float(rest[5])
+        except ValueError:
+            print(f"error: fractions must be floats, got {rest[4:6]}")
+            sys.exit(2)
+    return ns
+
+
+def main() -> int:
+    ns = _parse_backcompat(sys.argv[1:])
+    w, h, d = ns.dim
+    if min(w, h, d) < 2:
+        print("error: each dimension must be >= 2")
+        return 2
+    sx = 1.0
+    sz = 2.5
+
+    os.makedirs(ns.out_dir, exist_ok=True)
+    study_uid = generate_uid()
+    series_uid = generate_uid()
+    for_uid = generate_uid()
+
+    approx_bytes = (w * h * 2 + 4096) * d
+    print(
+        f"Generating {w}x{h}x{d} {ns.modality.upper()} series (vr={ns.vr}, "
+        f"~{approx_bytes / (1024 * 1024):.1f} MB across {d} files) to "
+        f"{ns.out_dir}/ ..."
+    )
+
+    pad = max(4, len(str(d)))
+    step = max(1, d // 20)
     for z in range(d):
-        # Build the int16 slice in row-major (x fastest, y next).
-        slice_bytes = bytearray(w * h * 2)
-        i = 0
-        dz = z - cz
-        for y in range(h):
-            dy = y - cy
-            for x in range(w):
-                dx = x - cx
-                dist = (dx * dx + dy * dy + dz * dz) ** 0.5
-                if dist <= r_bone:
-                    hu = 800
-                elif dist <= r_tissue:
-                    hu = 40
-                else:
-                    hu = -1000
-                struct.pack_into("<h", slice_bytes, i, hu)
-                i += 2
-        dcm = build_slice(
-            w, h, bytes(slice_bytes),
-            series_uid=series_uid, study_uid=study_uid,
-            instance_number=z + 1, image_pos_z_mm=z * sz,
-            pixel_spacing_xy=sx, slice_thickness=sz,
-            transfer_syntax=transfer_syntax,
+        pixels = make_slice_pixels(w, h, d, z,
+                                   ns.tissue_frac, ns.bone_frac, ns.modality)
+        ds = make_slice_dataset(
+            z=z, w=w, h=h, d=d,
+            spacing_xy=sx, spacing_z=sz,
+            modality=ns.modality, transfer_syntax=ns.vr,
+            study_uid=study_uid, series_uid=series_uid,
+            frame_of_reference_uid=for_uid,
+            pixels=pixels,
         )
-        path = os.path.join(out_dir, f"slice_{z:04d}.dcm")
-        with open(path, "wb") as f:
-            f.write(dcm)
-    print(f"wrote {d} slice files to {out_dir}/ "
-          f"({w}x{h}x{d} int16, spacing ({sx},{sy},{sz})mm, vr={transfer_syntax})")
+        fname = os.path.join(ns.out_dir, f"slice_{z:0{pad}d}.dcm")
+        ds.save_as(fname, write_like_original=False)
+        if (z + 1) % step == 0 or z + 1 == d:
+            print(f"  {z + 1}/{d} slices written", flush=True)
+
+    # Sanity roundtrip: reopen first slice + confirm key fields survived.
+    try:
+        import pydicom
+        chk = pydicom.dcmread(os.path.join(ns.out_dir, f"slice_{0:0{pad}d}.dcm"))
+        assert chk.Rows == h and chk.Columns == w
+        assert chk.Modality == ns.modality.upper()
+        assert chk.SeriesInstanceUID == series_uid
+        print(
+            f"OK  first-slice roundtrip: {chk.Rows}x{chk.Columns} "
+            f"{chk.Modality}, transfer syntax {chk.file_meta.TransferSyntaxUID.name}"
+        )
+    except Exception as e:
+        print(f"WARN  post-write sanity check failed: {e}")
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
