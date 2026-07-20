@@ -60,6 +60,7 @@ Mini-Engine implements it:
 | [BASELINE_2026-07-09_LAST_BRICK_SHRINK.md](baselines/BASELINE_2026-07-09_LAST_BRICK_SHRINK.md) | Last-brick shrink (Option C tail): Siemens +19% → +6%; all four R4 series now ≤ +6% vs dense |
 | [BASELINE_2026-07-14_MOBILE_MATRIX.md](baselines/BASELINE_2026-07-14_MOBILE_MATRIX.md) | X3 mobile matrix + Z1 + X4 v1 검증: RTX 4070 (T-high) + iPhone iOS 18.7 두 브라우저 (KakaoTalk WKWebView + Safari.app 26.5). iOS 18 WebGPU 기본 활성 · 저부하 iPhone > RTX 역전 · pt_spp4 Safari.app 3× 격차 · X4 policy 로 iPhone 첫 클릭 40ms → 15.7ms (7×). |
 | [BASELINE_2026-07-15_SYNTHETIC_128MB.md](baselines/BASELINE_2026-07-15_SYNTHETIC_128MB.md) | Y3 first-cut (desktop): 512×512×256 (128 MB) 합성 CT 로드 · Static 모드 (139 MB atlas, +9% overhead) · read+write 10.4 s + decode 842 ms · CPU 5.34 ms/frame · Y1b 필요 여부 판정을 모바일 재실측으로 연기. |
+| [BASELINE_2026-07-20_MOBILE_Y3_BISECT.md](baselines/BASELINE_2026-07-20_MOBILE_Y3_BISECT.md) | **Y3 mobile 바이섹션**: iPhone Safari 실용 상한 **96 MB 확정, 128 MB 크래시** (Safari kill+reload / Chrome freeze). Y1b (per-slice streaming) 필요성 정량 입증 · 예상 임팩트 memory peak 780→520 MB (-260 MB). |
 
 ---
 

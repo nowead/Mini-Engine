@@ -550,11 +550,11 @@ Option C · last-brick shrink · path-trace · empty-space skipping) 은 원 목
 | Step | 작업 | 예상 |
 | --- | --- | --- |
 | **Y1a** ✅ | Sequential DICOM 업로드 + 진행률 (Promise.all 제거) — 커밋 `86211bf`; JS heap peak 300MB → 1MB, memfs peak 는 여전히 전체 | 완료 |
-| **Y1b** | 2-pass 스트리밍 (wasm per-slice API) — memfs peak 도 1 파일로 축소. **Y3 mobile 결과 후 필요 여부 재판단** | 2 세션 (조건부) |
+| **Y1b** 🔴 | 2-pass 스트리밍 (wasm per-slice API) — memfs peak 1 파일로 축소. **Y3 mobile 데이터로 정당화 완료** ([BASELINE_2026-07-20](baselines/BASELINE_2026-07-20_MOBILE_Y3_BISECT.md)); 예상 memory peak 780→520 MB → iPhone 128 MB 볼륨 로드 가능 예상 | **2 세션 · 다음 착수** |
 | **Y2** | IndexedDB / OPFS — decoded brick cache (재방문 시 파싱 스킵) | 2 세션 |
-| **Y3** desktop ✅ | 128 MB 합성 CT 로드 검증 (512×512×256) — [BASELINE_2026-07-15_SYNTHETIC_128MB.md](baselines/BASELINE_2026-07-15_SYNTHETIC_128MB.md). Static 모드 진입, +9% overhead, 11.3s 총. Y1b 필요성 판단 정지 상태. | 완료 (desktop) |
-| **Y3** mobile 🟡 | 같은 128 MB 를 iPhone Safari 로드 (옵션 C server-fetch 유틸 추가 후) + 필요 시 512×512×500 (~256 MB) 스트레스 | 진행 대기 |
-| **Y-C** | 셸 "Load from server URL" 유틸 (~30 라인) — 폰 재접속만으로 반복 실측 | 0.5 세션 |
+| **Y3** desktop ✅ | 128 MB 합성 CT 로드 검증 (512×512×256) — [BASELINE_2026-07-15_SYNTHETIC_128MB.md](baselines/BASELINE_2026-07-15_SYNTHETIC_128MB.md). Static 모드, +9% overhead, 11.3s 총 | 완료 |
+| **Y3** mobile ✅ | iPhone Safari 바이섹션 (4/16/36/64/96/128 MB) — [BASELINE_2026-07-20_MOBILE_Y3_BISECT.md](baselines/BASELINE_2026-07-20_MOBILE_Y3_BISECT.md). 실용 상한 96 MB · 128 MB 크래시 (Safari kill+reload, Chrome freeze) · Y1b 정당화 정량 | 완료 |
+| **Y-C** ✅ | 셸 "Load from server URL" 유틸 + 404 auto-detect — 커밋 `8aa2fc0` + `4162f81`. 폰 재접속만으로 반복 실측 | 완료 |
 
 #### 축 Z: 저사양 렌더 최적화 (재평가된 유예)
 
@@ -581,26 +581,31 @@ Option C · last-brick shrink · path-trace · empty-space skipping) 은 원 목
 
 ### 현재 활성 방향 (2026-07-10~)
 
-**X v1 + Z1 + X4 v1.5 + Y1a + Y3 desktop 완료. 원 목표 (저사양·모바일 접근성)
-"모바일 첫 클릭 UX 확보" 도달 + "대용량" 데스크톱 검증 확보.**
+**X 축 v1 + Z1 + Y 축 인프라 (Y1a · Y-C · Y3 desktop + mobile) 완료. Y1b 필요성
+데이터로 확정.**
 
-- ✅ X1 · X2 · X3 draft · X4 v1 · X4 v1.5 · Z1 · Y1a · Y3 desktop 완료.
-  - 모바일 첫 클릭 UX (iPhone Safari.app 40 → 15.7 ms, 7×)
+- ✅ 전 축 완료: X1 · X2 · X3 draft · X4 v1 · X4 v1.5 · Z1 · Y1a · Y-C · Y3
+  desktop · Y3 mobile
+  - 모바일 첫 클릭 UX (iPhone Safari 40 → 15.7 ms, 7×)
   - Safari.app 하위 tier (SPP=2) 로 pt_spp4 3× 격차 완화
   - Y1a JS heap peak 300MB → 1MB
-  - Y3 desktop: 128 MB 합성 CT Static 모드 로드 성공, +9% overhead, 11.3 s
-    ([BASELINE_2026-07-15_SYNTHETIC_128MB.md](baselines/BASELINE_2026-07-15_SYNTHETIC_128MB.md))
-- 🟡 미해결: X3 append (Android/iGPU), Y3 mobile (옵션 C 후), pt_spp4 gap 원인
-- ⏭ **다음 코드 세션 후보** (우선순위):
-  1. **Y-C (server fetch 유틸, 0.5 세션)** — 폰에 파일 전송 없이 반복 실측 가능.
-     Y3 mobile 실측 전제 조건.
-  2. **Y3 mobile 실측** — Y-C 후 iPhone Safari 로 128 MB 로드 → Y1b 필요 여부
-     정직하게 판단.
-  3. **X4 v2 wasm-side knobs** — Y3 mobile 에서 Streaming 자동 진입 관측되면
-     정당화, 아니면 여전히 speculative.
-  4. **Z2 async CPU pack** — 여전히 Streaming 관측 후 관측 대상. Y3 결과 대기.
-- pt_spp4 Safari.app vs WKWebView 3× 격차는 X4 v1.5 로 policy 관점 완화됐고
-  원인 조사는 별도 follow-up.
+  - Y3 desktop: 128 MB 합성 CT Static 모드 로드 성공
+  - Y-C: 폰 재접속만으로 반복 실측 인프라 확보
+  - Y3 mobile 바이섹션: **iPhone Safari 실용 상한 96 MB, 128 MB 크래시**
+    ([BASELINE_2026-07-20_MOBILE_Y3_BISECT.md](baselines/BASELINE_2026-07-20_MOBILE_Y3_BISECT.md))
+- 🟡 미해결: X3 append (Android/Intel iGPU — 기기 필요), pt_spp4 원인 조사
+- 🔴 **다음 코드 세션 확정**: **Y1b (per-slice streaming refactor)** 2 세션
+  - Y3 mobile 바이섹션이 명확한 정당화 (memory peak 780 → 520 MB, 128 MB 실용
+    가능해질 것으로 예상)
+  - 착수 요소: `beginDicomStream()` / `addDicomSlice(path)` /
+    `finalizeDicomStream()` wasm 바인딩 + `loadDicomSeries` two-pass refactor
+    (header-scan + per-slice-decode) + JS 는 fetch → memfs write → wasm 처리
+    → `Module.FS.unlink(name)` 반복
+  - 완료 후 128 MB iPhone 재실측 → 성공 시 Y1b baseline · 실 임상 도달 실증
+- **Y1b 후 후보** (원 목표 lens 남은 항목):
+  - Y2 (IndexedDB/OPFS brick cache) — 재방문 로드 skip
+  - X4 v2 (wasm-side knobs) — Y1b 후 128+ MB 로 Streaming 트리거 시 정당화
+  - Z2 (async CPU pack) — Streaming 관측 후 정당화
 
 **다음 세션 진입점**: 이 재정비 섹션. 인프라 세부는 §2 마일스톤 참조. 사용자
 인터페이스 / 빌드 / 조작은 [VIEWERS.md](VIEWERS.md). 코드 진입은
