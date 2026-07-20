@@ -731,6 +731,7 @@
                 }
                 var t0 = performance.now();
                 var totalBytes = 0;
+                var actualCount = 0;   // may end early via __endOfSeries signal
                 try {
                     await waitWasmIdle();
                     ensureUserDir();
@@ -738,7 +739,19 @@
                         uploadStatus.textContent =
                             sourceLabel + ' ' + i + '/' + count + ' · ' +
                             (totalBytes / 1024 / 1024).toFixed(1) + ' MB';
-                        var got = await nextBytes(i);
+                        var got;
+                        try {
+                            got = await nextBytes(i);
+                        } catch (e) {
+                            // Y-C v2 -- auto-detect series end. nextBytes may
+                            // throw {__endOfSeries: true} to signal "no more
+                            // files available", which we treat as natural
+                            // completion IF at least one file was fetched
+                            // successfully. If zero files fetched, treat as a
+                            // real error (URL prefix wrong, empty dir, etc.).
+                            if (e && e.__endOfSeries && actualCount > 0) break;
+                            throw e;
+                        }
                         totalBytes += got.buf.byteLength;
                         // Recheck wasm idle: a render frame may have run during
                         // the await, so _wasmBusy could have flipped.
@@ -751,6 +764,7 @@
                         var name = got.name.replace(/^.*[\\/]/, '') || ('slice_' + i + '.dcm');
                         Module.FS.writeFile('/user_dicom/' + name, new Uint8Array(got.buf));
                         got.buf = null;   // release JS-side reference for GC
+                        actualCount++;
                         if ((i & 31) === 31) {
                             await new Promise(function(r) { setTimeout(r, 0); });
                         }
@@ -760,8 +774,9 @@
                     return;
                 }
                 var tRead = performance.now();
+                var earlyStop = actualCount < count;
                 uploadStatus.textContent =
-                    'decoding ' + count + ' file(s) · ' +
+                    'decoding ' + actualCount + ' file(s) · ' +
                     (totalBytes / 1024 / 1024).toFixed(1) + ' MB...';
                 // Queue the reload -- wasm picks it up at the start of the next
                 // render() frame, BEFORE beginFrame(). Doing the load here
@@ -787,8 +802,9 @@
                     var tLoad = performance.now();
                     if (st === 1) {
                         uploadStatus.textContent =
-                            'loaded ' + count + ' file(s) · ' +
-                            (totalBytes / 1024 / 1024).toFixed(2) + ' MB · ' +
+                            'loaded ' + actualCount + ' file(s)' +
+                            (earlyStop ? ' (auto-stopped, ' + count + ' requested)' : '') +
+                            ' · ' + (totalBytes / 1024 / 1024).toFixed(2) + ' MB · ' +
                             sourceLabel + '+write ' + (tRead - t0).toFixed(0) +
                             ' ms + decode ' + (tLoad - tRead).toFixed(0) + ' ms';
                         syncFromWasm();
@@ -815,6 +831,11 @@
             // for repeatable mobile measurement: no manual file transfer, just
             // reopen the URL. Filenames follow the make_synthetic_dicom.py
             // pattern (slice_0000.dcm..slice_(N-1).dcm zero-padded).
+            //
+            // Y-C v2 -- Count input is treated as an UPPER BOUND. On the first
+            // 404 (after at least one successful fetch), we treat the series
+            // as ended and hand off what we have to decode. Users no longer
+            // need to know the exact slice count -- Count = 9999 is fine.
             function handleServerFetch(urlPrefix, count) {
                 if (!urlPrefix) urlPrefix = '/synth_ct/';
                 if (!urlPrefix.endsWith('/')) urlPrefix += '/';
@@ -825,6 +846,15 @@
                     async function(i) {
                         var name = 'slice_' + String(i).padStart(pad, '0') + '.dcm';
                         var resp = await fetch(urlPrefix + name);
+                        if (resp.status === 404) {
+                            // Signal loadFromByteSource to stop cleanly if
+                            // we've already fetched at least one file; if
+                            // this is the very first request, it re-throws
+                            // as a real error (bad URL prefix).
+                            var e = new Error(name + ': HTTP 404 (end of series)');
+                            e.__endOfSeries = true;
+                            throw e;
+                        }
                         if (!resp.ok) {
                             throw new Error(name + ': HTTP ' + resp.status);
                         }
