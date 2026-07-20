@@ -101,6 +101,12 @@ public:
     // manual convergence restart without moving the camera, so the cap curve
     // is easy to demo. accumN() / accumCap() feed the stats panel.
     void resetAccum()             { m_volume->resetAccumulation(); }
+    // Direct camera zoom hook for JS pinch handler. Bypasses the GLFW scroll
+    // callback (whose 0.3 multiplier is tuned for desktop wheel notches) so
+    // the shell can apply its own touch-tuned scale without fighting
+    // Emscripten's built-in multi-touch pinch handling.
+    void zoomBy(float delta)      { m_camera.zoom(delta); }
+    void rotateBy(float dx, float dy) { m_camera.rotate(dx, dy); }
     float accumN() const          { return m_volume->getPathSampleCount(); }
     unsigned accumCap() const     { return m_volume->getMaxAccumSamples(); }
     void setAccumCap(unsigned n)  { m_volume->setMaxAccumSamples(n); m_volume->resetAccumulation(); }
@@ -225,7 +231,11 @@ private:
             float dx = static_cast<float>(x - a->m_lastX);
             float dy = static_cast<float>(y - a->m_lastY);
             a->m_lastX = x; a->m_lastY = y;
-            a->m_camera.rotate(dx * 0.3f, -dy * 0.3f);
+            // 0.5 tuned as a compromise between desktop mouse drags (long
+            // travel per gesture) and mobile finger swipes (much shorter
+            // travel per gesture on ~400 px viewports). Previously 0.3 felt
+            // too slow to rotate the volume on iPhone Safari.
+            a->m_camera.rotate(dx * 0.5f, -dy * 0.5f);
         });
         glfwSetScrollCallback(m_window, [](GLFWwindow* win, double, double yoff) {
             auto* a = static_cast<VolumeViewerWasm*>(glfwGetWindowUserPointer(win));
@@ -543,6 +553,8 @@ EMSCRIPTEN_BINDINGS(volume_viewer) {
     emscripten::function("setBounces",        +[](int b)     { if (g_viewer) g_viewer->setBounces(b); });
     emscripten::function("setDenoise",        +[](bool on)   { if (g_viewer) g_viewer->setDenoise(on); });
     emscripten::function("resetAccum",        +[]()          { if (g_viewer) g_viewer->resetAccum(); });
+    emscripten::function("zoomBy",            +[](float d)   { if (g_viewer) g_viewer->zoomBy(d); });
+    emscripten::function("rotateBy",          +[](float dx, float dy) { if (g_viewer) g_viewer->rotateBy(dx, dy); });
     emscripten::function("accumN",            +[]() -> float { return g_viewer ? g_viewer->accumN() : 0.0f; });
     emscripten::function("accumCap",          +[]() -> unsigned { return g_viewer ? g_viewer->accumCap() : 0u; });
     emscripten::function("setAccumCap",       +[](unsigned n){ if (g_viewer) g_viewer->setAccumCap(n); });

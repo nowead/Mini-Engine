@@ -9,7 +9,13 @@
     html, body { margin: 0; padding: 0; height: 100%; overflow: hidden;
         background: #0a0c10; color: #e6e9ef;
         font: 13px/1.4 -apple-system, Segoe UI, Roboto, sans-serif; }
-    #canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+    #canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block;
+        /* touch-action: none -- keep iOS/Android from intercepting touches for
+           page scroll or pinch zoom. GLFW's Emscripten port converts one-finger
+           drags into mouse-drag events (rotate works out of the box); two-finger
+           pinch is handled by the JS listener below that dispatches synthetic
+           wheel events for zoom. */
+        -ms-touch-action: none; touch-action: none; }
     #panel { position: fixed; top: 12px; right: 12px; width: 280px;
         background: rgba(16,19,26,0.92); border: 1px solid #2a3140; border-radius: 10px;
         padding: 14px 16px; -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
@@ -202,6 +208,7 @@
 
         <div class="sec">Stats (M3-3)</div>
         <pre id="stats">loading…</pre>
+        <button type="button" id="copyStatsBtn">Copy stats</button>
         </div><!-- /panelBody -->
     </div>
 
@@ -415,6 +422,16 @@
         document.getElementById('copyBenchBtn').addEventListener('click', function() {
             copyText(document.getElementById('benchResultsBody').textContent || '');
         });
+        // STATS panel copy -- lets mobile testers paste the runtime volume/
+        // atlas/CPU numbers into an issue or chat without retyping.
+        (function() {
+            var btn = document.getElementById('copyStatsBtn');
+            if (!btn) return;
+            btn.addEventListener('click', function() {
+                var s = document.getElementById('stats');
+                copyText(s ? (s.textContent || '') : '');
+            });
+        })();
 
         // Benchmark: cycles render mode presets, samples lastRenderMs at
         // 100 ms intervals during dwell, summarises mean/p50/p95/p99/max.
@@ -665,6 +682,69 @@
                 c.addEventListener('pointercancel', _beginMotion);
                 c.addEventListener('wheel',      _beginMotion, { passive: true });
                 c.addEventListener('touchmove',  _beginMotion, { passive: true });
+            })();
+
+            // Mobile pinch-to-zoom. Emscripten's GLFW port has a built-in
+            // multi-touch pinch->scroll callback that fires the wasm scroll
+            // handler with its own (unnormalised) delta -- three attempts to
+            // tune a synthetic WheelEvent had zero user-visible effect
+            // because GLFW's own scroll fires alongside ours, dominating.
+            //
+            // Fix: capture-phase touch listeners intercept multi-finger
+            // touchstart/move/end BEFORE they bubble to GLFW's registered
+            // handler, stopImmediatePropagation blocks GLFW from ever
+            // seeing them, and we call Module.zoomBy directly with a
+            // JS-tuned scale. Single-finger touches still flow to GLFW
+            // (rotate keeps working via the mouse-drag translation).
+            //
+            // iOS Safari's gesturestart/change/end still fires (page-level
+            // zoom); we preventDefault those too so the layout viewport
+            // stays put.
+            (function() {
+                var c = document.getElementById('canvas');
+                var lastDist = 0;
+                function pinchDist(t) {
+                    var dx = t[0].clientX - t[1].clientX;
+                    var dy = t[0].clientY - t[1].clientY;
+                    return Math.sqrt(dx * dx + dy * dy);
+                }
+                // Capture-phase multi-touch interceptor. Must run before
+                // GLFW's bubble-phase touch handler so we can stopImmediate-
+                // Propagation and keep GLFW's built-in pinch scroll silent.
+                c.addEventListener('touchstart', function(e) {
+                    if (e.touches.length < 2) return;
+                    lastDist = pinchDist(e.touches);
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                }, { capture: true, passive: false });
+                c.addEventListener('touchmove', function(e) {
+                    if (e.touches.length < 2) return;
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    if (lastDist <= 0) { lastDist = pinchDist(e.touches); return; }
+                    var d = pinchDist(e.touches);
+                    // Camera.zoom(delta) sign: positive delta -> zoom in per
+                    // the desktop wheel-up convention. (d - lastDist) is
+                    // positive when fingers spread (pinch out), which the
+                    // standard mobile UX maps to zoom in -- matches Photos,
+                    // Maps, and every DICOM viewer. Scale 0.01 tuned so a
+                    // full ~100 px spread lands near a comfortable zoom
+                    // step; adjust here per device tier if needed.
+                    var delta = (d - lastDist) * 0.01;
+                    if (typeof Module.zoomBy === 'function' && !Module._wasmBusy) {
+                        try { Module.zoomBy(delta); } catch (err) {}
+                    }
+                    lastDist = d;
+                }, { capture: true, passive: false });
+                c.addEventListener('touchend',    function(e) {
+                    if (e.touches.length < 2) lastDist = 0;
+                }, { capture: true });
+                c.addEventListener('touchcancel', function() { lastDist = 0; },
+                                   { capture: true });
+                // iOS Safari-only gesture events -- suppress page-level pinch.
+                c.addEventListener('gesturestart',  function(e) { e.preventDefault(); }, { passive: false });
+                c.addEventListener('gesturechange', function(e) { e.preventDefault(); }, { passive: false });
+                c.addEventListener('gestureend',    function(e) { e.preventDefault(); }, { passive: false });
             })();
             bindRange('aniso',   'anisov',   2, 'setAniso');
             bindRange('bounces', 'bouncesv', 0, 'setBounces');
