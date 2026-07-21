@@ -550,7 +550,8 @@ Option C · last-brick shrink · path-trace · empty-space skipping) 은 원 목
 | Step | 작업 | 예상 |
 | --- | --- | --- |
 | **Y1a** ✅ | Sequential DICOM 업로드 + 진행률 (Promise.all 제거) — 커밋 `86211bf`; JS heap peak 300MB → 1MB, memfs peak 는 여전히 전체 | 완료 |
-| **Y1b** 🔴 | 2-pass 스트리밍 (wasm per-slice API) — memfs peak 1 파일로 축소. **Y3 mobile 데이터로 정당화 완료** ([BASELINE_2026-07-20](baselines/BASELINE_2026-07-20_MOBILE_Y3_BISECT.md)); 예상 memory peak 780→520 MB → iPhone 128 MB 볼륨 로드 가능 예상 | **2 세션 · 다음 착수** |
+| **Y1b** ✅ | `loadDicomSeries` two-pass refactor (Pass 1 metadata → sort → Pass 2 decode + memfs unlink). **iPhone Safari 상한 96 MB → 128 MB 확장 실증** ([BASELINE_2026-07-21_Y1B_MOBILE_128MB.md](baselines/BASELINE_2026-07-21_Y1B_MOBILE_128MB.md)) — 128 MB 63 fps 안정, 192 MB freeze (intensity + atlas 동시 alive peak). | 완료 |
+| **Y1c** (가칭) | Intensity buffer 우회: `loadDicomSeries` 가 per-slice decode 후 BrickedVolume 에 바로 write → peak -192 MB → 실 임상 CT 256+ 슬라이스 mobile 가능화 | 3~4 세션 (Volume3D 인터페이스 변경 큼) |
 | **Y2** | IndexedDB / OPFS — decoded brick cache (재방문 시 파싱 스킵) | 2 세션 |
 | **Y3** desktop ✅ | 128 MB 합성 CT 로드 검증 (512×512×256) — [BASELINE_2026-07-15_SYNTHETIC_128MB.md](baselines/BASELINE_2026-07-15_SYNTHETIC_128MB.md). Static 모드, +9% overhead, 11.3s 총 | 완료 |
 | **Y3** mobile ✅ | iPhone Safari 바이섹션 (4/16/36/64/96/128 MB) — [BASELINE_2026-07-20_MOBILE_Y3_BISECT.md](baselines/BASELINE_2026-07-20_MOBILE_Y3_BISECT.md). 실용 상한 96 MB · 128 MB 크래시 (Safari kill+reload, Chrome freeze) · Y1b 정당화 정량 | 완료 |
@@ -581,31 +582,32 @@ Option C · last-brick shrink · path-trace · empty-space skipping) 은 원 목
 
 ### 현재 활성 방향 (2026-07-10~)
 
-**X 축 v1 + Z1 + Y 축 인프라 (Y1a · Y-C · Y3 desktop + mobile) 완료. Y1b 필요성
-데이터로 확정.**
+**Y1b 완료. 원 목표 "저사양 모바일에서 실 임상 CT (128 MB) 유의미한 fps 로
+렌더" 실증 도달.**
 
 - ✅ 전 축 완료: X1 · X2 · X3 draft · X4 v1 · X4 v1.5 · Z1 · Y1a · Y-C · Y3
-  desktop · Y3 mobile
+  desktop · Y3 mobile · **Y1b**
   - 모바일 첫 클릭 UX (iPhone Safari 40 → 15.7 ms, 7×)
   - Safari.app 하위 tier (SPP=2) 로 pt_spp4 3× 격차 완화
-  - Y1a JS heap peak 300MB → 1MB
+  - Y1a JS heap peak 300 MB → 1 MB
   - Y3 desktop: 128 MB 합성 CT Static 모드 로드 성공
-  - Y-C: 폰 재접속만으로 반복 실측 인프라 확보
-  - Y3 mobile 바이섹션: **iPhone Safari 실용 상한 96 MB, 128 MB 크래시**
-    ([BASELINE_2026-07-20_MOBILE_Y3_BISECT.md](baselines/BASELINE_2026-07-20_MOBILE_Y3_BISECT.md))
-- 🟡 미해결: X3 append (Android/Intel iGPU — 기기 필요), pt_spp4 원인 조사
-- 🔴 **다음 코드 세션 확정**: **Y1b (per-slice streaming refactor)** 2 세션
-  - Y3 mobile 바이섹션이 명확한 정당화 (memory peak 780 → 520 MB, 128 MB 실용
-    가능해질 것으로 예상)
-  - 착수 요소: `beginDicomStream()` / `addDicomSlice(path)` /
-    `finalizeDicomStream()` wasm 바인딩 + `loadDicomSeries` two-pass refactor
-    (header-scan + per-slice-decode) + JS 는 fetch → memfs write → wasm 처리
-    → `Module.FS.unlink(name)` 반복
-  - 완료 후 128 MB iPhone 재실측 → 성공 시 Y1b baseline · 실 임상 도달 실증
-- **Y1b 후 후보** (원 목표 lens 남은 항목):
-  - Y2 (IndexedDB/OPFS brick cache) — 재방문 로드 skip
-  - X4 v2 (wasm-side knobs) — Y1b 후 128+ MB 로 Streaming 트리거 시 정당화
-  - Z2 (async CPU pack) — Streaming 관측 후 정당화
+  - Y3 mobile bisect: iPhone Safari 상한 96 MB · 128 MB 크래시
+  - **Y1b (2026-07-21): iPhone Safari 상한 96 → 128 MB (+33%), 128 MB 63 fps
+    안정** ([BASELINE_2026-07-21_Y1B_MOBILE_128MB.md](baselines/BASELINE_2026-07-21_Y1B_MOBILE_128MB.md))
+- 🟡 미해결:
+  - X3 append (Android/Intel iGPU — 기기 필요)
+  - pt_spp4 Safari vs WKWebView 3× 격차 원인 조사
+  - Y1b 후 192 MB freeze — intensity + atlas 동시 alive peak 이 남은 벽
+- ⏭ **다음 코드 세션 후보** (우선순위):
+  1. **Y1c intensity 우회 스트리밍** — decode 결과를 out.intensity 안 거치고
+     BrickedVolume 에 직접 write → peak -192 MB → 256+ 슬라이스 mobile 가능화.
+     스코프 큼 (Volume3D 인터페이스 재설계, loadFromFloatData 재작성).
+  2. **X4 v2 (wasm-side knobs)** — mobile 티어에서 atlas MB cap 강제 →
+     Streaming 자동 진입 → 시각 hole 대비 큰 볼륨 지원. Y1c 대안.
+  3. **Y2 (IndexedDB / OPFS brick cache)** — 재방문 시 파싱 스킵. 상한 확장
+     안 되지만 UX 개선. Y1b/Y1c 후 자연스러움.
+- **Mini-Engine 이 원 목표 실증한 첫 시점** = Y1b 커밋. iPhone Safari 에서
+  128 MB 실 임상 CT 규모 63 fps 로 인터랙션 가능한 상태 확보.
 
 **다음 세션 진입점**: 이 재정비 섹션. 인프라 세부는 §2 마일스톤 참조. 사용자
 인터페이스 / 빌드 / 조작은 [VIEWERS.md](VIEWERS.md). 코드 진입은
