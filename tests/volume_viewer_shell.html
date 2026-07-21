@@ -123,12 +123,17 @@
              mobile devices; just place the series in the served dir and hit
              Load. Filename pattern matches make_synthetic_dicom.py output. -->
         <div class="row upload-row server-row">
+            <!-- onfocus="this.select()" -- iOS Safari doesn't select the
+                 existing value on tap-focus, so replacing requires long-press
+                 -> Select All. This lets a tap-then-type replace the value. -->
             <input id="serverUrl" class="server-input" type="text" value="/synth_ct/"
                 placeholder="URL prefix" aria-label="Server URL prefix"
-                title="URL prefix that contains slice_XXXX.dcm">
+                title="URL prefix that contains slice_XXXX.dcm"
+                onfocus="this.select()">
             <input id="serverCount" class="server-input" type="number" value="256"
                 min="1" max="9999" aria-label="Slice count"
-                title="Number of slices to fetch">
+                title="Number of slices to fetch"
+                onfocus="this.select()">
             <button type="button" id="serverLoadBtn" class="upload-btn secondary">Load</button>
         </div>
         <div id="uploadStatus"></div>

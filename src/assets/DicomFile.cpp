@@ -219,6 +219,26 @@ struct Slice {
     std::vector<uint8_t> decompressedBuffer;
 };
 
+// Y1b metadata-only view of a Slice. loadDicomSeries's Pass 1 parses each
+// file's Slice, copies these fields, and drops the Slice + its file buffer
+// before moving on -- so the wasm heap holds one file's raw bytes at a time
+// instead of every file's bytes simultaneously (the pre-Y1b buffers[] cost
+// ~130 MB on 128 MB clinical CT and blocked iPhone Safari from loading
+// past 96 MB per BASELINE_2026-07-20_MOBILE_Y3_BISECT.md).
+struct SliceMeta {
+    std::string path;
+    uint32_t rows = 0, cols = 0;
+    uint32_t numberOfFrames = 1;
+    int      instanceNumber = 0;
+    bool     signedPixels = true;
+    double   pixelSpacingY = 1.0, pixelSpacingX = 1.0;
+    double   sliceThickness = 1.0;
+    double   imagePosZ = 0.0;
+    double   rescaleSlope = 1.0;
+    double   rescaleIntercept = 0.0;
+    std::string seriesUid;
+};
+
 // ---------------------------------------------------------------------------
 // Walk encapsulated pixel data starting just past the (7FE0,0010) OB header
 // (i.e. at the first item tag). Items are (FFFE,E000) length-prefixed; the
@@ -889,20 +909,47 @@ bool loadDicomSeries(const std::string& dirPath, Volume3D& out) {
     }
     if (paths.empty()) { LOG_ERROR("Dicom") << dirPath << ": no .dcm files"; return false; }
 
-    std::vector<std::vector<uint8_t>> buffers(paths.size());
-    std::vector<Slice> slices(paths.size());
-    for (size_t i = 0; i < paths.size(); ++i) {
-        if (!parseSlice(paths[i], buffers[i], slices[i])) return false;
+    // Y1b Pass 1 -- metadata scan. Parse each file into a Slice, copy the
+    // header fields we need for validation + sort + downstream into a small
+    // SliceMeta, then drop the Slice and its file buffer BEFORE moving to
+    // the next file. Previously this held all N files' bytes in
+    // vector<vector<uint8_t>> simultaneously (~130 MB on 128 MB clinical CT),
+    // stacking with memfs to blow past the iPhone Safari process budget.
+    // Cost: each file is parsed twice (Pass 1 + Pass 2) -- for 256 files
+    // that adds ~1-3 s on desktop. Trade wall-time for memory ceiling.
+    std::vector<SliceMeta> metas;
+    metas.reserve(paths.size());
+    for (const auto& p : paths) {
+        std::vector<uint8_t> fileBuf;
+        Slice s;
+        if (!parseSlice(p, fileBuf, s)) return false;
+        SliceMeta m{};
+        m.path             = p;
+        m.rows             = s.rows;
+        m.cols             = s.cols;
+        m.numberOfFrames   = s.numberOfFrames;
+        m.instanceNumber   = s.instanceNumber;
+        m.signedPixels     = s.signedPixels;
+        m.pixelSpacingX    = s.pixelSpacingX;
+        m.pixelSpacingY    = s.pixelSpacingY;
+        m.sliceThickness   = s.sliceThickness;
+        m.imagePosZ        = s.imagePosZ;
+        m.rescaleSlope     = s.rescaleSlope;
+        m.rescaleIntercept = s.rescaleIntercept;
+        m.seriesUid        = s.seriesUid;
+        metas.push_back(std::move(m));
+        // fileBuf + Slice's decompressedBuffer / mergedFrameBuffer drop here.
+        // Wasm heap holds one file's raw + decoded bytes at a time.
     }
 
-    const auto& ref = slices.front();
-    for (size_t i = 1; i < slices.size(); ++i) {
-        const auto& s = slices[i];
-        if (s.rows != ref.rows || s.cols != ref.cols) {
+    const auto& ref = metas.front();
+    for (size_t i = 1; i < metas.size(); ++i) {
+        const auto& m = metas[i];
+        if (m.rows != ref.rows || m.cols != ref.cols) {
             LOG_ERROR("Dicom") << dirPath << ": inconsistent rows/cols";
             return false;
         }
-        if (s.seriesUid != ref.seriesUid) {
+        if (m.seriesUid != ref.seriesUid) {
             LOG_ERROR("Dicom") << dirPath << ": mixed series in directory";
             return false;
         }
@@ -912,16 +959,16 @@ bool loadDicomSeries(const std::string& dirPath, Volume3D& out) {
     // each file has 1 frame; for multi-frame DICOM (NumberOfFrames > 1) a single
     // file contributes that many consecutive z slices. Sort by z position then
     // frame index then instance number.
-    struct Entry { size_t fileIdx; uint32_t frameIdx; double zPos; int instanceNumber; };
+    struct Entry { size_t metaIdx; uint32_t frameIdx; double zPos; int instanceNumber; };
     std::vector<Entry> order;
-    for (size_t i = 0; i < slices.size(); ++i) {
-        const auto& s = slices[i];
-        for (uint32_t f = 0; f < s.numberOfFrames; ++f) {
+    for (size_t i = 0; i < metas.size(); ++i) {
+        const auto& m = metas[i];
+        for (uint32_t f = 0; f < m.numberOfFrames; ++f) {
             // Multi-frame files don't carry per-frame ImagePositionPatient in this
             // first cut, so we space frames along z by SliceThickness from the
             // file's base position.
-            const double zp = s.imagePosZ + static_cast<double>(f) * s.sliceThickness;
-            order.push_back({ i, f, zp, s.instanceNumber });
+            const double zp = m.imagePosZ + static_cast<double>(f) * m.sliceThickness;
+            order.push_back({ i, f, zp, m.instanceNumber });
         }
     }
     std::sort(order.begin(), order.end(), [](const Entry& a, const Entry& b) {
@@ -946,12 +993,31 @@ bool loadDicomSeries(const std::string& dirPath, Volume3D& out) {
     out.spacingZ = static_cast<float>(zSpacing);
     out.intensity.assign(static_cast<size_t>(w) * h * d, 0.0f);
 
+    // Y1b Pass 2 -- decode each z-slice from its source file and copy the
+    // pixels into out.intensity at the sorted position, then drop the file
+    // buffer. When all frames from a given file have been consumed (single-
+    // frame: after the first hit; multi-frame: after NumberOfFrames hits) we
+    // fs::remove() the memfs entry so the wasm heap can reclaim ~500 KB per
+    // file DURING the pass. Guarded on Emscripten because on native these
+    // are the user's real DICOM files -- we must not delete them.
+    // framesRemaining[] tracks per-file frame counts so a multi-frame file
+    // isn't unlinked before all its frames are copied.
+    std::vector<uint32_t> framesRemaining(metas.size(), 0);
+    for (size_t i = 0; i < metas.size(); ++i) {
+        framesRemaining[i] = metas[i].numberOfFrames;
+    }
     const size_t frameBytes = static_cast<size_t>(w) * h * 2;
     float mn = std::numeric_limits<float>::max();
     float mx = std::numeric_limits<float>::lowest();
     for (uint32_t z = 0; z < d; ++z) {
-        const Slice& s = slices[order[z].fileIdx];
-        const uint8_t* px = s.pixelData + static_cast<size_t>(order[z].frameIdx) * frameBytes;
+        const Entry& e = order[z];
+        const SliceMeta& mm = metas[e.metaIdx];
+
+        std::vector<uint8_t> fileBuf;
+        Slice s;
+        if (!parseSlice(mm.path, fileBuf, s)) return false;
+
+        const uint8_t* px = s.pixelData + static_cast<size_t>(e.frameIdx) * frameBytes;
         const float slope = static_cast<float>(s.rescaleSlope);
         const float inter = static_cast<float>(s.rescaleIntercept);
         for (uint32_t y = 0; y < h; ++y) {
@@ -974,6 +1040,14 @@ bool loadDicomSeries(const std::string& dirPath, Volume3D& out) {
                 if (v > mx) mx = v;
             }
         }
+        // fileBuf + Slice buffers drop here.
+
+#ifdef __EMSCRIPTEN__
+        if (--framesRemaining[e.metaIdx] == 0) {
+            std::error_code rmec;
+            fs::remove(mm.path, rmec);
+        }
+#endif
     }
     out.dataMin = mn;
     out.dataMax = mx;
