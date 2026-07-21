@@ -551,7 +551,11 @@ Option C · last-brick shrink · path-trace · empty-space skipping) 은 원 목
 | --- | --- | --- |
 | **Y1a** ✅ | Sequential DICOM 업로드 + 진행률 (Promise.all 제거) — 커밋 `86211bf`; JS heap peak 300MB → 1MB, memfs peak 는 여전히 전체 | 완료 |
 | **Y1b** ✅ | `loadDicomSeries` two-pass refactor (Pass 1 metadata → sort → Pass 2 decode + memfs unlink). **iPhone Safari 상한 96 MB → 128 MB 확장 실증** ([BASELINE_2026-07-21_Y1B_MOBILE_128MB.md](baselines/BASELINE_2026-07-21_Y1B_MOBILE_128MB.md)) — 128 MB 63 fps 안정, 192 MB freeze (intensity + atlas 동시 alive peak). | 완료 |
-| **Y1c** (가칭) | Intensity buffer 우회: `loadDicomSeries` 가 per-slice decode 후 BrickedVolume 에 바로 write → peak -192 MB → 실 임상 CT 256+ 슬라이스 mobile 가능화 | 3~4 세션 (Volume3D 인터페이스 변경 큼) |
+| **Y1c-lite** ✅ | `loadDicomSeriesHalf` — DICOM decode 가 packHalf1x16 로 바로 저장, `loadFromFloatData` 의 float→half pass 제거. -128 MB (128 MB volume) | 완료 |
+| **Y1d** ✅ | `BrickedVolume::build` CPU-side `atlasBuf` 제거, mapped staging 에 직접 pack. -209 MB peak. | 완료 |
+| **Y1e** ✅ | `halfData` rvalue chain (viewer → renderer → build) + GPU 텍스처 alloc 을 halfData 해제 뒤로 재순서. -96 MB peak. | 완료 |
+| **Y1f** | Chunked staging (Z-slab 26 MB 단위 upload) — mobile 192 MB 재도전. 예상 peak ~581 MB (Y1e 668 대비 -87 MB, iOS ~600 MB 예산 안). | 1~2 세션 |
+| **Y1c-full** | Intensity buffer 완전 우회: decode 결과가 BrickedVolume 브릭에 직접 write. Volume3D 인터페이스 재설계. 실 임상 CT 250+ MB mobile 가능화. | 3~4 세션 |
 | **Y2** | IndexedDB / OPFS — decoded brick cache (재방문 시 파싱 스킵) | 2 세션 |
 | **Y3** desktop ✅ | 128 MB 합성 CT 로드 검증 (512×512×256) — [BASELINE_2026-07-15_SYNTHETIC_128MB.md](baselines/BASELINE_2026-07-15_SYNTHETIC_128MB.md). Static 모드, +9% overhead, 11.3s 총 | 완료 |
 | **Y3** mobile ✅ | iPhone Safari 바이섹션 (4/16/36/64/96/128 MB) — [BASELINE_2026-07-20_MOBILE_Y3_BISECT.md](baselines/BASELINE_2026-07-20_MOBILE_Y3_BISECT.md). 실용 상한 96 MB · 128 MB 크래시 (Safari kill+reload, Chrome freeze) · Y1b 정당화 정량 | 완료 |
@@ -582,32 +586,33 @@ Option C · last-brick shrink · path-trace · empty-space skipping) 은 원 목
 
 ### 현재 활성 방향 (2026-07-10~)
 
-**Y1b 완료. 원 목표 "저사양 모바일에서 실 임상 CT (128 MB) 유의미한 fps 로
-렌더" 실증 도달.**
+**Y1c-lite + Y1d + Y1e 완료. Mobile 물리적 프로세스 예산 (~600-650 MB) 도달
+확정 — 128 MB 안정, 192 MB 는 소프트웨어로 못 넘음.**
 
 - ✅ 전 축 완료: X1 · X2 · X3 draft · X4 v1 · X4 v1.5 · Z1 · Y1a · Y-C · Y3
-  desktop · Y3 mobile · **Y1b**
+  desktop · Y3 mobile · Y1b · **Y1c-lite · Y1d · Y1e**
   - 모바일 첫 클릭 UX (iPhone Safari 40 → 15.7 ms, 7×)
   - Safari.app 하위 tier (SPP=2) 로 pt_spp4 3× 격차 완화
   - Y1a JS heap peak 300 MB → 1 MB
   - Y3 desktop: 128 MB 합성 CT Static 모드 로드 성공
-  - Y3 mobile bisect: iPhone Safari 상한 96 MB · 128 MB 크래시
-  - **Y1b (2026-07-21): iPhone Safari 상한 96 → 128 MB (+33%), 128 MB 63 fps
-    안정** ([BASELINE_2026-07-21_Y1B_MOBILE_128MB.md](baselines/BASELINE_2026-07-21_Y1B_MOBILE_128MB.md))
+  - Y3 mobile bisect: iPhone Safari 상한 96 MB → 128 MB (Y1b)
+  - **Y1c-lite + Y1d + Y1e (2026-07-21): mobile peak 956 → 668 MB (-30%)** 이지만
+    iPhone 물리 예산 ~600-650 MB → 192 MB 여전히 crash
+    ([BASELINE_2026-07-21_Y1CDE_PHYSICAL_WALL.md](baselines/BASELINE_2026-07-21_Y1CDE_PHYSICAL_WALL.md))
 - 🟡 미해결:
   - X3 append (Android/Intel iGPU — 기기 필요)
   - pt_spp4 Safari vs WKWebView 3× 격차 원인 조사
-  - Y1b 후 192 MB freeze — intensity + atlas 동시 alive peak 이 남은 벽
+  - Mobile 128 MB 상한 — 물리 벽 확정, 다음 아키텍처 (Y1f · Y1c-full) 필요
 - ⏭ **다음 코드 세션 후보** (우선순위):
-  1. **Y1c intensity 우회 스트리밍** — decode 결과를 out.intensity 안 거치고
-     BrickedVolume 에 직접 write → peak -192 MB → 256+ 슬라이스 mobile 가능화.
-     스코프 큼 (Volume3D 인터페이스 재설계, loadFromFloatData 재작성).
-  2. **X4 v2 (wasm-side knobs)** — mobile 티어에서 atlas MB cap 강제 →
-     Streaming 자동 진입 → 시각 hole 대비 큰 볼륨 지원. Y1c 대안.
-  3. **Y2 (IndexedDB / OPFS brick cache)** — 재방문 시 파싱 스킵. 상한 확장
-     안 되지만 UX 개선. Y1b/Y1c 후 자연스러움.
-- **Mini-Engine 이 원 목표 실증한 첫 시점** = Y1b 커밋. iPhone Safari 에서
-  128 MB 실 임상 CT 규모 63 fps 로 인터랙션 가능한 상태 확보.
+  1. **Y1f (chunked staging)** — Staging Z-slab 단위 upload. 예상 peak ~581 MB
+     (iOS ~600 MB 예산 안). 1~2 세션. 192 MB mobile 재도전.
+  2. **Y1c-full (intensity buffer 우회)** — Volume3D → BrickedVolume 직접 write.
+     실 임상 CT 250+ MB mobile 가능화. Volume3D 인터페이스 재설계. 3~4 세션.
+  3. **Streaming + m_originalHalfData 제거** — Streaming 모드 CPU 복사 없이 mmap
+     스타일로. 큰 볼륨 Streaming 진입 가능케.
+  4. **Y2 (IndexedDB / OPFS brick cache)** — 재방문 파싱 스킵. 상한 확장 X, UX.
+- **원 목표 도달도**: 머리 CT · 얇은 슬라이스 (~128 MB) mobile 실증 ✅. 가슴/복부
+  CT (~200 MB+) 는 다음 아키텍처 (Y1f 이상) 필요.
 
 **다음 세션 진입점**: 이 재정비 섹션. 인프라 세부는 §2 마일스톤 참조. 사용자
 인터페이스 / 빌드 / 조작은 [VIEWERS.md](VIEWERS.md). 코드 진입은

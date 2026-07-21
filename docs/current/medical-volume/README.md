@@ -62,6 +62,7 @@ Mini-Engine implements it:
 | [BASELINE_2026-07-15_SYNTHETIC_128MB.md](baselines/BASELINE_2026-07-15_SYNTHETIC_128MB.md) | Y3 first-cut (desktop): 512×512×256 (128 MB) 합성 CT 로드 · Static 모드 (139 MB atlas, +9% overhead) · read+write 10.4 s + decode 842 ms · CPU 5.34 ms/frame · Y1b 필요 여부 판정을 모바일 재실측으로 연기. |
 | [BASELINE_2026-07-20_MOBILE_Y3_BISECT.md](baselines/BASELINE_2026-07-20_MOBILE_Y3_BISECT.md) | **Y3 mobile 바이섹션**: iPhone Safari 실용 상한 **96 MB 확정, 128 MB 크래시** (Safari kill+reload / Chrome freeze). Y1b (per-slice streaming) 필요성 정량 입증 · 예상 임팩트 memory peak 780→520 MB (-260 MB). |
 | [BASELINE_2026-07-21_Y1B_MOBILE_128MB.md](baselines/BASELINE_2026-07-21_Y1B_MOBILE_128MB.md) | **Y1b 성과 실증**: `loadDicomSeries` two-pass refactor → iPhone Safari 128 MB **로드 성공, 63 fps 안정** (07-20 baseline 이 예측한 상한 확장 정확 실현). 192 MB 는 여전히 freeze (intensity + atlas 동시 alive peak 남음). 원 목표 "저사양 모바일 대용량 실 CT" 첫 실증. |
+| [BASELINE_2026-07-21_Y1CDE_PHYSICAL_WALL.md](baselines/BASELINE_2026-07-21_Y1CDE_PHYSICAL_WALL.md) | **Y1c-lite + Y1d + Y1e 조합 실측**: mobile peak 956 → 668 MB (-30%) 축소. 192 MB 는 여전히 crash → iPhone 물리 프로세스 예산 ~600-650 MB 확정. 128 MB 는 안정 유지. 다음 후보 Y1f (chunked staging) · Y1c-full (intensity 우회). |
 
 ---
 

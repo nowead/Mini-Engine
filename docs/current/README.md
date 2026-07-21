@@ -36,6 +36,7 @@ WebGPU 기반 차세대 클라이언트 사이드 **의료 볼륨 렌더러**로
 | [BASELINE_2026-07-15_SYNTHETIC_128MB.md](medical-volume/baselines/BASELINE_2026-07-15_SYNTHETIC_128MB.md) | 축 Y3 first-cut (desktop) — 512×512×256 합성 CT 128 MB 로드, Static 모드 (+9% overhead), 11.3 s 총 · 원 목표 "대용량" 첫 검증 · 모바일 재실측은 옵션 C 추가 후 |
 | [BASELINE_2026-07-20_MOBILE_Y3_BISECT.md](medical-volume/baselines/BASELINE_2026-07-20_MOBILE_Y3_BISECT.md) | 축 Y3 mobile — iPhone Safari 바이섹션: 상한 96 MB (128 MB 크래시). Y1b (per-slice streaming) 정당화 완료 — 예상 memory peak 780→520 MB. |
 | [BASELINE_2026-07-21_Y1B_MOBILE_128MB.md](medical-volume/baselines/BASELINE_2026-07-21_Y1B_MOBILE_128MB.md) | 축 Y1b 완료 — `loadDicomSeries` two-pass 로 iPhone Safari 상한 **96→128 MB, 63 fps 안정**. 192 MB 는 남은 벽 (intensity+atlas peak). **원 목표 실증 첫 시점**. |
+| [BASELINE_2026-07-21_Y1CDE_PHYSICAL_WALL.md](medical-volume/baselines/BASELINE_2026-07-21_Y1CDE_PHYSICAL_WALL.md) | Y1c-lite + Y1d + Y1e 완료 — mobile peak 956→668 MB (-30%). 192 MB 여전히 crash → iPhone **물리 예산 ~600-650 MB 확정**. Y1f (chunked staging) 다음 후보. |
 
 **M1 (실데이터 기반) 완료** (2026-05-29): R16Float 16비트 · window/level ·
 NIfTI 로더 + float 강도 경로 + 임상 윈도우 프리셋.
