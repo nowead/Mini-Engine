@@ -38,4 +38,15 @@ namespace assets {
 // directory is missing / empty / mixed series / unsupported transfer syntax.
 bool loadDicomSeries(const std::string& dirPath, Volume3D& out);
 
+// Y1c-lite (2026-07-22) — half-direct output variant. Same parse pipeline as
+// loadDicomSeries but the per-voxel rescale-then-half-pack happens inline
+// during Pass 2, filling out.intensityHalf directly instead of the float
+// out.intensity + a subsequent float->half conversion in VolumeRenderer.
+// Skips one full-volume-sized buffer at load time (~128 MB saved on a
+// 128 MB volume, ~192 MB saved on 192 MB) — the peak that pushed iPhone
+// Safari past its process budget on 192 MB DICOM. NIfTI still uses the
+// float path (loadNifti + loadFromFloatData). Only intensityHalf is
+// populated; out.intensity stays empty.
+bool loadDicomSeriesHalf(const std::string& dirPath, Volume3D& out);
+
 } // namespace assets

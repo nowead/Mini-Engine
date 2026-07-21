@@ -278,8 +278,18 @@ private:
     // R3 refactor: shared volume-configuration path so both the initial
     // preload fallback chain and the runtime user-DICOM reload land on the
     // same window / preset / AABB / camera policies.
-    glm::vec3 applyVolumeData(const assets::Volume3D& vol) {
-        m_volume->loadFromFloatData(vol.intensity, vol.w, vol.h, vol.d);
+    // Y1c-lite + Y1e: DICOM callers populate vol.intensityHalf; we move it
+    // through the renderer so BrickedVolume::build can drop the buffer
+    // right after Static pack, before GPU transfer. NIfTI (float path)
+    // still copies -- NIfTI volumes aren't the memory-critical case.
+    glm::vec3 applyVolumeData(assets::Volume3D& vol) {
+        if (!vol.intensityHalf.empty()) {
+            m_volume->loadFromHalfData(std::move(vol.intensityHalf),
+                                        vol.w, vol.h, vol.d,
+                                        vol.dataMin, vol.dataMax);
+        } else {
+            m_volume->loadFromFloatData(vol.intensity, vol.w, vol.h, vol.d);
+        }
         glm::vec3 ext(vol.w * vol.spacingX, vol.h * vol.spacingY, vol.d * vol.spacingZ);
         const float m = std::max({ext.x, ext.y, ext.z});
         glm::vec3 halfExtent = (m > 0.0f) ? ext / m : glm::vec3(1.0f);
@@ -320,9 +330,11 @@ private:
         // the JPEG 2000 sample (OpenJPEG regression), then to the synthetic
         // NIfTI. Every preload path stays exercised on browser load without
         // per-sample UI.
-        const bool loadedMr     = assets::loadDicomSeries("/sample_dicom_mr", vol);
-        const bool loadedJpegLl = !loadedMr && assets::loadDicomSeries("/sample_dicom_jpegll", vol);
-        const bool loadedJp2    = !loadedMr && !loadedJpegLl && assets::loadDicomSeries("/sample_dicom_jp2", vol);
+        // Y1c-lite: DICOM preloads use half-direct path (skips float
+        // intermediate, halves load-time transient memory).
+        const bool loadedMr     = assets::loadDicomSeriesHalf("/sample_dicom_mr", vol);
+        const bool loadedJpegLl = !loadedMr && assets::loadDicomSeriesHalf("/sample_dicom_jpegll", vol);
+        const bool loadedJp2    = !loadedMr && !loadedJpegLl && assets::loadDicomSeriesHalf("/sample_dicom_jp2", vol);
         const bool loadedDicom  = loadedMr || loadedJpegLl || loadedJp2;
         const bool loaded = loadedDicom || assets::loadNifti("/synthetic_ct.nii", vol);
         if (loaded) {
@@ -393,7 +405,11 @@ private:
         if (m_pendingUserDicomReload && m_volume) {
             m_pendingUserDicomReload = false;
             assets::Volume3D vol;
-            if (assets::loadDicomSeries("/user_dicom", vol)) {
+            // Y1c-lite: half-direct path -- this is the mobile-critical branch
+            // (128+ MB user uploads). Skips ~192 MB float intermediate on a
+            // 192 MB series, letting iPhone Safari load past its pre-Y1c-lite
+            // 128 MB ceiling.
+            if (assets::loadDicomSeriesHalf("/user_dicom", vol)) {
                 glm::vec3 halfExtent = applyVolumeData(vol);
                 m_volume->setAABB(-halfExtent, halfExtent);
                 m_volume->resetAccumulation();

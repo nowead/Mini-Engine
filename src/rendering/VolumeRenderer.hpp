@@ -108,6 +108,21 @@ public:
                            uint32_t w, uint32_t h, uint32_t d,
                            glm::uvec3 atlasGridOverride = glm::uvec3(0));
 
+    // Y1c-lite (2026-07-22) -- half-direct entry for callers that already
+    // packHalf1x16'd their voxels (e.g. loadDicomSeriesHalf). Bypasses the
+    // float->half conversion that loadFromFloatData does internally, so the
+    // caller's half buffer is the only full-volume-sized allocation alive at
+    // BrickedVolume::build time -- roughly halves transient load-time memory
+    // vs the float path. dataMin / dataMax must be pre-computed by the
+    // caller (loadDicomSeriesHalf tracks them during the same scan that
+    // packs the half); we can't recover them cheaply from the packed data.
+    // Y1e: takes halfData by rvalue -- caller must std::move so build() can
+    // drop the buffer before the GPU transfer starts.
+    bool loadFromHalfData(std::vector<uint16_t>&& halfData,
+                          uint32_t w, uint32_t h, uint32_t d,
+                          float dataMin, float dataMax,
+                          glm::uvec3 atlasGridOverride = glm::uvec3(0));
+
     // Disk paging Step 5.3: build the brick atlas straight from a memory-
     // mapped NIfTI int16 / uint16 source -- no float intermediate, no global
     // half buffer. The mmap region owned by `src` is moved into BrickedVolume
@@ -382,7 +397,10 @@ private:
     // emptyValueHalf is the half-float bit pattern that counts as "air" (skipped during
     // packing). For procedural uint8 density, that's +0.0 (0x0000); for clinical CT,
     // it's the half encoding of the data minimum (e.g. -1000 HU).
-    bool uploadHalf(const std::vector<uint16_t>& halfData,
+    // Y1e: rvalue -- moves halfData into BrickedVolume::build which drops it
+    // right after the Static pack, before GPU transfer. Callers must pass
+    // std::move(...).
+    bool uploadHalf(std::vector<uint16_t>&& halfData,
                     uint32_t w, uint32_t h, uint32_t d,
                     uint16_t emptyValueHalf,
                     glm::uvec3 atlasGridOverride = glm::uvec3(0));

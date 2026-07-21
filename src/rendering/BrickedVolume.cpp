@@ -79,13 +79,13 @@ bool isInteriorEmpty(const uint16_t* src,
 } // namespace
 
 bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
-                          const std::vector<uint16_t>& halfData,
+                          std::vector<uint16_t>&& halfDataIn,
                           uint32_t w, uint32_t h, uint32_t d,
                           uint16_t emptyValueHalf,
                           glm::uvec3 atlasGrid) {
     if (!device || !queue) return false;
     if (w == 0 || h == 0 || d == 0) return false;
-    if (halfData.size() < static_cast<size_t>(w) * h * d) {
+    if (halfDataIn.size() < static_cast<size_t>(w) * h * d) {
         LOG_ERROR("BrickedVolume") << "halfData too small for " << w << "x" << h << "x" << d;
         return false;
     }
@@ -93,10 +93,16 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
     m_device = device;
     m_queue  = queue;
 
-    // Build using a temporary VoxelSource view over the input parameter; only
-    // the Streaming branch below copies it into m_originalHalfData + sets
-    // m_voxelSource (the Static path never reads the source again after
-    // atlas pack, so paying the copy there would just waste RAM).
+    // Y1e: take ownership of the caller's halfData into a local. Streaming
+    // path moves this into m_originalHalfData below; Static path keeps it
+    // for the Pass 2 pack then releases it just before the GPU transfer
+    // begins -- one full-volume-sized buffer trimmed from the load peak on
+    // top of Y1c-lite (float intensity) + Y1d (atlasBuf).
+    std::vector<uint16_t> halfData = std::move(halfDataIn);
+
+    // VoxelSource view over the local halfData. Static path reads through
+    // this in the pack loop; Streaming path never touches it again after
+    // the pre-scan + mode decision (m_originalHalfData takes over).
     const VoxelSource buildView{halfData.data(), halfData.size(),
                                 VoxelSource::Format::HalfFloat,
                                 1.0f, 0.0f};
@@ -251,127 +257,33 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
         if (m_pageGrid.y > 1) m_atlasVoxelsL0.y = (m_pageGrid.y - 1) * bs0.y + m_brickInteriorLastL0.y + m_brickHaloL0.y;
         if (m_pageGrid.z > 1) m_atlasVoxelsL0.z = (m_pageGrid.z - 1) * bs0.z + m_brickInteriorLastL0.z + m_brickHaloL0.z;
     }
+    // Y1d: keep only the atlas-voxel dims for the LOG_INFO summary; the
+    // row-stride + atlasBytes locals died with the atlasBuf allocation.
+    // Each LOD's stride is recomputed inside the LOD loop below.
     const uint32_t atlasVoxelsX = m_atlasVoxelsL0.x;
     const uint32_t atlasVoxelsY = m_atlasVoxelsL0.y;
     const uint32_t atlasVoxelsZ = m_atlasVoxelsL0.z;
-    const uint32_t tightBytesPerRow = atlasVoxelsX * 2;
-#ifdef __EMSCRIPTEN__
-    const uint32_t paddedBytesPerRow = (tightBytesPerRow + 255u) & ~255u;
-#else
-    const uint32_t paddedBytesPerRow = tightBytesPerRow;
-#endif
-    const uint64_t atlasBytes =
-        static_cast<uint64_t>(paddedBytesPerRow) * atlasVoxelsY * atlasVoxelsZ;
 
-    std::vector<uint8_t> atlasBuf;
-    atlasBuf.resize(atlasBytes);
-    for (uint32_t z = 0; z < atlasVoxelsZ; ++z) {
-        for (uint32_t y = 0; y < atlasVoxelsY; ++y) {
-            uint16_t* row = reinterpret_cast<uint16_t*>(
-                atlasBuf.data() + (static_cast<uint64_t>(z) * atlasVoxelsY + y) * paddedBytesPerRow);
-            std::fill(row, row + atlasVoxelsX, emptyValueHalf);
-        }
-    }
     std::vector<uint32_t> pageTable(totalPageEntries, kEmptySlot);
-
-    // ------------------------------------------------------------------
-    // 1c. Static-only packing pass. Streaming mode skips this entirely;
-    // atlasBuf stays filled with emptyValueHalf and pageTable stays
-    // all-sentinel (the empty atlas the shader will sample until v1-3
-    // pages bricks in).
-    // ------------------------------------------------------------------
+    // Y1d: no CPU-side atlasBuf. The Static-mode pack loop below runs INSIDE
+    // the LOD staging loop and writes directly into the WebGPU staging
+    // buffer's mapped memory. That eliminated a ~atlas-sized transient
+    // (209 MB on 192 MB clinical CT) that Y1c-lite left as the peak
+    // bottleneck (staging + atlasBuf both alive during the memcpy).
     m_usedSlotsPerLod = {0, 0, 0, 0};
-    if (m_mode == Mode::StaticFullyLoaded) {
-        for (uint32_t bz = 0; bz < m_pageGrid.z; ++bz) {
-            for (uint32_t by = 0; by < m_pageGrid.y; ++by) {
-                for (uint32_t bx = 0; bx < m_pageGrid.x; ++bx) {
-                    const uint32_t pageIdx = (bz * m_pageGrid.y + by) * m_pageGrid.x + bx;
-                    const bool hasData = (m_pageOccupancy[pageIdx >> 3] >> (pageIdx & 7)) & 1u;
-                    if (!hasData) continue;
-
-                    // Slot assignment. Uniform layout: raster-order counter
-                    // (empty bricks skip, slot 0..N-1 is dense in the atlas
-                    // sub-grid). Position-based layout (shrink enabled): slot
-                    // == pageIdx so slot 3D coord matches brick coord and the
-                    // shader can identify "last brick along axis" from
-                    // brickIdx alone. Empty positions leave gaps in the
-                    // atlas texture but don't cost extra VRAM (already
-                    // allocated dense).
-                    uint32_t slot, sx, sy, sz;
-                    if (m_uniformSlotLayout) {
-                        slot = m_usedSlotsPerLod[0]++;
-                        sx = slot % atlasGrid.x;
-                        sy = (slot / atlasGrid.x) % atlasGrid.y;
-                        sz =  slot / (atlasGrid.x * atlasGrid.y);
-                    } else {
-                        slot = pageIdx;  // atlasGrid == pageGrid, so slot fits
-                        sx = bx; sy = by; sz = bz;
-                        ++m_usedSlotsPerLod[0];
-                    }
-                    pageTable[pageIdx] = encodePage(slot, 0);  // Static always L0
-
-                    // Per-brick stored dims. Uniform layout uses bs0 for all
-                    // bricks; shrink layout truncates the last brick along
-                    // each multi-brick axis to (lastInterior + inner halo) so
-                    // the outer halo (no neighbor to sample from) is skipped.
-                    // Inner halo (m_brickHaloL0) still applies on both sides
-                    // for uniform bricks; shrink mode just cuts the outer
-                    // right/bottom/back side of the last brick.
-                    glm::uvec3 storedThis = bs0;
-                    if (!m_uniformSlotLayout) {
-                        if (m_pageGrid.x > 1 && bx == m_pageGrid.x - 1u)
-                            storedThis.x = m_brickInteriorLastL0.x + m_brickHaloL0.x;
-                        if (m_pageGrid.y > 1 && by == m_pageGrid.y - 1u)
-                            storedThis.y = m_brickInteriorLastL0.y + m_brickHaloL0.y;
-                        if (m_pageGrid.z > 1 && bz == m_pageGrid.z - 1u)
-                            storedThis.z = m_brickInteriorLastL0.z + m_brickHaloL0.z;
-                    }
-
-                    // Atlas slot origin (in voxels): uniform per-axis stride
-                    // bs0 for BOTH uniform and shrink layouts. Shrink mode
-                    // only reduces the last brick's WIDTH along an axis, not
-                    // its position, so the origin math is unchanged.
-                    const uint32_t aOriginX = sx * bs0.x;
-                    const uint32_t aOriginY = sy * bs0.y;
-                    const uint32_t aOriginZ = sz * bs0.z;
-
-                    // Per-axis brick pack. Halo axis contributes -halo starting
-                    // offset in source coords (so the halo voxel to the left of
-                    // the interior is clamped-copied from the neighboring brick
-                    // via srcVoxelHalfBits' std::clamp). When halo=0 on an axis
-                    // the loop just covers the interior extent.
-                    const int srcX0 = static_cast<int>(bx * kBrickSize)
-                                    - static_cast<int>(m_brickHaloL0.x);
-                    const int srcY0 = static_cast<int>(by * kBrickSize)
-                                    - static_cast<int>(m_brickHaloL0.y);
-                    const int srcZ0 = static_cast<int>(bz * kBrickSize)
-                                    - static_cast<int>(m_brickHaloL0.z);
-                    for (uint32_t lz = 0; lz < storedThis.z; ++lz) {
-                        for (uint32_t ly = 0; ly < storedThis.y; ++ly) {
-                            uint16_t* dstRow = reinterpret_cast<uint16_t*>(
-                                atlasBuf.data()
-                                + (static_cast<uint64_t>(aOriginZ + lz) * atlasVoxelsY
-                                   + (aOriginY + ly)) * paddedBytesPerRow
-                                + aOriginX * 2);
-                            const int srcZ = srcZ0 + static_cast<int>(lz);
-                            const int srcY = srcY0 + static_cast<int>(ly);
-                            for (uint32_t lx = 0; lx < storedThis.x; ++lx) {
-                                const int srcXcoord = srcX0 + static_cast<int>(lx);
-                                dstRow[lx] = srcVoxelHalfBits(buildView, srcXcoord, srcY, srcZ, w, h, d);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
 
     // ------------------------------------------------------------------
     // 1d. Streaming-mode state setup. m_usedSlots stays 0 (no resident
     // bricks yet); v1-3 will increment it as pages stream in.
     // ------------------------------------------------------------------
     if (m_mode == Mode::Streaming) {
-        m_originalHalfData = halfData;            // copy for v1-3 brick extraction
+        // Y1e: move (not copy) into m_originalHalfData. Streaming needs the
+        // CPU-side source alive as a member for updateStreaming's per-frame
+        // brick pack; moving skips the second full-volume-sized allocation
+        // the previous copy-assignment triggered. halfData is empty after
+        // this move; buildView (pointing to it) is not used further in the
+        // Streaming branch (Streaming LOD loop fills empty only).
+        m_originalHalfData = std::move(halfData);
         m_voxelSource = VoxelSource{m_originalHalfData.data(),
                                     m_originalHalfData.size(),
                                     VoxelSource::Format::HalfFloat,
@@ -414,6 +326,119 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
             static_cast<uint64_t>(paddedRowLv) * voxelsY_lv * voxelsZ_lv;
         totalAtlasBytes += bytesLv;
 
+        // Y1e: GPU texture creation deferred to AFTER halfData release (see
+        // below). Peak wasm heap at pack time now includes only staging +
+        // halfData (no GPU texture) -- the peak becomes staging + GPU
+        // AFTER halfData is dropped, keeping the three big buffers from
+        // ever being alive at the same instant.
+
+        // Y1d: pack directly into the mapped staging buffer -- no CPU-side
+        // atlas duplicate. Every LOD path fills empty first; L0 Static mode
+        // then overwrites the non-empty brick regions with source pixels.
+        rhi::BufferDesc bd{};
+        bd.size  = bytesLv;
+        bd.usage = rhi::BufferUsage::CopySrc | rhi::BufferUsage::MapWrite;
+        bd.label = "BrickAtlasStaging";
+        auto staging = device->createBuffer(bd);
+        if (!staging) {
+            LOG_ERROR("BrickedVolume") << "atlas staging L" << lv << " create failed"; return false;
+        }
+        uint8_t* stagingBytes = static_cast<uint8_t*>(staging->map());
+        if (!stagingBytes) {
+            LOG_ERROR("BrickedVolume") << "atlas staging L" << lv << " map failed"; return false;
+        }
+        for (uint32_t z = 0; z < voxelsZ_lv; ++z) {
+            for (uint32_t y = 0; y < voxelsY_lv; ++y) {
+                uint16_t* row = reinterpret_cast<uint16_t*>(
+                    stagingBytes
+                    + (static_cast<uint64_t>(z) * voxelsY_lv + y) * paddedRowLv);
+                std::fill(row, row + voxelsX_lv, emptyValueHalf);
+            }
+        }
+
+        // Static-only per-brick pack (L0 only). Streaming skips this: the
+        // atlas starts empty and updateStreaming pages bricks in later.
+        if (lv == 0 && m_mode == Mode::StaticFullyLoaded) {
+            for (uint32_t bz = 0; bz < m_pageGrid.z; ++bz) {
+                for (uint32_t by = 0; by < m_pageGrid.y; ++by) {
+                    for (uint32_t bx = 0; bx < m_pageGrid.x; ++bx) {
+                        const uint32_t pageIdx = (bz * m_pageGrid.y + by) * m_pageGrid.x + bx;
+                        const bool hasData = (m_pageOccupancy[pageIdx >> 3] >> (pageIdx & 7)) & 1u;
+                        if (!hasData) continue;
+
+                        // Slot assignment (Option C + last-brick shrink):
+                        // uniform layout runs a raster-order counter; shrink
+                        // layout uses slot == pageIdx so the shader can
+                        // identify the last brick along each axis from
+                        // brickIdx alone.
+                        uint32_t slot, sx, sy, sz;
+                        if (m_uniformSlotLayout) {
+                            slot = m_usedSlotsPerLod[0]++;
+                            sx = slot % atlasGrid.x;
+                            sy = (slot / atlasGrid.x) % atlasGrid.y;
+                            sz =  slot / (atlasGrid.x * atlasGrid.y);
+                        } else {
+                            slot = pageIdx;
+                            sx = bx; sy = by; sz = bz;
+                            ++m_usedSlotsPerLod[0];
+                        }
+                        pageTable[pageIdx] = encodePage(slot, 0);
+
+                        // Per-brick stored dims: shrink truncates last brick's
+                        // outer halo along multi-brick axes; inner halo stays.
+                        glm::uvec3 storedThis = bs0;
+                        if (!m_uniformSlotLayout) {
+                            if (m_pageGrid.x > 1 && bx == m_pageGrid.x - 1u)
+                                storedThis.x = m_brickInteriorLastL0.x + m_brickHaloL0.x;
+                            if (m_pageGrid.y > 1 && by == m_pageGrid.y - 1u)
+                                storedThis.y = m_brickInteriorLastL0.y + m_brickHaloL0.y;
+                            if (m_pageGrid.z > 1 && bz == m_pageGrid.z - 1u)
+                                storedThis.z = m_brickInteriorLastL0.z + m_brickHaloL0.z;
+                        }
+
+                        const uint32_t aOriginX = sx * bs0.x;
+                        const uint32_t aOriginY = sy * bs0.y;
+                        const uint32_t aOriginZ = sz * bs0.z;
+                        const int srcX0 = static_cast<int>(bx * kBrickSize)
+                                        - static_cast<int>(m_brickHaloL0.x);
+                        const int srcY0 = static_cast<int>(by * kBrickSize)
+                                        - static_cast<int>(m_brickHaloL0.y);
+                        const int srcZ0 = static_cast<int>(bz * kBrickSize)
+                                        - static_cast<int>(m_brickHaloL0.z);
+                        for (uint32_t lz = 0; lz < storedThis.z; ++lz) {
+                            for (uint32_t ly = 0; ly < storedThis.y; ++ly) {
+                                uint16_t* dstRow = reinterpret_cast<uint16_t*>(
+                                    stagingBytes
+                                    + (static_cast<uint64_t>(aOriginZ + lz) * voxelsY_lv
+                                       + (aOriginY + ly)) * paddedRowLv
+                                    + aOriginX * 2);
+                                const int srcZ = srcZ0 + static_cast<int>(lz);
+                                const int srcY = srcY0 + static_cast<int>(ly);
+                                for (uint32_t lx = 0; lx < storedThis.x; ++lx) {
+                                    const int srcXcoord = srcX0 + static_cast<int>(lx);
+                                    dstRow[lx] = srcVoxelHalfBits(buildView, srcXcoord, srcY, srcZ, w, h, d);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        staging->unmap();
+
+        // Y1e: pack has finished reading halfData. If we're the last consumer
+        // (Static L0 path), release it NOW -- before allocating the GPU
+        // texture. Peak becomes staging + GPU (no halfData) instead of
+        // halfData + staging + GPU. On a 192 MB volume that shaves 96 MB off
+        // the moment iOS Safari is most likely to kill the process (during
+        // GPU alloc + waitIdle on the transfer).
+        if (lv == 0 && m_mode == Mode::StaticFullyLoaded) {
+            halfData = std::vector<uint16_t>();  // release capacity, not just size
+        }
+
+        // Y1e: create the GPU atlas texture NOW, after halfData is gone. The
+        // three big buffers (halfData, staging, GPU texture) never coexist:
+        // halfData + staging during pack, then staging + GPU during transfer.
         rhi::TextureDesc td{};
         td.size          = rhi::Extent3D{voxelsX_lv, voxelsY_lv, voxelsZ_lv};
         td.dimension     = rhi::TextureDimension::Texture3D;
@@ -426,37 +451,6 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
         if (!m_atlasTexes[lv]) {
             LOG_ERROR("BrickedVolume") << "atlas texture L" << lv << " create failed"; return false;
         }
-
-        // Build the CPU-side init buffer:
-        //   L0: use the prebuilt atlasBuf (already empty-filled, packed if Static)
-        //   L1..L3: allocate fresh, fill with emptyValueHalf row-by-row
-        std::vector<uint8_t> initBufLocal;
-        const uint8_t* initBytes = nullptr;
-        if (lv == 0) {
-            initBytes = atlasBuf.data();
-        } else {
-            initBufLocal.resize(bytesLv);
-            for (uint32_t z = 0; z < voxelsZ_lv; ++z) {
-                for (uint32_t y = 0; y < voxelsY_lv; ++y) {
-                    uint16_t* row = reinterpret_cast<uint16_t*>(
-                        initBufLocal.data()
-                        + (static_cast<uint64_t>(z) * voxelsY_lv + y) * paddedRowLv);
-                    std::fill(row, row + voxelsX_lv, emptyValueHalf);
-                }
-            }
-            initBytes = initBufLocal.data();
-        }
-
-        rhi::BufferDesc bd{};
-        bd.size  = bytesLv;
-        bd.usage = rhi::BufferUsage::CopySrc | rhi::BufferUsage::MapWrite;
-        bd.label = "BrickAtlasStaging";
-        auto staging = device->createBuffer(bd);
-        if (!staging) {
-            LOG_ERROR("BrickedVolume") << "atlas staging L" << lv << " create failed"; return false;
-        }
-        std::memcpy(staging->map(), initBytes, bytesLv);
-        staging->unmap();
 
         auto enc = device->createCommandEncoder();
         enc->transitionTextureLayout(m_atlasTexes[lv].get(),
@@ -696,23 +690,24 @@ bool BrickedVolume::buildFromMmappedSource(rhi::RHIDevice* device, rhi::RHIQueue
         m_atlasTexes[lv] = device->createTexture(td);
         if (!m_atlasTexes[lv]) { LOG_ERROR("BrickedVolume") << "atlas L" << lv << " create failed"; return false; }
 
-        std::vector<uint8_t> initBufLocal;
-        initBufLocal.resize(bytesLv);
-        for (uint32_t z = 0; z < voxelsZ_lv; ++z) {
-            for (uint32_t y = 0; y < voxelsY_lv; ++y) {
-                uint16_t* row = reinterpret_cast<uint16_t*>(
-                    initBufLocal.data() + (static_cast<uint64_t>(z) * voxelsY_lv + y) * paddedRowLv);
-                std::fill(row, row + voxelsX_lv, emptyValueHalf);
-            }
-        }
-
+        // Y1d: fill empty-value directly into the mapped staging buffer,
+        // no CPU-side initBufLocal duplicate. Streaming-only path, so no
+        // per-brick pack -- updateStreaming pages bricks in later.
         rhi::BufferDesc bd{};
         bd.size = bytesLv;
         bd.usage = rhi::BufferUsage::CopySrc | rhi::BufferUsage::MapWrite;
         bd.label = "BrickAtlasStaging";
         auto staging = device->createBuffer(bd);
         if (!staging) { LOG_ERROR("BrickedVolume") << "atlas staging L" << lv << " create failed"; return false; }
-        std::memcpy(staging->map(), initBufLocal.data(), bytesLv);
+        uint8_t* stagingBytes = static_cast<uint8_t*>(staging->map());
+        if (!stagingBytes) { LOG_ERROR("BrickedVolume") << "atlas staging L" << lv << " map failed"; return false; }
+        for (uint32_t z = 0; z < voxelsZ_lv; ++z) {
+            for (uint32_t y = 0; y < voxelsY_lv; ++y) {
+                uint16_t* row = reinterpret_cast<uint16_t*>(
+                    stagingBytes + (static_cast<uint64_t>(z) * voxelsY_lv + y) * paddedRowLv);
+                std::fill(row, row + voxelsX_lv, emptyValueHalf);
+            }
+        }
         staging->unmap();
 
         auto enc = device->createCommandEncoder();

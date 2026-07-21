@@ -107,7 +107,7 @@ bool VolumeRenderer::uploadVolume(const std::vector<uint8_t>& density,
     for (size_t i = 0; i < halfData.size(); ++i)
         halfData[i] = glm::packHalf1x16(density[i] / 255.0f);
     // Procedural density's "empty" is exact +0.0 (half-float 0x0000).
-    return uploadHalf(halfData, w, h, d, /*emptyValueHalf=*/0x0000);
+    return uploadHalf(std::move(halfData), w, h, d, /*emptyValueHalf=*/0x0000);
 }
 
 // Core upload: pre-packed R16Float half data -> bricked atlas + page table.
@@ -115,12 +115,12 @@ bool VolumeRenderer::uploadVolume(const std::vector<uint8_t>& density,
 // shaders now goes through a page-table lookup (see sampleVolume helper).
 // emptyValueHalf is the half-float bit pattern that counts as "air" -- bricks
 // whose 64^3 interior is uniformly that value never reach the atlas.
-bool VolumeRenderer::uploadHalf(const std::vector<uint16_t>& halfData,
+bool VolumeRenderer::uploadHalf(std::vector<uint16_t>&& halfData,
                                 uint32_t w, uint32_t h, uint32_t d,
                                 uint16_t emptyValueHalf,
                                 glm::uvec3 atlasGridOverride) {
     m_volW = w; m_volH = h; m_volD = d;
-    if (!m_brick.build(m_device, m_graphicsQueue, halfData, w, h, d,
+    if (!m_brick.build(m_device, m_graphicsQueue, std::move(halfData), w, h, d,
                        emptyValueHalf, atlasGridOverride)) {
         LOG_ERROR("VolumeRenderer") << "brick atlas build failed";
         return false;
@@ -259,13 +259,45 @@ bool VolumeRenderer::loadFromFloatData(const std::vector<float>& intensity,
     // -1000 HU for CT, background 0 for MR). Encode in half to match the atlas
     // storage so the per-brick all-equal test is bit-exact.
     const uint16_t emptyValueHalf = glm::packHalf1x16(mn);
-    if (!uploadHalf(halfData, w, h, d, emptyValueHalf, atlasGridOverride)) return false;
+    if (!uploadHalf(std::move(halfData), w, h, d, emptyValueHalf, atlasGridOverride)) return false;
     buildOccupancy();                                      // rebuild skip grid for the new volume
     if (m_bindGroupLayout && m_depthView) {
         if (!createBindGroups(m_depthView)) return false;  // rebind the new view
     }
     LOG_INFO("VolumeRenderer") << "loaded float volume " << w << "x" << h << "x" << d
                                << " range [" << mn << "," << mx << "]";
+    return true;
+}
+
+// Y1c-lite -- half-direct load. Symmetrical to loadFromFloatData but skips
+// the float intermediate and its transient half-conversion allocation. Used
+// by loadDicomSeriesHalf callers to keep the whole load path at ~2 B/voxel
+// peak instead of ~6 B/voxel (float in + half out + copy inside BrickedVolume).
+bool VolumeRenderer::loadFromHalfData(std::vector<uint16_t>&& halfData,
+                                      uint32_t w, uint32_t h, uint32_t d,
+                                      float dataMin, float dataMax,
+                                      glm::uvec3 atlasGridOverride) {
+    if (!m_device || !m_graphicsQueue || w == 0 || h == 0 || d == 0) return false;
+    if (halfData.size() < static_cast<size_t>(w) * h * d) {
+        LOG_ERROR("VolumeRenderer") << "half buffer too small for " << w << "x" << h << "x" << d;
+        return false;
+    }
+    m_dataMin = dataMin;
+    m_dataMax = dataMax;
+    m_windowCenter = 0.5f * (dataMin + dataMax);
+    m_windowWidth  = (dataMax > dataMin) ? (dataMax - dataMin) : 1.0f;
+
+    // Empty-brick pattern: the half-encoded dataMin (typically air for CT / MR).
+    // Bit-exact match against the atlas storage so BrickedVolume's per-brick
+    // all-equal test stays consistent between float and half paths.
+    const uint16_t emptyValueHalf = glm::packHalf1x16(dataMin);
+    if (!uploadHalf(std::move(halfData), w, h, d, emptyValueHalf, atlasGridOverride)) return false;
+    buildOccupancy();
+    if (m_bindGroupLayout && m_depthView) {
+        if (!createBindGroups(m_depthView)) return false;
+    }
+    LOG_INFO("VolumeRenderer") << "loaded half volume " << w << "x" << h << "x" << d
+                               << " range [" << dataMin << "," << dataMax << "]";
     return true;
 }
 

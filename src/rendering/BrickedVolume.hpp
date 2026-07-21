@@ -119,8 +119,14 @@ public:
     // per axis. Pass an explicit value to override (e.g. for a known-dense
     // benchmark where the auto-cap is too small). Returns false on RHI
     // failure or atlas-full (logged with a recommended atlasGrid).
+    // Y1e (2026-07-XX): halfData is now taken by rvalue. build() consumes it
+    // and releases it right after the Static pack loop (before the GPU
+    // transfer + waitIdle), shaving another full-volume-sized buffer off the
+    // load-time peak. Streaming still needs a CPU-side copy for future
+    // per-frame brick pack -- Streaming path moves halfData into
+    // m_originalHalfData rather than copying. Callers must std::move() in.
     bool build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
-               const std::vector<uint16_t>& halfData,
+               std::vector<uint16_t>&& halfData,
                uint32_t w, uint32_t h, uint32_t d,
                uint16_t emptyValueHalf,
                glm::uvec3 atlasGrid = glm::uvec3(0));

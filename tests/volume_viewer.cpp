@@ -252,11 +252,21 @@ private:
             }
             assets::Volume3D vol;
             if (!loaded) {
+                // Y1c-lite: DICOM path uses half-direct loader; NIfTI keeps
+                // the float path (memory pressure is not the issue on
+                // native, and NIfTI loader doesn't have a half variant).
                 loaded = m_isNifti
                     ? assets::loadNifti(m_volPath, vol)
-                    : assets::loadDicomSeries(m_volPath, vol);
+                    : assets::loadDicomSeriesHalf(m_volPath, vol);
                 if (loaded) {
-                    m_volume->loadFromFloatData(vol.intensity, vol.w, vol.h, vol.d, atlasOverride);
+                    if (!vol.intensityHalf.empty()) {
+                        // Y1e: move so build() can drop before GPU transfer.
+                        m_volume->loadFromHalfData(std::move(vol.intensityHalf),
+                                                    vol.w, vol.h, vol.d,
+                                                    vol.dataMin, vol.dataMax, atlasOverride);
+                    } else {
+                        m_volume->loadFromFloatData(vol.intensity, vol.w, vol.h, vol.d, atlasOverride);
+                    }
                     vw = vol.w; vh = vol.h; vd = vol.d;
                     sx = vol.spacingX; sy = vol.spacingY; sz = vol.spacingZ;
                 }

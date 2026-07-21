@@ -21,13 +21,23 @@
 
 namespace assets {
 
-// Generic float-intensity volume: the lingua-franca between any app-layer loader
-// (NIfTI, DICOM, ...) and the engine's loadFromFloatData seam.
+// Generic intensity volume: the lingua-franca between any app-layer loader
+// (NIfTI, DICOM, ...) and the engine's loadFromFloatData / loadFromHalfData
+// seams. Exactly one of {intensity, intensityHalf} is populated per instance:
+//   - intensity     -- float, populated by loadNifti + legacy loadDicomSeries
+//                      (kept for backward compat + float-typed inputs).
+//   - intensityHalf -- packHalf1x16 uint16, populated by loadDicomSeriesHalf
+//                      (Y1c-lite, 2026-07-22). Half output skips the float
+//                      intermediate that used to live in VolumeRenderer's
+//                      loadFromFloatData, halving the transient buffer peak
+//                      at load time -- critical for iPhone Safari which
+//                      crashed on 192 MB DICOM series with the float path.
 struct Volume3D {
     uint32_t w = 0, h = 0, d = 0;
     float spacingX = 1.0f, spacingY = 1.0f, spacingZ = 1.0f;   // mm per voxel
     float dataMin = 0.0f, dataMax = 0.0f;                      // intensity range (scl-applied)
-    std::vector<float> intensity;                              // w*h*d, x fastest, scl-applied
+    std::vector<float>    intensity;                           // float path (NIfTI)
+    std::vector<uint16_t> intensityHalf;                       // half path (Y1c-lite DICOM)
 };
 
 // Disk paging Step 5.3 fast path. For NIfTI files whose datatype is int16 or
