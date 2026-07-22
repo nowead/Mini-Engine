@@ -42,7 +42,9 @@ Mini-Engine implements it:
 | [WASM_LIBJPEG_TURBO_PLAN.md](plans/WASM_LIBJPEG_TURBO_PLAN.md) | WASM libjpeg-turbo build (browser JPEG legacy) |
 | [PATH_TRACE_POLISH_PLAN.md](plans/PATH_TRACE_POLISH_PLAN.md) | M4 v2 path-trace polish — IBL + A-trous denoiser + accumulation cap (P1..P3.1 done; P3.2/P3.3 deferred) |
 | [REAL_MRI_VERIFICATION_PLAN.md](plans/REAL_MRI_VERIFICATION_PLAN.md) | real MR bundle + preset tuning + runtime DICOM upload + FPS/memory HUD (R1..R4) — 완료 |
-| [X1_MOBILE_WEBGPU_MATRIX.md](plans/X1_MOBILE_WEBGPU_MATRIX.md) | **Active** (축 X 저사양/모바일) — mobile WebGPU 지원 매트릭스 + 엔진 스택 호환성 진단 + X3 실측 방법론 |
+| [X1_MOBILE_WEBGPU_MATRIX.md](plans/X1_MOBILE_WEBGPU_MATRIX.md) | (축 X 저사양/모바일) — mobile WebGPU 지원 매트릭스 + 엔진 스택 호환성 진단 + X3 실측 방법론 |
+| [Y1F_CHUNKED_STAGING_PLAN.md](plans/Y1F_CHUNKED_STAGING_PLAN.md) | **Active next** (축 Y) — Z-slab staging (~26 MB) 로 iPhone 192 MB 재도전. Y1e peak 668 MB → 예상 ~485 MB |
+| [Y1C_FULL_PROGRESSIVE_PLAN.md](plans/Y1C_FULL_PROGRESSIVE_PLAN.md) | (축 Y, stub) — Volume3D intensity 버퍼 완전 우회 → 실 임상 CT 256+ MB mobile. Y1f 데이터 뒤 확정 |
 
 ---
 
