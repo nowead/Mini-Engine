@@ -43,7 +43,7 @@ Mini-Engine implements it:
 | [PATH_TRACE_POLISH_PLAN.md](plans/PATH_TRACE_POLISH_PLAN.md) | M4 v2 path-trace polish — IBL + A-trous denoiser + accumulation cap (P1..P3.1 done; P3.2/P3.3 deferred) |
 | [REAL_MRI_VERIFICATION_PLAN.md](plans/REAL_MRI_VERIFICATION_PLAN.md) | real MR bundle + preset tuning + runtime DICOM upload + FPS/memory HUD (R1..R4) — 완료 |
 | [X1_MOBILE_WEBGPU_MATRIX.md](plans/X1_MOBILE_WEBGPU_MATRIX.md) | (축 X 저사양/모바일) — mobile WebGPU 지원 매트릭스 + 엔진 스택 호환성 진단 + X3 실측 방법론 |
-| [Y1F_CHUNKED_STAGING_PLAN.md](plans/Y1F_CHUNKED_STAGING_PLAN.md) | **Active next** (축 Y) — Z-slab staging (~26 MB) 로 iPhone 192 MB 재도전. Y1e peak 668 MB → 예상 ~485 MB |
+| [Y1F_CHUNKED_STAGING_PLAN.md](plans/Y1F_CHUNKED_STAGING_PLAN.md) | (축 Y) — Z-slab staging 로 iPhone 192 MB 재도전. **완료 2026-07-22** — [BASELINE_2026-07-22_Y1F_CHUNKED_STAGING.md](baselines/BASELINE_2026-07-22_Y1F_CHUNKED_STAGING.md) |
 | [Y1C_FULL_PROGRESSIVE_PLAN.md](plans/Y1C_FULL_PROGRESSIVE_PLAN.md) | (축 Y, stub) — Volume3D intensity 버퍼 완전 우회 → 실 임상 CT 256+ MB mobile. Y1f 데이터 뒤 확정 |
 
 ---
@@ -65,6 +65,7 @@ Mini-Engine implements it:
 | [BASELINE_2026-07-20_MOBILE_Y3_BISECT.md](baselines/BASELINE_2026-07-20_MOBILE_Y3_BISECT.md) | **Y3 mobile 바이섹션**: iPhone Safari 실용 상한 **96 MB 확정, 128 MB 크래시** (Safari kill+reload / Chrome freeze). Y1b (per-slice streaming) 필요성 정량 입증 · 예상 임팩트 memory peak 780→520 MB (-260 MB). |
 | [BASELINE_2026-07-21_Y1B_MOBILE_128MB.md](baselines/BASELINE_2026-07-21_Y1B_MOBILE_128MB.md) | **Y1b 성과 실증**: `loadDicomSeries` two-pass refactor → iPhone Safari 128 MB **로드 성공, 63 fps 안정** (07-20 baseline 이 예측한 상한 확장 정확 실현). 192 MB 는 여전히 freeze (intensity + atlas 동시 alive peak 남음). 원 목표 "저사양 모바일 대용량 실 CT" 첫 실증. |
 | [BASELINE_2026-07-21_Y1CDE_PHYSICAL_WALL.md](baselines/BASELINE_2026-07-21_Y1CDE_PHYSICAL_WALL.md) | **Y1c-lite + Y1d + Y1e 조합 실측**: mobile peak 956 → 668 MB (-30%) 축소. 192 MB 는 여전히 crash → iPhone 물리 프로세스 예산 ~600-650 MB 확정. 128 MB 는 안정 유지. 다음 후보 Y1f (chunked staging) · Y1c-full (intensity 우회). |
+| [BASELINE_2026-07-22_Y1F_CHUNKED_STAGING.md](baselines/BASELINE_2026-07-22_Y1F_CHUNKED_STAGING.md) | **Y1f Z-slab staging**: `BrickedVolume::build()` Static path 를 slab (~44 MB WASM) 단위로 재구성. peak 668 → 599 MB (-69 MB). **iPhone Safari 192 MB CT (512×512×384) 로드 최초 실증** — 흉부/복부 임상 CT 범위 진입. 128 MB regression 무. |
 
 ---
 
