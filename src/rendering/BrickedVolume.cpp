@@ -301,91 +301,152 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
 
     // ------------------------------------------------------------------
     // 2. Allocate atlas texture(s) + upload L0 content.
-    // Static mode allocates only L0 and packs the brick data into it.
-    // Streaming mode allocates all four LODs; L0 starts empty (filled by
-    // streaming page-ins), L1..L3 are empty-initialised so the shader can
-    // sample them safely once beta-5 binds them (until then they go unused).
+    //
+    // Y1f (2026-07-22): the Static-mode L0 path splits the atlas upload
+    // into Z-slab-sized staging + copies. Before Y1f, a 192 MB volume
+    // allocated one ~209 MB WebGPU staging buffer plus the atlas texture,
+    // pushing the wasm process peak to ~668 MB -- past the iPhone Safari
+    // ~600-650 MB budget confirmed by BASELINE_2026-07-21_Y1CDE. Now the
+    // pack streams one atlas Z-row (~42 MB on the same volume) at a time
+    // into a reused staging buffer, keeping the run-time slot state
+    // (halfData + staging + GPU + baseline) below the iOS ceiling.
+    //
+    // Streaming mode still uses the single-staging empty-fill path per
+    // LOD. Streaming's L0 staging is worth chunking too (Y1f-4) but the
+    // usual streaming workload has visible-set << atlas so the initial
+    // fill peak matters less than the Static case.
     // ------------------------------------------------------------------
-    const uint32_t lodLevelsToAlloc = (m_mode == Mode::Streaming) ? kLodLevels : 1u;
     uint64_t totalAtlasBytes = 0;
-    for (uint32_t lv = 0; lv < lodLevelsToAlloc; ++lv) {
-        // Option C + last-brick shrink: L0 uses m_atlasVoxelsL0 (per-axis
-        // stored + possibly last-brick truncated). L1..L3 stay uniform
-        // scalar (64>>lv)+2 -- multi-LOD per-axis flexibility is a follow-up.
-        const uint32_t brickStoredLod = kBrickStoredAtLod(lv);
-        const uint32_t voxelsX_lv = (lv == 0) ? m_atlasVoxelsL0.x : (atlasGrid.x * brickStoredLod);
-        const uint32_t voxelsY_lv = (lv == 0) ? m_atlasVoxelsL0.y : (atlasGrid.y * brickStoredLod);
-        const uint32_t voxelsZ_lv = (lv == 0) ? m_atlasVoxelsL0.z : (atlasGrid.z * brickStoredLod);
+
+    if (m_mode == Mode::StaticFullyLoaded) {
+        // -------- Y1f Static L0: two-pass slot assign + slab-based upload
+        const uint32_t brickStoredLod = kBrickStoredAtLod(0);
+        const uint32_t voxelsX_lv = m_atlasVoxelsL0.x;
+        const uint32_t voxelsY_lv = m_atlasVoxelsL0.y;
+        const uint32_t voxelsZ_lv = m_atlasVoxelsL0.z;
         const uint32_t tightRowLv = voxelsX_lv * 2;
 #ifdef __EMSCRIPTEN__
         const uint32_t paddedRowLv = (tightRowLv + 255u) & ~255u;
 #else
         const uint32_t paddedRowLv = tightRowLv;
 #endif
-        const uint64_t bytesLv =
-            static_cast<uint64_t>(paddedRowLv) * voxelsY_lv * voxelsZ_lv;
-        totalAtlasBytes += bytesLv;
+        totalAtlasBytes += static_cast<uint64_t>(paddedRowLv) * voxelsY_lv * voxelsZ_lv;
 
-        // Y1e: GPU texture creation deferred to AFTER halfData release (see
-        // below). Peak wasm heap at pack time now includes only staging +
-        // halfData (no GPU texture) -- the peak becomes staging + GPU
-        // AFTER halfData is dropped, keeping the three big buffers from
-        // ever being alive at the same instant.
-
-        // Y1d: pack directly into the mapped staging buffer -- no CPU-side
-        // atlas duplicate. Every LOD path fills empty first; L0 Static mode
-        // then overwrites the non-empty brick regions with source pixels.
-        rhi::BufferDesc bd{};
-        bd.size  = bytesLv;
-        bd.usage = rhi::BufferUsage::CopySrc | rhi::BufferUsage::MapWrite;
-        bd.label = "BrickAtlasStaging";
-        auto staging = device->createBuffer(bd);
-        if (!staging) {
-            LOG_ERROR("BrickedVolume") << "atlas staging L" << lv << " create failed"; return false;
-        }
-        uint8_t* stagingBytes = static_cast<uint8_t*>(staging->map());
-        if (!stagingBytes) {
-            LOG_ERROR("BrickedVolume") << "atlas staging L" << lv << " map failed"; return false;
-        }
-        for (uint32_t z = 0; z < voxelsZ_lv; ++z) {
-            for (uint32_t y = 0; y < voxelsY_lv; ++y) {
-                uint16_t* row = reinterpret_cast<uint16_t*>(
-                    stagingBytes
-                    + (static_cast<uint64_t>(z) * voxelsY_lv + y) * paddedRowLv);
-                std::fill(row, row + voxelsX_lv, emptyValueHalf);
+        // Pass 1: assign slots + write pageTable for every non-empty brick.
+        // Extracted from the pack loop so the slab loop below can look up
+        // slot by pageIdx without a monotonic counter (which would break if
+        // the same brick is visited across multiple slab iterations).
+        for (uint32_t bz = 0; bz < m_pageGrid.z; ++bz) {
+            for (uint32_t by = 0; by < m_pageGrid.y; ++by) {
+                for (uint32_t bx = 0; bx < m_pageGrid.x; ++bx) {
+                    const uint32_t pageIdx = (bz * m_pageGrid.y + by) * m_pageGrid.x + bx;
+                    const bool hasData = (m_pageOccupancy[pageIdx >> 3] >> (pageIdx & 7)) & 1u;
+                    if (!hasData) continue;
+                    uint32_t slot;
+                    if (m_uniformSlotLayout) {
+                        slot = m_usedSlotsPerLod[0]++;
+                    } else {
+                        slot = pageIdx;
+                        ++m_usedSlotsPerLod[0];
+                    }
+                    pageTable[pageIdx] = encodePage(slot, 0);
+                }
             }
         }
 
-        // Static-only per-brick pack (L0 only). Streaming skips this: the
-        // atlas starts empty and updateStreaming pages bricks in later.
-        if (lv == 0 && m_mode == Mode::StaticFullyLoaded) {
+        // GPU atlas texture upfront -- the slab loop below issues one
+        // copyBufferToTexture per slab, so the destination has to exist
+        // before iteration begins. Peak at this instant: halfData 96 +
+        // slab_staging 0 + GPU 209 + runtime 250 (on the 192 MB volume);
+        // slab_staging gets its ~42 MB right after, taking peak to ~597,
+        // and halfData drops once the loop completes.
+        rhi::TextureDesc td{};
+        td.size          = rhi::Extent3D{voxelsX_lv, voxelsY_lv, voxelsZ_lv};
+        td.dimension     = rhi::TextureDimension::Texture3D;
+        td.format        = rhi::TextureFormat::R16Float;
+        td.mipLevelCount = 1;
+        td.sampleCount   = 1;
+        td.usage         = rhi::TextureUsage::CopyDst | rhi::TextureUsage::Sampled;
+        td.label         = "VolumeBrickAtlas";
+        m_atlasTexes[0] = device->createTexture(td);
+        if (!m_atlasTexes[0]) {
+            LOG_ERROR("BrickedVolume") << "atlas texture L0 create failed"; return false;
+        }
+
+        // Initial layout transition (Undefined -> TransferDst) once,
+        // before the slab copies. The final TransferDst -> ShaderReadOnly
+        // happens after the slab loop.
+        {
+            auto enc = device->createCommandEncoder();
+            enc->transitionTextureLayout(m_atlasTexes[0].get(),
+                                         rhi::TextureLayout::Undefined,
+                                         rhi::TextureLayout::TransferDst);
+            auto cmd = enc->finish();
+            queue->submit(cmd.get());
+            queue->waitIdle();
+        }
+
+        // Slab granularity: 1 brick-row worth of atlas Z (brickStored voxels).
+        // On a 192 MB volume that's ~42 MB WebGPU-padded per slab vs the
+        // ~209 MB single staging Y1e allocated. Fewer, larger slabs would
+        // trade iOS-friendlier peak for more copy calls; Y1f-1 picked 1 row.
+        constexpr uint32_t kSlabAtlasRows = 1u;
+        const uint32_t slabDepthVox = kSlabAtlasRows * brickStoredLod;
+        const uint32_t numSlabs     = (voxelsZ_lv + slabDepthVox - 1) / slabDepthVox;
+        const uint64_t slabBytes    = static_cast<uint64_t>(paddedRowLv) * voxelsY_lv * slabDepthVox;
+
+        rhi::BufferDesc sbd{};
+        sbd.size  = slabBytes;
+        sbd.usage = rhi::BufferUsage::CopySrc | rhi::BufferUsage::MapWrite;
+        sbd.label = "BrickAtlasSlabStaging";
+        auto slabStaging = device->createBuffer(sbd);
+        if (!slabStaging) {
+            LOG_ERROR("BrickedVolume") << "slab staging create failed (" << (slabBytes >> 20) << " MB)"; return false;
+        }
+        LOG_INFO("BrickedVolume") << "Y1f slab upload: atlas " << voxelsX_lv << "x" << voxelsY_lv
+            << "x" << voxelsZ_lv << ", slab " << voxelsX_lv << "x" << voxelsY_lv << "x"
+            << slabDepthVox << " (" << (slabBytes >> 20) << " MB, " << numSlabs << " slabs)";
+
+        for (uint32_t slabIdx = 0; slabIdx < numSlabs; ++slabIdx) {
+            const uint32_t slabStartZ    = slabIdx * slabDepthVox;
+            const uint32_t slabActualZ   = std::min(slabDepthVox, voxelsZ_lv - slabStartZ);
+
+            uint8_t* stagingBytes = static_cast<uint8_t*>(slabStaging->map());
+            if (!stagingBytes) {
+                LOG_ERROR("BrickedVolume") << "slab staging map failed at slab " << slabIdx; return false;
+            }
+
+            // Empty-fill just this slab's Z range.
+            for (uint32_t z = 0; z < slabActualZ; ++z) {
+                for (uint32_t y = 0; y < voxelsY_lv; ++y) {
+                    uint16_t* row = reinterpret_cast<uint16_t*>(
+                        stagingBytes
+                        + (static_cast<uint64_t>(z) * voxelsY_lv + y) * paddedRowLv);
+                    std::fill(row, row + voxelsX_lv, emptyValueHalf);
+                }
+            }
+
+            // Pack every non-empty brick whose atlas-Z origin falls in this
+            // slab. slot -> (sx, sy, sz) uses the raster-decode formula for
+            // both uniform and last-brick-shrink layouts (in shrink layout
+            // atlasGrid == pageGrid AND slot == pageIdx, so the decode
+            // yields (bx, by, bz) as expected).
             for (uint32_t bz = 0; bz < m_pageGrid.z; ++bz) {
                 for (uint32_t by = 0; by < m_pageGrid.y; ++by) {
                     for (uint32_t bx = 0; bx < m_pageGrid.x; ++bx) {
                         const uint32_t pageIdx = (bz * m_pageGrid.y + by) * m_pageGrid.x + bx;
-                        const bool hasData = (m_pageOccupancy[pageIdx >> 3] >> (pageIdx & 7)) & 1u;
-                        if (!hasData) continue;
+                        const uint32_t page    = pageTable[pageIdx];
+                        if (page == kEmptySlot) continue;
+                        const uint32_t slot = page & kPageSlotMask;
+                        const uint32_t sx = slot % atlasGrid.x;
+                        const uint32_t sy = (slot / atlasGrid.x) % atlasGrid.y;
+                        const uint32_t sz = slot / (atlasGrid.x * atlasGrid.y);
+                        const uint32_t aOriginZ = sz * bs0.z;
+                        // 1-row slab + brick stored size <= bs0.z means each
+                        // brick is entirely inside one slab -- no straddle
+                        // to worry about for kSlabAtlasRows == 1.
+                        if (aOriginZ < slabStartZ || aOriginZ >= slabStartZ + slabActualZ) continue;
 
-                        // Slot assignment (Option C + last-brick shrink):
-                        // uniform layout runs a raster-order counter; shrink
-                        // layout uses slot == pageIdx so the shader can
-                        // identify the last brick along each axis from
-                        // brickIdx alone.
-                        uint32_t slot, sx, sy, sz;
-                        if (m_uniformSlotLayout) {
-                            slot = m_usedSlotsPerLod[0]++;
-                            sx = slot % atlasGrid.x;
-                            sy = (slot / atlasGrid.x) % atlasGrid.y;
-                            sz =  slot / (atlasGrid.x * atlasGrid.y);
-                        } else {
-                            slot = pageIdx;
-                            sx = bx; sy = by; sz = bz;
-                            ++m_usedSlotsPerLod[0];
-                        }
-                        pageTable[pageIdx] = encodePage(slot, 0);
-
-                        // Per-brick stored dims: shrink truncates last brick's
-                        // outer halo along multi-brick axes; inner halo stays.
                         glm::uvec3 storedThis = bs0;
                         if (!m_uniformSlotLayout) {
                             if (m_pageGrid.x > 1 && bx == m_pageGrid.x - 1u)
@@ -396,9 +457,9 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
                                 storedThis.z = m_brickInteriorLastL0.z + m_brickHaloL0.z;
                         }
 
-                        const uint32_t aOriginX = sx * bs0.x;
-                        const uint32_t aOriginY = sy * bs0.y;
-                        const uint32_t aOriginZ = sz * bs0.z;
+                        const uint32_t aOriginX  = sx * bs0.x;
+                        const uint32_t aOriginY  = sy * bs0.y;
+                        const uint32_t localOriginZ = aOriginZ - slabStartZ;
                         const int srcX0 = static_cast<int>(bx * kBrickSize)
                                         - static_cast<int>(m_brickHaloL0.x);
                         const int srcY0 = static_cast<int>(by * kBrickSize)
@@ -409,7 +470,7 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
                             for (uint32_t ly = 0; ly < storedThis.y; ++ly) {
                                 uint16_t* dstRow = reinterpret_cast<uint16_t*>(
                                     stagingBytes
-                                    + (static_cast<uint64_t>(aOriginZ + lz) * voxelsY_lv
+                                    + (static_cast<uint64_t>(localOriginZ + lz) * voxelsY_lv
                                        + (aOriginY + ly)) * paddedRowLv
                                     + aOriginX * 2);
                                 const int srcZ = srcZ0 + static_cast<int>(lz);
@@ -423,75 +484,143 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
                     }
                 }
             }
-        }
-        staging->unmap();
+            slabStaging->unmap();
 
-        // Y1e: pack has finished reading halfData. If we're the last consumer
-        // (Static L0 path), release it NOW -- before allocating the GPU
-        // texture. Peak becomes staging + GPU (no halfData) instead of
-        // halfData + staging + GPU. On a 192 MB volume that shaves 96 MB off
-        // the moment iOS Safari is most likely to kill the process (during
-        // GPU alloc + waitIdle on the transfer).
-        if (lv == 0 && m_mode == Mode::StaticFullyLoaded) {
-            halfData = std::vector<uint16_t>();  // release capacity, not just size
-        }
-
-        // Y1e: create the GPU atlas texture NOW, after halfData is gone. The
-        // three big buffers (halfData, staging, GPU texture) never coexist:
-        // halfData + staging during pack, then staging + GPU during transfer.
-        rhi::TextureDesc td{};
-        td.size          = rhi::Extent3D{voxelsX_lv, voxelsY_lv, voxelsZ_lv};
-        td.dimension     = rhi::TextureDimension::Texture3D;
-        td.format        = rhi::TextureFormat::R16Float;
-        td.mipLevelCount = 1;
-        td.sampleCount   = 1;
-        td.usage         = rhi::TextureUsage::CopyDst | rhi::TextureUsage::Sampled;
-        td.label         = "VolumeBrickAtlas";
-        m_atlasTexes[lv] = device->createTexture(td);
-        if (!m_atlasTexes[lv]) {
-            LOG_ERROR("BrickedVolume") << "atlas texture L" << lv << " create failed"; return false;
-        }
-
-        auto enc = device->createCommandEncoder();
-        enc->transitionTextureLayout(m_atlasTexes[lv].get(),
-                                     rhi::TextureLayout::Undefined,
-                                     rhi::TextureLayout::TransferDst);
-
-        rhi::BufferTextureCopyInfo bufferCopy{};
-        bufferCopy.buffer = staging.get();
-        bufferCopy.offset = 0;
+            // Copy this slab into the atlas at Z offset slabStartZ.
+            auto enc = device->createCommandEncoder();
+            rhi::BufferTextureCopyInfo bufferCopy{};
+            bufferCopy.buffer = slabStaging.get();
+            bufferCopy.offset = 0;
 #ifdef __EMSCRIPTEN__
-        bufferCopy.bytesPerRow  = paddedRowLv;
-        bufferCopy.rowsPerImage = voxelsY_lv;
+            bufferCopy.bytesPerRow  = paddedRowLv;
+            bufferCopy.rowsPerImage = voxelsY_lv;
 #else
-        bufferCopy.bytesPerRow  = 0;
-        bufferCopy.rowsPerImage = 0;
+            bufferCopy.bytesPerRow  = 0;
+            bufferCopy.rowsPerImage = 0;
 #endif
-        rhi::TextureCopyInfo texCopy{};
-        texCopy.texture  = m_atlasTexes[lv].get();
-        texCopy.mipLevel = 0;
-        texCopy.origin   = {0, 0, 0};
-        texCopy.aspect   = 0;
-        enc->copyBufferToTexture(bufferCopy, texCopy,
-                                 rhi::Extent3D{voxelsX_lv, voxelsY_lv, voxelsZ_lv});
-        enc->transitionTextureLayout(m_atlasTexes[lv].get(),
-                                     rhi::TextureLayout::TransferDst,
-                                     rhi::TextureLayout::ShaderReadOnly);
-        auto cmd = enc->finish();
-        queue->submit(cmd.get());
-        queue->waitIdle();
+            rhi::TextureCopyInfo texCopy{};
+            texCopy.texture  = m_atlasTexes[0].get();
+            texCopy.mipLevel = 0;
+            texCopy.origin   = {0, 0, static_cast<int32_t>(slabStartZ)};
+            texCopy.aspect   = 0;
+            enc->copyBufferToTexture(bufferCopy, texCopy,
+                                     rhi::Extent3D{voxelsX_lv, voxelsY_lv, slabActualZ});
+            auto cmd = enc->finish();
+            queue->submit(cmd.get());
+            queue->waitIdle();
+        }
+
+        // All slabs uploaded. Final transition to ShaderReadOnly, release
+        // halfData (last consumer done), create texture view.
+        {
+            auto enc = device->createCommandEncoder();
+            enc->transitionTextureLayout(m_atlasTexes[0].get(),
+                                         rhi::TextureLayout::TransferDst,
+                                         rhi::TextureLayout::ShaderReadOnly);
+            auto cmd = enc->finish();
+            queue->submit(cmd.get());
+            queue->waitIdle();
+        }
+        halfData = std::vector<uint16_t>();  // release capacity, not just size
 
         rhi::TextureViewDesc vd{};
         vd.format          = rhi::TextureFormat::R16Float;
         vd.dimension       = rhi::TextureViewDimension::View3D;
         vd.baseMipLevel    = 0;  vd.mipLevelCount   = 1;
         vd.baseArrayLayer  = 0;  vd.arrayLayerCount = 1;
-        m_atlasViews[lv] = m_atlasTexes[lv]->createView(vd);
-        if (!m_atlasViews[lv]) {
-            LOG_ERROR("BrickedVolume") << "atlas view L" << lv << " create failed"; return false;
+        m_atlasViews[0] = m_atlasTexes[0]->createView(vd);
+        if (!m_atlasViews[0]) {
+            LOG_ERROR("BrickedVolume") << "atlas view L0 create failed"; return false;
         }
-    }
-    if (m_mode == Mode::Streaming) {
+    } else {
+        // -------- Streaming: legacy single-staging empty-fill per LOD.
+        for (uint32_t lv = 0; lv < kLodLevels; ++lv) {
+            const uint32_t brickStoredLod = kBrickStoredAtLod(lv);
+            const uint32_t voxelsX_lv = (lv == 0) ? m_atlasVoxelsL0.x : (atlasGrid.x * brickStoredLod);
+            const uint32_t voxelsY_lv = (lv == 0) ? m_atlasVoxelsL0.y : (atlasGrid.y * brickStoredLod);
+            const uint32_t voxelsZ_lv = (lv == 0) ? m_atlasVoxelsL0.z : (atlasGrid.z * brickStoredLod);
+            const uint32_t tightRowLv = voxelsX_lv * 2;
+#ifdef __EMSCRIPTEN__
+            const uint32_t paddedRowLv = (tightRowLv + 255u) & ~255u;
+#else
+            const uint32_t paddedRowLv = tightRowLv;
+#endif
+            const uint64_t bytesLv = static_cast<uint64_t>(paddedRowLv) * voxelsY_lv * voxelsZ_lv;
+            totalAtlasBytes += bytesLv;
+
+            rhi::BufferDesc bd{};
+            bd.size  = bytesLv;
+            bd.usage = rhi::BufferUsage::CopySrc | rhi::BufferUsage::MapWrite;
+            bd.label = "BrickAtlasStaging";
+            auto staging = device->createBuffer(bd);
+            if (!staging) {
+                LOG_ERROR("BrickedVolume") << "atlas staging L" << lv << " create failed"; return false;
+            }
+            uint8_t* stagingBytes = static_cast<uint8_t*>(staging->map());
+            if (!stagingBytes) {
+                LOG_ERROR("BrickedVolume") << "atlas staging L" << lv << " map failed"; return false;
+            }
+            for (uint32_t z = 0; z < voxelsZ_lv; ++z) {
+                for (uint32_t y = 0; y < voxelsY_lv; ++y) {
+                    uint16_t* row = reinterpret_cast<uint16_t*>(
+                        stagingBytes
+                        + (static_cast<uint64_t>(z) * voxelsY_lv + y) * paddedRowLv);
+                    std::fill(row, row + voxelsX_lv, emptyValueHalf);
+                }
+            }
+            staging->unmap();
+
+            rhi::TextureDesc td{};
+            td.size          = rhi::Extent3D{voxelsX_lv, voxelsY_lv, voxelsZ_lv};
+            td.dimension     = rhi::TextureDimension::Texture3D;
+            td.format        = rhi::TextureFormat::R16Float;
+            td.mipLevelCount = 1;
+            td.sampleCount   = 1;
+            td.usage         = rhi::TextureUsage::CopyDst | rhi::TextureUsage::Sampled;
+            td.label         = "VolumeBrickAtlas";
+            m_atlasTexes[lv] = device->createTexture(td);
+            if (!m_atlasTexes[lv]) {
+                LOG_ERROR("BrickedVolume") << "atlas texture L" << lv << " create failed"; return false;
+            }
+
+            auto enc = device->createCommandEncoder();
+            enc->transitionTextureLayout(m_atlasTexes[lv].get(),
+                                         rhi::TextureLayout::Undefined,
+                                         rhi::TextureLayout::TransferDst);
+            rhi::BufferTextureCopyInfo bufferCopy{};
+            bufferCopy.buffer = staging.get();
+            bufferCopy.offset = 0;
+#ifdef __EMSCRIPTEN__
+            bufferCopy.bytesPerRow  = paddedRowLv;
+            bufferCopy.rowsPerImage = voxelsY_lv;
+#else
+            bufferCopy.bytesPerRow  = 0;
+            bufferCopy.rowsPerImage = 0;
+#endif
+            rhi::TextureCopyInfo texCopy{};
+            texCopy.texture  = m_atlasTexes[lv].get();
+            texCopy.mipLevel = 0;
+            texCopy.origin   = {0, 0, 0};
+            texCopy.aspect   = 0;
+            enc->copyBufferToTexture(bufferCopy, texCopy,
+                                     rhi::Extent3D{voxelsX_lv, voxelsY_lv, voxelsZ_lv});
+            enc->transitionTextureLayout(m_atlasTexes[lv].get(),
+                                         rhi::TextureLayout::TransferDst,
+                                         rhi::TextureLayout::ShaderReadOnly);
+            auto cmd = enc->finish();
+            queue->submit(cmd.get());
+            queue->waitIdle();
+
+            rhi::TextureViewDesc vd{};
+            vd.format          = rhi::TextureFormat::R16Float;
+            vd.dimension       = rhi::TextureViewDimension::View3D;
+            vd.baseMipLevel    = 0;  vd.mipLevelCount   = 1;
+            vd.baseArrayLayer  = 0;  vd.arrayLayerCount = 1;
+            m_atlasViews[lv] = m_atlasTexes[lv]->createView(vd);
+            if (!m_atlasViews[lv]) {
+                LOG_ERROR("BrickedVolume") << "atlas view L" << lv << " create failed"; return false;
+            }
+        }
         LOG_INFO("BrickedVolume") << "atlas total: "
             << (totalAtlasBytes >> 20) << " MB across " << kLodLevels
             << " LOD textures (L0 + L1 + L2 + L3)";
