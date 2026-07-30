@@ -555,7 +555,7 @@ Option C · last-brick shrink · path-trace · empty-space skipping) 은 원 목
 | **Y1d** ✅ | `BrickedVolume::build` CPU-side `atlasBuf` 제거, mapped staging 에 직접 pack. -209 MB peak. | 완료 |
 | **Y1e** ✅ | `halfData` rvalue chain (viewer → renderer → build) + GPU 텍스처 alloc 을 halfData 해제 뒤로 재순서. -96 MB peak. | 완료 |
 | **Y1f** ✅ | Chunked staging (Z-slab ~44 MB WASM 단위 upload). **iPhone Safari 192 MB CT 로드 최초 실증** ([BASELINE_2026-07-22_Y1F_CHUNKED_STAGING.md](baselines/BASELINE_2026-07-22_Y1F_CHUNKED_STAGING.md)) — peak 668 → 599 MB (-69 MB), iOS 예산 안 진입. 128 MB regression 무. 계획서: [Y1F_CHUNKED_STAGING_PLAN.md](plans/Y1F_CHUNKED_STAGING_PLAN.md) | 완료 |
-| **Y1c-full** | Intensity buffer 완전 우회: decode 결과가 BrickedVolume 브릭에 직접 write. Volume3D 인터페이스 재설계. 실 임상 CT 250+ MB mobile 가능화. 계획서: [Y1C_FULL_PROGRESSIVE_PLAN.md](plans/Y1C_FULL_PROGRESSIVE_PLAN.md) (스텁, Y1f 뒤 확정) | 3~4 세션 |
+| **Y1c-full** ✅ | Intensity buffer 완전 우회: DICOM decode → `pushSlice` → BrickedVolume ring buffer → row-완성 시 즉시 GPU upload. **iPhone Safari 256 MB CT (512×512×512) 로드 성공** ([BASELINE_2026-07-22_Y1C_FULL.md](baselines/BASELINE_2026-07-22_Y1C_FULL.md)) — peak 701 → 606 MB (-95 MB). Static-only (Streaming 은 Y2 대기). 계획서: [Y1C_FULL_PROGRESSIVE_PLAN.md](plans/Y1C_FULL_PROGRESSIVE_PLAN.md) | 완료 |
 | **Y2** | IndexedDB / OPFS — decoded brick cache (재방문 시 파싱 스킵) | 2 세션 |
 | **Y3** desktop ✅ | 128 MB 합성 CT 로드 검증 (512×512×256) — [BASELINE_2026-07-15_SYNTHETIC_128MB.md](baselines/BASELINE_2026-07-15_SYNTHETIC_128MB.md). Static 모드, +9% overhead, 11.3s 총 | 완료 |
 | **Y3** mobile ✅ | iPhone Safari 바이섹션 (4/16/36/64/96/128 MB) — [BASELINE_2026-07-20_MOBILE_Y3_BISECT.md](baselines/BASELINE_2026-07-20_MOBILE_Y3_BISECT.md). 실용 상한 96 MB · 128 MB 크래시 (Safari kill+reload, Chrome freeze) · Y1b 정당화 정량 | 완료 |
@@ -586,11 +586,11 @@ Option C · last-brick shrink · path-trace · empty-space skipping) 은 원 목
 
 ### 현재 활성 방향 (2026-07-10~)
 
-**Y1f 완료 (2026-07-22). iPhone Safari 192 MB CT 로드 최초 실증 — 흉부/복부
-임상 CT 범위 진입.**
+**Y1c-full 완료 (2026-07-22). iPhone Safari 256 MB CT (표준 임상 CT) 로드 성공
+— ADR-2026-07-22 mobile-phone 티어 목표 달성.**
 
 - ✅ 전 축 완료: X1 · X2 · X3 draft · X4 v1 · X4 v1.5 · Z1 · Y1a · Y-C · Y3
-  desktop · Y3 mobile · Y1b · Y1c-lite · Y1d · Y1e · **Y1f**
+  desktop · Y3 mobile · Y1b · Y1c-lite · Y1d · Y1e · Y1f · **Y1c-full**
   - 모바일 첫 클릭 UX (iPhone Safari 40 → 15.7 ms, 7×)
   - Safari.app 하위 tier (SPP=2) 로 pt_spp4 3× 격차 완화
   - Y1a JS heap peak 300 MB → 1 MB
@@ -598,23 +598,26 @@ Option C · last-brick shrink · path-trace · empty-space skipping) 은 원 목
   - Y3 mobile bisect: iPhone Safari 상한 96 MB → 128 MB (Y1b)
   - Y1c-lite + Y1d + Y1e (2026-07-21): mobile peak 956 → 668 MB (-30%);
     192 MB 는 여전히 crash → 물리 벽 확정
-  - **Y1f (2026-07-22): Z-slab staging (~44 MB WASM) 로 peak 668 → 599 MB.
-    iPhone Safari 에서 192 MB CT (512×512×384) 로드 성공.** 128 MB regression
+  - Y1f (2026-07-22): Z-slab staging (~44 MB WASM) 로 peak 668 → 599 MB.
+    iPhone Safari 에서 192 MB CT (512×512×384) 로드 성공. 128 MB regression
     무. ([BASELINE_2026-07-22_Y1F_CHUNKED_STAGING.md](baselines/BASELINE_2026-07-22_Y1F_CHUNKED_STAGING.md))
+  - **Y1c-full (2026-07-22): DICOM slice progressive → BrickedVolume ring
+    buffer → row-완성 시 즉시 upload. Peak 701 → 606 MB (-95 MB) on 256 MB
+    volume. iPhone Safari 에서 256 MB CT (512³) 로드 성공.** 128/192 MB
+    무회귀. ([BASELINE_2026-07-22_Y1C_FULL.md](baselines/BASELINE_2026-07-22_Y1C_FULL.md))
 - 🟡 미해결:
   - X3 append (Android/Intel iGPU — 기기 필요)
   - pt_spp4 Safari vs WKWebView 3× 격차 원인 조사
-  - iPhone 256 MB 상한 확인 — Y1f 만으로 어디까지 밀리는지 미실측
-- ⏭ **다음 코드 세션 후보** (ADR-2026-07-22 이후 재정렬):
-  1. **Y1c-full (intensity buffer 우회)** — Volume3D → BrickedVolume 직접
-     write. iPhone 티어를 256 MB 까지 밀어 표준 임상 CT 커버 종료. 3~4 세션.
-     계획서 스텁: [Y1C_FULL_PROGRESSIVE_PLAN.md](plans/Y1C_FULL_PROGRESSIVE_PLAN.md)
-     (Y1f 이후 세부 확정 예정).
-  2. **iPad + 저사양 데스크톱 baseline** — 옵션 1 티어링 (ADR) 실증.
+  - iPad Pro / Chromebook / Intel iGPU 티어 empirical 실측
+- ⏭ **다음 코드 세션 후보**:
+  1. **iPad + 저사양 데스크톱 baseline** — 옵션 1 티어링 (ADR) 실증.
      512 MB / 1 GB 어느 티어까지 자연 커버되는지 empirical 확인. 1~2 세션.
-  3. **X4 v2 (모바일 티어 policy)** — atlas MB cap · LOD cap · K budget 을
-     티어별로. Y1c-full 이후 UX 폴리시. 1~2 세션.
-  4. **X3 append (Android/Intel iGPU)** — 여전히 기기 대기.
+  2. **X4 v2 (모바일 티어 policy)** — atlas MB cap · LOD cap · K budget 을
+     티어별로. UX 폴리시 ("볼륨 너무 큼, 태블릿/데스크톱에서 여시오"
+     메시징). 1~2 세션.
+  3. **X3 append (Android/Intel iGPU)** — 여전히 기기 대기.
+  4. **엔진 성숙도 축 재진입** — 원 프로젝트 목표 도달 후 다른 축 (엔진 코어,
+     신 기술 실험 등) 으로 회귀 검토.
 
   **명시적으로 유예 · 폐기 (ADR-2026-07-22)**:
   - **Y2 (IndexedDB / OPFS brick cache)** — iPhone 전신 CT 요구 시 재개.
@@ -629,7 +632,7 @@ Option C · last-brick shrink · path-trace · empty-space skipping) 은 원 목
   - **Multi-LOD 를 modality 로 채택** — v1-γ 선행 필요 + fidelity 열등.
 - **원 목표 도달도 (티어링 관점, ADR-2026-07-22)**:
   - **iPhone 티어**: 머리 CT · 얇은 슬라이스 · 표준 흉부 CT (~192 MB) ✅ ·
-    표준 임상 CT (~256 MB) 는 Y1c-full 완료 시 도달 예상.
+    표준 임상 CT (~256 MB) ✅ **(Y1c-full 실증 2026-07-22)**.
   - **iPad Pro / 저사양 데스크톱 티어**: 완전 흉부/복부 CT (~512 MB) —
     empirical 확인 (Desktop Chrome 512 MB 성공, iPad 실측 대기).
   - **데스크톱 티어**: 전신 CT (500 MB - multi-GB) — native mmap 경로로

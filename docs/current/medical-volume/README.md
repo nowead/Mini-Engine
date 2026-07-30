@@ -52,7 +52,7 @@ Mini-Engine implements it:
 | [REAL_MRI_VERIFICATION_PLAN.md](plans/REAL_MRI_VERIFICATION_PLAN.md) | real MR bundle + preset tuning + runtime DICOM upload + FPS/memory HUD (R1..R4) — 완료 |
 | [X1_MOBILE_WEBGPU_MATRIX.md](plans/X1_MOBILE_WEBGPU_MATRIX.md) | (축 X 저사양/모바일) — mobile WebGPU 지원 매트릭스 + 엔진 스택 호환성 진단 + X3 실측 방법론 |
 | [Y1F_CHUNKED_STAGING_PLAN.md](plans/Y1F_CHUNKED_STAGING_PLAN.md) | (축 Y) — Z-slab staging 로 iPhone 192 MB 재도전. **완료 2026-07-22** — [BASELINE_2026-07-22_Y1F_CHUNKED_STAGING.md](baselines/BASELINE_2026-07-22_Y1F_CHUNKED_STAGING.md) |
-| [Y1C_FULL_PROGRESSIVE_PLAN.md](plans/Y1C_FULL_PROGRESSIVE_PLAN.md) | (축 Y, stub) — Volume3D intensity 버퍼 완전 우회 → 실 임상 CT 256+ MB mobile. Y1f 데이터 뒤 확정 |
+| [Y1C_FULL_PROGRESSIVE_PLAN.md](plans/Y1C_FULL_PROGRESSIVE_PLAN.md) | (축 Y) — Volume3D intensity 우회 · 브릭 progressive fill. **완료 2026-07-22** — [BASELINE_2026-07-22_Y1C_FULL.md](baselines/BASELINE_2026-07-22_Y1C_FULL.md) |
 
 ---
 
@@ -74,6 +74,7 @@ Mini-Engine implements it:
 | [BASELINE_2026-07-21_Y1B_MOBILE_128MB.md](baselines/BASELINE_2026-07-21_Y1B_MOBILE_128MB.md) | **Y1b 성과 실증**: `loadDicomSeries` two-pass refactor → iPhone Safari 128 MB **로드 성공, 63 fps 안정** (07-20 baseline 이 예측한 상한 확장 정확 실현). 192 MB 는 여전히 freeze (intensity + atlas 동시 alive peak 남음). 원 목표 "저사양 모바일 대용량 실 CT" 첫 실증. |
 | [BASELINE_2026-07-21_Y1CDE_PHYSICAL_WALL.md](baselines/BASELINE_2026-07-21_Y1CDE_PHYSICAL_WALL.md) | **Y1c-lite + Y1d + Y1e 조합 실측**: mobile peak 956 → 668 MB (-30%) 축소. 192 MB 는 여전히 crash → iPhone 물리 프로세스 예산 ~600-650 MB 확정. 128 MB 는 안정 유지. 다음 후보 Y1f (chunked staging) · Y1c-full (intensity 우회). |
 | [BASELINE_2026-07-22_Y1F_CHUNKED_STAGING.md](baselines/BASELINE_2026-07-22_Y1F_CHUNKED_STAGING.md) | **Y1f Z-slab staging**: `BrickedVolume::build()` Static path 를 slab (~44 MB WASM) 단위로 재구성. peak 668 → 599 MB (-69 MB). **iPhone Safari 192 MB CT (512×512×384) 로드 최초 실증** — 흉부/복부 임상 CT 범위 진입. 128 MB regression 무. |
+| [BASELINE_2026-07-22_Y1C_FULL.md](baselines/BASELINE_2026-07-22_Y1C_FULL.md) | **Y1c-full progressive**: DICOM slice-by-slice → BrickedVolume ring buffer (66 slice × W × H) → row-완성 시 즉시 upload. Peak 701 → 606 MB (-95 MB) on 256 MB volume. **iPhone Safari 256 MB CT (512³) 로드 성공** — ADR-2026-07-22 iPhone 티어 목표 달성. Static-only (Streaming 은 Y2 대기). UI safe-area 픽스 포함. |
 
 ---
 
