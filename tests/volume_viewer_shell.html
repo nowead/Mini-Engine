@@ -19,7 +19,15 @@
     #panel { position: fixed; top: 12px; right: 12px; width: 280px;
         background: rgba(16,19,26,0.92); border: 1px solid #2a3140; border-radius: 10px;
         padding: 14px 16px; -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
-        max-height: calc(100vh - 24px); overflow-y: auto; }
+        /* iOS Safari bottom tab bar (~44 pt in landscape, ~83 pt in portrait
+           after home indicator) covers the panel's lower rows -- Copy Stats
+           / Load / etc were reported unreachable on iPhone. Reserve safe-area
+           space + extra bottom padding so the last controls always clear the
+           chrome. env(safe-area-inset-bottom) is 0 on desktop so this is a
+           no-op there. */
+        max-height: calc(100vh - 24px - env(safe-area-inset-bottom, 0px));
+        overflow-y: auto;
+        padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px)); }
     #panel.collapsed #panelBody { display: none; }
     #panel.collapsed { padding: 6px 10px; }
     #panelToggle { position: absolute; top: 6px; right: 8px; width: 28px; height: 24px;

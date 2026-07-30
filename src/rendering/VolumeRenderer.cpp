@@ -301,6 +301,54 @@ bool VolumeRenderer::loadFromHalfData(std::vector<uint16_t>&& halfData,
     return true;
 }
 
+// Y1c-full -- progressive DICOM entry. Thin wrappers over the
+// BrickedVolume progressive API + post-load renderer state finalise.
+// dataMinGuess seeds the empty-brick-detection value at begin (before
+// slice min/max is known); after all slices land the actual dataMin/Max
+// come in via endProgressiveBuild and drive window/level defaults. If
+// the guess is wrong (e.g. -1000 HU used for an MR volume whose true
+// dataMin is 0) some non-air bricks that happen to hold 0 physical
+// units would be filed as non-empty when they'd match the true air
+// value -- correct rendering, minor atlas-slot waste.
+BrickedVolume::ProgressiveContext VolumeRenderer::beginProgressiveBuild(
+    uint32_t w, uint32_t h, uint32_t d,
+    float dataMinGuess,
+    glm::uvec3 atlasGridOverride) {
+    BrickedVolume::ProgressiveContext ctx{};
+    if (!m_device || !m_graphicsQueue || w == 0 || h == 0 || d == 0) {
+        ctx.failed = true;
+        return ctx;
+    }
+    m_volW = w; m_volH = h; m_volD = d;
+    const uint16_t emptyValueHalf = glm::packHalf1x16(dataMinGuess);
+    ctx = m_brick.beginProgressiveBuild(m_device, m_graphicsQueue,
+                                         w, h, d, emptyValueHalf,
+                                         atlasGridOverride);
+    return ctx;
+}
+
+void VolumeRenderer::pushProgressiveSlice(BrickedVolume::ProgressiveContext& ctx,
+                                          uint32_t z, const uint16_t* sliceHalf) {
+    m_brick.pushSlice(ctx, z, sliceHalf);
+}
+
+bool VolumeRenderer::endProgressiveBuild(BrickedVolume::ProgressiveContext& ctx,
+                                          float dataMinActual, float dataMaxActual) {
+    if (!m_brick.endProgressiveBuild(ctx)) return false;
+    m_dataMin = dataMinActual;
+    m_dataMax = dataMaxActual;
+    m_windowCenter = 0.5f * (dataMinActual + dataMaxActual);
+    m_windowWidth  = (dataMaxActual > dataMinActual) ? (dataMaxActual - dataMinActual) : 1.0f;
+    buildOccupancy();
+    if (m_bindGroupLayout && m_depthView) {
+        if (!createBindGroups(m_depthView)) return false;
+    }
+    LOG_INFO("VolumeRenderer") << "loaded progressive volume " << m_volW << "x" << m_volH
+                               << "x" << m_volD << " range [" << dataMinActual << ","
+                               << dataMaxActual << "]";
+    return true;
+}
+
 bool VolumeRenderer::loadFromMmappedNiftiSource(assets::MmappedNiftiSource&& src,
                                                 glm::uvec3 atlasGridOverride) {
     if (!m_device || !m_graphicsQueue || src.w == 0 || src.h == 0 || src.d == 0) return false;

@@ -131,6 +131,77 @@ public:
                uint16_t emptyValueHalf,
                glm::uvec3 atlasGrid = glm::uvec3(0));
 
+    // ------------------------------------------------------------------
+    // Y1c-full progressive build (2026-07-22 stub, real impl in Y1c-full-2)
+    //
+    // Alternative to build() that avoids materialising a full-volume
+    // half-data buffer on the caller side. The DICOM Pass 2 loop pushes
+    // one slice at a time; the atlas fills row-by-row as brick rows
+    // become complete. Target: iPhone Safari 256 MB CT (previously
+    // blocked by the 128 MB halfData allocation + 279 MB GPU atlas
+    // co-residency during Y1f's pack loop).
+    //
+    // Static mode only. Volume must fit the atlas at build time (like
+    // build() Static). Streaming path stays on the legacy build() until
+    // Y2 (IndexedDB brick cache) lands.
+    //
+    // Y1c-full-1 (this commit): API skeleton. Implementation accumulates
+    // slices into a full halfData vector inside the context, then
+    // delegates to build() at endProgressiveBuild -- no peak reduction
+    // yet, just the wire shape. Y1c-full-2 replaces the accumulator with
+    // a ring buffer + per-row pack + upload.
+    // ------------------------------------------------------------------
+    // Ring buffer depth for the progressive path. Each row of L0 bricks
+    // reads a Z-range of at most kBrickStored (66) source slices (interior
+    // + 1-voxel halo either side, clamped at boundaries), so a 66-slot
+    // ring buffer holds exactly one row's worth at completion time.
+    static constexpr uint32_t kProgressiveRingSlices = kBrickStored;
+
+    struct ProgressiveContext {
+        rhi::RHIDevice* device = nullptr;
+        rhi::RHIQueue*  queue  = nullptr;
+        uint32_t w = 0, h = 0, d = 0;
+        uint16_t emptyValueHalf = 0;
+        glm::uvec3 pageGrid{0};
+        glm::uvec3 atlasGrid{0};
+        glm::uvec3 brickInteriorL0{0};
+        glm::uvec3 brickHaloL0{0};
+        glm::uvec3 brickInteriorLastL0{0};
+        glm::uvec3 atlasVoxelsL0{0};
+        uint32_t   paddedRowLv = 0;   // WebGPU 256-aligned or tight (native)
+        uint32_t   slabDepthVox = 0;  // = kBrickStored (one atlas row worth)
+        uint64_t   slabBytes = 0;
+        std::vector<uint16_t> ring;              // w*h*kProgressiveRingSlices
+        std::vector<uint32_t> rowSliceCount;     // per bz (pageGrid.z)
+        std::vector<uint32_t> rowExpected;       // per bz, precomputed at begin
+        std::vector<uint8_t>  rowDone;           // per bz, 1 = packed + uploaded
+        std::vector<uint32_t> pageTable;         // final page table, filled row-by-row
+        std::vector<uint8_t>  pageOccupancy;     // bit-packed, filled row-by-row
+        uint32_t totalPageEntries = 0;
+        uint32_t nonEmptyCount = 0;
+        std::unique_ptr<rhi::RHIBuffer> slabStaging;
+        bool     failed = false;                 // sticky error flag
+    };
+
+    // Open a progressive build. Caller keeps the returned context alive
+    // through the pushSlice loop and hands it to endProgressiveBuild to
+    // commit or abort.
+    ProgressiveContext beginProgressiveBuild(
+        rhi::RHIDevice* device, rhi::RHIQueue* queue,
+        uint32_t w, uint32_t h, uint32_t d,
+        uint16_t emptyValueHalf,
+        glm::uvec3 atlasGrid = glm::uvec3(0));
+
+    // Deliver one source-Z slice. sliceHalf points to w*h uint16 (R16Float
+    // bits) laid out row-major (x-fastest). The caller may free / unlink
+    // sliceHalf as soon as this returns (the context copies what it needs).
+    void pushSlice(ProgressiveContext& ctx, uint32_t z, const uint16_t* sliceHalf);
+
+    // Finalise the atlas + page table, releasing the context's transient
+    // storage. Returns false on any RHI failure or if the atlas could not
+    // accommodate the non-empty brick count.
+    bool endProgressiveBuild(ProgressiveContext& ctx);
+
     // Step 5.2: build from a memory-mapped Int16 / Uint16 source. The brick
     // pack reads source voxels straight out of the mmap region, converts each
     // to half on the fly using `slope`/`intercept` (physical = slope*raw +

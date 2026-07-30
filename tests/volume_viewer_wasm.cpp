@@ -282,15 +282,14 @@ private:
     // through the renderer so BrickedVolume::build can drop the buffer
     // right after Static pack, before GPU transfer. NIfTI (float path)
     // still copies -- NIfTI volumes aren't the memory-critical case.
-    glm::vec3 applyVolumeData(assets::Volume3D& vol) {
-        if (!vol.intensityHalf.empty()) {
-            m_volume->loadFromHalfData(std::move(vol.intensityHalf),
-                                        vol.w, vol.h, vol.d,
-                                        vol.dataMin, vol.dataMax);
-        } else {
-            m_volume->loadFromFloatData(vol.intensity, vol.w, vol.h, vol.d);
-        }
-        glm::vec3 ext(vol.w * vol.spacingX, vol.h * vol.spacingY, vol.d * vol.spacingZ);
+    // Post-load UI settling shared between the DICOM (progressive) path and
+    // the NIfTI (float) path. Takes just the metadata (w/h/d/spacing) plus
+    // the min/max the load already computed on m_volume. Handles halfExtent,
+    // window/preset defaults, extinction, camera orbit, and the JS-side
+    // Module._dataMin/Max mirror.
+    glm::vec3 applyPostLoad(uint32_t w, uint32_t h, uint32_t d,
+                             float spacingX, float spacingY, float spacingZ) {
+        glm::vec3 ext(w * spacingX, h * spacingY, d * spacingZ);
         const float m = std::max({ext.x, ext.y, ext.z});
         glm::vec3 halfExtent = (m > 0.0f) ? ext / m : glm::vec3(1.0f);
         const float minHalf = 0.10f;
@@ -302,12 +301,11 @@ private:
             m_volume->setWindowWidth(1500.0f);
         }
         m_volume->setExtinction(10.0f);
-        if (vol.d == 1) {
+        if (d == 1) {
             m_camera.setOrbit(0.0f, 0.0f, 2.3f);
         }
         EM_ASM({ Module._dataMin = $0; Module._dataMax = $1; },
                m_volume->getDataMin(), m_volume->getDataMax());
-        // Preset auto-pick (same heuristic as R2).
         const float dmin = m_volume->getDataMin();
         const float dmax = m_volume->getDataMax();
         int defaultPreset = 1;
@@ -315,6 +313,45 @@ private:
         else if (dmin >= 0.0f && dmax <= 4096.0f)   defaultPreset = 5;
         m_volume->setTFPreset(defaultPreset);
         return halfExtent;
+    }
+
+    glm::vec3 applyVolumeData(assets::Volume3D& vol) {
+        if (!vol.intensityHalf.empty()) {
+            m_volume->loadFromHalfData(std::move(vol.intensityHalf),
+                                        vol.w, vol.h, vol.d,
+                                        vol.dataMin, vol.dataMax);
+        } else {
+            m_volume->loadFromFloatData(vol.intensity, vol.w, vol.h, vol.d);
+        }
+        return applyPostLoad(vol.w, vol.h, vol.d, vol.spacingX, vol.spacingY, vol.spacingZ);
+    }
+
+    // Y1c-full progressive DICOM load. Streams slices from `dir` through
+    // BrickedVolume's progressive API so we never hold a full-volume half
+    // buffer in the wasm heap. On success sets outHalfExtent and returns
+    // true; on failure returns false (caller falls through to the next
+    // preload candidate).
+    bool applyDicomProgressive(const std::string& dir, glm::vec3& outHalfExtent) {
+        assets::Volume3D meta;
+        rendering::BrickedVolume::ProgressiveContext ctx{};
+        bool ctxInited = false;
+        // Guess air value for the empty-brick pattern: -1000 HU (CT). MR
+        // series with a different air value still render correctly; some
+        // empty bricks just get allocated slots instead of being skipped.
+        constexpr float dataMinGuess = -1000.0f;
+
+        const bool ok = assets::loadDicomSeriesProgressive(dir, meta,
+            [&](uint32_t z, const uint16_t* sliceHalf) {
+                if (!ctxInited) {
+                    ctx = m_volume->beginProgressiveBuild(meta.w, meta.h, meta.d, dataMinGuess);
+                    ctxInited = true;
+                }
+                if (!ctx.failed) m_volume->pushProgressiveSlice(ctx, z, sliceHalf);
+            });
+        if (!ok || !ctxInited) return false;
+        if (!m_volume->endProgressiveBuild(ctx, meta.dataMin, meta.dataMax)) return false;
+        outHalfExtent = applyPostLoad(meta.w, meta.h, meta.d, meta.spacingX, meta.spacingY, meta.spacingZ);
+        return true;
     }
 
     void initVolume() {
@@ -330,16 +367,17 @@ private:
         // the JPEG 2000 sample (OpenJPEG regression), then to the synthetic
         // NIfTI. Every preload path stays exercised on browser load without
         // per-sample UI.
-        // Y1c-lite: DICOM preloads use half-direct path (skips float
-        // intermediate, halves load-time transient memory).
-        const bool loadedMr     = assets::loadDicomSeriesHalf("/sample_dicom_mr", vol);
-        const bool loadedJpegLl = !loadedMr && assets::loadDicomSeriesHalf("/sample_dicom_jpegll", vol);
-        const bool loadedJp2    = !loadedMr && !loadedJpegLl && assets::loadDicomSeriesHalf("/sample_dicom_jp2", vol);
-        const bool loadedDicom  = loadedMr || loadedJpegLl || loadedJp2;
-        const bool loaded = loadedDicom || assets::loadNifti("/synthetic_ct.nii", vol);
-        if (loaded) {
+        // Y1c-full: DICOM preloads take the progressive path (no full
+        // halfData in wasm heap). NIfTI still uses the float loader.
+        const bool loadedDicom  = applyDicomProgressive("/sample_dicom_mr", halfExtent)
+                               || applyDicomProgressive("/sample_dicom_jpegll", halfExtent)
+                               || applyDicomProgressive("/sample_dicom_jp2", halfExtent);
+        bool loaded = loadedDicom;
+        if (!loaded && assets::loadNifti("/synthetic_ct.nii", vol)) {
             halfExtent = applyVolumeData(vol);
-        } else {
+            loaded = true;
+        }
+        if (!loaded) {
             std::cerr << "[VolumeViewerWasm] no DICOM / NIfTI preload -> procedural\n";
         }
 
@@ -404,13 +442,11 @@ private:
         // early -- see queueUserDicomReload() comment.
         if (m_pendingUserDicomReload && m_volume) {
             m_pendingUserDicomReload = false;
-            assets::Volume3D vol;
-            // Y1c-lite: half-direct path -- this is the mobile-critical branch
-            // (128+ MB user uploads). Skips ~192 MB float intermediate on a
-            // 192 MB series, letting iPhone Safari load past its pre-Y1c-lite
-            // 128 MB ceiling.
-            if (assets::loadDicomSeriesHalf("/user_dicom", vol)) {
-                glm::vec3 halfExtent = applyVolumeData(vol);
+            // Y1c-full progressive path -- mobile-critical user upload branch.
+            // Streams slices into BrickedVolume so the full-volume half buffer
+            // never exists in wasm heap. Enables iPhone Safari 256 MB CT.
+            glm::vec3 halfExtent(1.0f);
+            if (applyDicomProgressive("/user_dicom", halfExtent)) {
                 m_volume->setAABB(-halfExtent, halfExtent);
                 m_volume->resetAccumulation();
                 m_lastReloadStatus = 1;

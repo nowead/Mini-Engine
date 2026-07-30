@@ -1212,4 +1212,161 @@ bool loadDicomSeriesHalf(const std::string& dirPath, Volume3D& out) {
     return true;
 }
 
+// Y1c-full -- progressive variant. Same two-pass structure and pixel-decode
+// logic as loadDicomSeriesHalf; the difference is that Pass 2's inner loop
+// writes into a per-slice local buffer that is handed to `sink` after each
+// slice completes, then reused for the next slice. metaOut.intensityHalf
+// stays empty -- the full-volume-sized allocation the Y1c-lite path made
+// (~96 MB on 192 MB, ~128 MB on 256 MB) is gone. Downstream caller (the
+// viewer or VolumeRenderer wrapper) is expected to feed each slice into
+// BrickedVolume::pushSlice, keeping only a rolling ~66-slice ring buffer
+// resident inside the pack pipeline. Enables iPhone Safari 256 MB CT loads
+// where Y1f still crashed at the halfData + atlas co-residency peak.
+bool loadDicomSeriesProgressive(const std::string& dirPath,
+                                Volume3D& metaOut,
+                                const DicomProgressiveSliceSink& sink) {
+    std::error_code ec;
+    if (!fs::is_directory(dirPath, ec)) return false;
+
+    std::vector<std::string> paths;
+    for (const auto& entry : fs::directory_iterator(dirPath, ec)) {
+        if (!entry.is_regular_file()) continue;
+        auto ext = entry.path().extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (ext == ".dcm") paths.push_back(entry.path().string());
+    }
+    if (paths.empty()) { LOG_ERROR("Dicom") << dirPath << ": no .dcm files"; return false; }
+
+    // Pass 1 (identical to loadDicomSeriesHalf).
+    std::vector<SliceMeta> metas;
+    metas.reserve(paths.size());
+    for (const auto& p : paths) {
+        std::vector<uint8_t> fileBuf;
+        Slice s;
+        if (!parseSlice(p, fileBuf, s)) return false;
+        SliceMeta m{};
+        m.path             = p;
+        m.rows             = s.rows;
+        m.cols             = s.cols;
+        m.numberOfFrames   = s.numberOfFrames;
+        m.instanceNumber   = s.instanceNumber;
+        m.signedPixels     = s.signedPixels;
+        m.pixelSpacingX    = s.pixelSpacingX;
+        m.pixelSpacingY    = s.pixelSpacingY;
+        m.sliceThickness   = s.sliceThickness;
+        m.imagePosZ        = s.imagePosZ;
+        m.rescaleSlope     = s.rescaleSlope;
+        m.rescaleIntercept = s.rescaleIntercept;
+        m.seriesUid        = s.seriesUid;
+        metas.push_back(std::move(m));
+    }
+
+    const auto& ref = metas.front();
+    for (size_t i = 1; i < metas.size(); ++i) {
+        const auto& m = metas[i];
+        if (m.rows != ref.rows || m.cols != ref.cols) {
+            LOG_ERROR("Dicom") << dirPath << ": inconsistent rows/cols";
+            return false;
+        }
+        if (m.seriesUid != ref.seriesUid) {
+            LOG_ERROR("Dicom") << dirPath << ": mixed series in directory";
+            return false;
+        }
+    }
+
+    struct Entry { size_t metaIdx; uint32_t frameIdx; double zPos; int instanceNumber; };
+    std::vector<Entry> order;
+    for (size_t i = 0; i < metas.size(); ++i) {
+        const auto& m = metas[i];
+        for (uint32_t f = 0; f < m.numberOfFrames; ++f) {
+            const double zp = m.imagePosZ + static_cast<double>(f) * m.sliceThickness;
+            order.push_back({ i, f, zp, m.instanceNumber });
+        }
+    }
+    std::sort(order.begin(), order.end(), [](const Entry& a, const Entry& b) {
+        if (a.zPos != b.zPos) return a.zPos < b.zPos;
+        if (a.instanceNumber != b.instanceNumber) return a.instanceNumber < b.instanceNumber;
+        return a.frameIdx < b.frameIdx;
+    });
+
+    const uint32_t w = ref.cols;
+    const uint32_t h = ref.rows;
+    const uint32_t d = static_cast<uint32_t>(order.size());
+
+    double zSpacing = ref.sliceThickness;
+    if (d >= 2) {
+        const double dz = order[1].zPos - order[0].zPos;
+        if (std::abs(dz) > 1e-6) zSpacing = std::abs(dz);
+    }
+
+    // Fill metadata BEFORE Pass 2 fires the sink so the caller can size
+    // downstream buffers (BrickedVolume atlas, occupancy grid, etc.).
+    metaOut.w = w; metaOut.h = h; metaOut.d = d;
+    metaOut.spacingX = static_cast<float>(ref.pixelSpacingX);
+    metaOut.spacingY = static_cast<float>(ref.pixelSpacingY);
+    metaOut.spacingZ = static_cast<float>(zSpacing);
+    metaOut.intensity.clear();
+    metaOut.intensityHalf.clear();
+
+    // Single per-slice buffer (w*h uint16 half), reused across all z.
+    std::vector<uint16_t> sliceHalf(static_cast<size_t>(w) * h, 0);
+
+    std::vector<uint32_t> framesRemaining(metas.size(), 0);
+    for (size_t i = 0; i < metas.size(); ++i) {
+        framesRemaining[i] = metas[i].numberOfFrames;
+    }
+    const size_t frameBytes = static_cast<size_t>(w) * h * 2;
+    float mn = std::numeric_limits<float>::max();
+    float mx = std::numeric_limits<float>::lowest();
+
+    for (uint32_t z = 0; z < d; ++z) {
+        const Entry& e = order[z];
+        const SliceMeta& mm = metas[e.metaIdx];
+
+        std::vector<uint8_t> fileBuf;
+        Slice s;
+        if (!parseSlice(mm.path, fileBuf, s)) return false;
+
+        const uint8_t* px = s.pixelData + static_cast<size_t>(e.frameIdx) * frameBytes;
+        const float slope = static_cast<float>(s.rescaleSlope);
+        const float inter = static_cast<float>(s.rescaleIntercept);
+        for (uint32_t y = 0; y < h; ++y) {
+            for (uint32_t x = 0; x < w; ++x) {
+                const size_t srcIdx = (static_cast<size_t>(y) * w + x) * 2;
+                int16_t raw_i16;
+                std::memcpy(&raw_i16, px + srcIdx, 2);
+                const float raw = s.signedPixels
+                    ? static_cast<float>(raw_i16)
+                    : static_cast<float>(static_cast<uint16_t>(raw_i16));
+                const float v = slope * raw + inter;
+                // Same row-flip as loadDicomSeriesHalf.
+                const size_t dstIdx = static_cast<size_t>(h - 1 - y) * w + x;
+                sliceHalf[dstIdx] = glm::packHalf1x16(v);
+                if (v < mn) mn = v;
+                if (v > mx) mx = v;
+            }
+        }
+
+        if (sink) sink(z, sliceHalf.data());
+
+#ifdef __EMSCRIPTEN__
+        if (--framesRemaining[e.metaIdx] == 0) {
+            std::error_code rmec;
+            fs::remove(mm.path, rmec);
+        }
+#endif
+    }
+
+    metaOut.dataMin = mn;
+    metaOut.dataMax = mx;
+
+    LOG_INFO("Dicom") << "loaded (progressive) " << dirPath << " (" << w << "x" << h << "x" << d
+                      << ", spacing " << metaOut.spacingX << "/" << metaOut.spacingY << "/" << metaOut.spacingZ
+                      << "mm, range [" << mn << "," << mx << "], "
+                      << paths.size() << (paths.size() == 1 ? " file" : " files")
+                      << ", " << d << (d == 1 ? " frame" : " frames") << ")";
+    return true;
+}
+
 } // namespace assets

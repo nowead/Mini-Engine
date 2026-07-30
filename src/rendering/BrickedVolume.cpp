@@ -673,6 +673,466 @@ bool BrickedVolume::build(rhi::RHIDevice* device, rhi::RHIQueue* queue,
 }
 
 // ---------------------------------------------------------------------------
+// Y1c-full progressive build (2026-07-22, Y1c-full-2 implementation).
+//
+// beginProgressiveBuild() allocates the atlas texture, slab staging, and
+// ring buffer. pushSlice() copies the slice into the ring at (z % 66) and
+// triggers packAndUploadRow(bz) as each brick row's expected slice count
+// is met; the ring's 66-slot window is always the last 66 slices received
+// so a row that completes at slice Z=bz*64+64 finds all its source Z in
+// [bz*64-1, bz*64+64] present. endProgressiveBuild() uploads the finalised
+// page table, transitions the atlas to ShaderReadOnly, and destroys the
+// context. Static mode only; Streaming stays on build() until Y2 lands.
+// ---------------------------------------------------------------------------
+namespace {
+
+// Read one voxel from the ring buffer with edge clamping. The ring holds
+// the last kProgressiveRingSlices slices; a source Z of x maps to ring slot
+// (x % kProgressiveRingSlices). For clamped values (halo reads at z=-1 or
+// z=d) the clamped Z is guaranteed to be within the currently-resident
+// window because the pack only fires when the row's entire Z range is
+// present.
+inline uint16_t readRingClamped(const std::vector<uint16_t>& ring,
+                                uint32_t w, uint32_t h, uint32_t d,
+                                int x, int y, int z) {
+    x = std::clamp(x, 0, static_cast<int>(w) - 1);
+    y = std::clamp(y, 0, static_cast<int>(h) - 1);
+    z = std::clamp(z, 0, static_cast<int>(d) - 1);
+    const size_t slot = static_cast<size_t>(z) % BrickedVolume::kProgressiveRingSlices;
+    return ring[(slot * h + y) * w + x];
+}
+
+// Is brick (bx, by, bz) all-empty? Same test as build()'s isInteriorEmpty
+// but reads from the ring buffer via readRingClamped so we can decide
+// non-emptiness at row-completion time (before finalisation).
+bool isInteriorEmptyProgressive(const std::vector<uint16_t>& ring,
+                                uint32_t bx, uint32_t by, uint32_t bz,
+                                uint32_t W, uint32_t H, uint32_t D,
+                                uint16_t emptyValueRaw) {
+    const uint32_t x0 = bx * BrickedVolume::kBrickSize;
+    const uint32_t y0 = by * BrickedVolume::kBrickSize;
+    const uint32_t z0 = bz * BrickedVolume::kBrickSize;
+    const uint32_t x1 = std::min(x0 + BrickedVolume::kBrickSize, W);
+    const uint32_t y1 = std::min(y0 + BrickedVolume::kBrickSize, H);
+    const uint32_t z1 = std::min(z0 + BrickedVolume::kBrickSize, D);
+    for (uint32_t z = z0; z < z1; ++z) {
+        const size_t slot = static_cast<size_t>(z) % BrickedVolume::kProgressiveRingSlices;
+        for (uint32_t y = y0; y < y1; ++y) {
+            const size_t row = (slot * H + y) * W;
+            for (uint32_t x = x0; x < x1; ++x) {
+                if (ring[row + x] != emptyValueRaw) return false;
+            }
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+BrickedVolume::ProgressiveContext BrickedVolume::beginProgressiveBuild(
+    rhi::RHIDevice* device, rhi::RHIQueue* queue,
+    uint32_t w, uint32_t h, uint32_t d,
+    uint16_t emptyValueHalf,
+    glm::uvec3 atlasGrid) {
+    ProgressiveContext ctx{};
+    if (!device || !queue || w == 0 || h == 0 || d == 0) {
+        LOG_ERROR("BrickedVolume") << "beginProgressiveBuild: invalid args";
+        ctx.failed = true;
+        return ctx;
+    }
+    ctx.device = device;
+    ctx.queue  = queue;
+    ctx.w = w; ctx.h = h; ctx.d = d;
+    ctx.emptyValueHalf = emptyValueHalf;
+
+    m_device = device;
+    m_queue  = queue;
+    m_volSize  = glm::uvec3(w, h, d);
+    m_pageGrid = glm::uvec3((w + kBrickSize - 1) / kBrickSize,
+                             (h + kBrickSize - 1) / kBrickSize,
+                             (d + kBrickSize - 1) / kBrickSize);
+    ctx.pageGrid          = m_pageGrid;
+    ctx.totalPageEntries  = m_pageGrid.x * m_pageGrid.y * m_pageGrid.z;
+
+    // Atlas grid: default to pageGrid (shrink layout). Caller may override
+    // but we still force shrink whenever it happens to equal pageGrid.
+    if (atlasGrid.x == 0 || atlasGrid.y == 0 || atlasGrid.z == 0) {
+        atlasGrid = m_pageGrid;
+    }
+    m_atlasGrid = atlasGrid;
+    ctx.atlasGrid = atlasGrid;
+
+    m_mode = Mode::StaticFullyLoaded;
+
+    // Option C thin-volume sizing (same as build())
+    m_brickInteriorL0 = glm::uvec3(
+        (m_pageGrid.x == 1) ? w : kBrickSize,
+        (m_pageGrid.y == 1) ? h : kBrickSize,
+        (m_pageGrid.z == 1) ? d : kBrickSize);
+    m_brickHaloL0 = glm::uvec3(m_pageGrid.x > 1 ? 1u : 0u,
+                                m_pageGrid.y > 1 ? 1u : 0u,
+                                m_pageGrid.z > 1 ? 1u : 0u);
+    ctx.brickInteriorL0 = m_brickInteriorL0;
+    ctx.brickHaloL0     = m_brickHaloL0;
+
+    // Last-brick shrink when atlasGrid == pageGrid
+    m_uniformSlotLayout   = !(m_atlasGrid == m_pageGrid);
+    m_brickInteriorLastL0 = m_brickInteriorL0;
+    if (!m_uniformSlotLayout) {
+        m_brickInteriorLastL0 = glm::uvec3(
+            (m_pageGrid.x > 1) ? (w - (m_pageGrid.x - 1) * kBrickSize) : m_brickInteriorL0.x,
+            (m_pageGrid.y > 1) ? (h - (m_pageGrid.y - 1) * kBrickSize) : m_brickInteriorL0.y,
+            (m_pageGrid.z > 1) ? (d - (m_pageGrid.z - 1) * kBrickSize) : m_brickInteriorL0.z);
+    }
+    ctx.brickInteriorLastL0 = m_brickInteriorLastL0;
+
+    const glm::uvec3 bs0 = brickStoredL0();
+    m_atlasVoxelsL0 = m_atlasGrid * bs0;
+    if (!m_uniformSlotLayout) {
+        if (m_pageGrid.x > 1) m_atlasVoxelsL0.x = (m_pageGrid.x - 1) * bs0.x + m_brickInteriorLastL0.x + m_brickHaloL0.x;
+        if (m_pageGrid.y > 1) m_atlasVoxelsL0.y = (m_pageGrid.y - 1) * bs0.y + m_brickInteriorLastL0.y + m_brickHaloL0.y;
+        if (m_pageGrid.z > 1) m_atlasVoxelsL0.z = (m_pageGrid.z - 1) * bs0.z + m_brickInteriorLastL0.z + m_brickHaloL0.z;
+    }
+    ctx.atlasVoxelsL0 = m_atlasVoxelsL0;
+
+    // Per-row expected slice count. Row bz needs source Z in
+    // [max(0, bz*64 - halo.z), min(d, bz*64 + 64 + halo.z)). For halo=0
+    // (single-brick Z axis) it collapses to [0, d).
+    ctx.rowExpected.assign(m_pageGrid.z, 0);
+    for (uint32_t bz = 0; bz < m_pageGrid.z; ++bz) {
+        const int z_start_i = static_cast<int>(bz * kBrickSize) - static_cast<int>(m_brickHaloL0.z);
+        const int z_end_i   = static_cast<int>((bz + 1) * kBrickSize) + static_cast<int>(m_brickHaloL0.z);
+        const uint32_t z_start = static_cast<uint32_t>(std::max(0, z_start_i));
+        const uint32_t z_end   = std::min(d, static_cast<uint32_t>(std::max(0, z_end_i)));
+        ctx.rowExpected[bz] = (z_end > z_start) ? (z_end - z_start) : 0u;
+    }
+    ctx.rowSliceCount.assign(m_pageGrid.z, 0);
+    ctx.rowDone.assign(m_pageGrid.z, 0);
+    ctx.pageTable.assign(ctx.totalPageEntries, kEmptySlot);
+    ctx.pageOccupancy.assign((ctx.totalPageEntries + 7u) >> 3, 0u);
+
+    // Ring buffer: w*h*kProgressiveRingSlices half values. Init to
+    // emptyValueHalf so clamped reads outside the actual populated Z range
+    // (shouldn't happen for a well-formed sequence but guards against
+    // pushSlice() bugs) return sane values.
+    ctx.ring.assign(static_cast<size_t>(w) * h * kProgressiveRingSlices, emptyValueHalf);
+
+    // Slab staging (one atlas Z-row = bs0.z voxels deep).
+    const uint32_t tightRow = m_atlasVoxelsL0.x * 2;
+#ifdef __EMSCRIPTEN__
+    ctx.paddedRowLv = (tightRow + 255u) & ~255u;
+#else
+    ctx.paddedRowLv = tightRow;
+#endif
+    ctx.slabDepthVox = bs0.z;
+    ctx.slabBytes    = static_cast<uint64_t>(ctx.paddedRowLv) * m_atlasVoxelsL0.y * ctx.slabDepthVox;
+
+    rhi::BufferDesc sbd{};
+    sbd.size  = ctx.slabBytes;
+    sbd.usage = rhi::BufferUsage::CopySrc | rhi::BufferUsage::MapWrite;
+    sbd.label = "BrickAtlasProgressiveSlab";
+    ctx.slabStaging = device->createBuffer(sbd);
+    if (!ctx.slabStaging) {
+        LOG_ERROR("BrickedVolume") << "progressive slab staging create failed ("
+                                    << (ctx.slabBytes >> 20) << " MB)";
+        ctx.failed = true;
+        return ctx;
+    }
+
+    // GPU L0 atlas texture, allocated upfront so per-row copies can target it.
+    rhi::TextureDesc td{};
+    td.size          = rhi::Extent3D{m_atlasVoxelsL0.x, m_atlasVoxelsL0.y, m_atlasVoxelsL0.z};
+    td.dimension     = rhi::TextureDimension::Texture3D;
+    td.format        = rhi::TextureFormat::R16Float;
+    td.mipLevelCount = 1;
+    td.sampleCount   = 1;
+    td.usage         = rhi::TextureUsage::CopyDst | rhi::TextureUsage::Sampled;
+    td.label         = "VolumeBrickAtlas";
+    m_atlasTexes[0] = device->createTexture(td);
+    if (!m_atlasTexes[0]) {
+        LOG_ERROR("BrickedVolume") << "progressive atlas texture create failed";
+        ctx.failed = true;
+        return ctx;
+    }
+    {
+        auto enc = device->createCommandEncoder();
+        enc->transitionTextureLayout(m_atlasTexes[0].get(),
+                                     rhi::TextureLayout::Undefined,
+                                     rhi::TextureLayout::TransferDst);
+        auto cmd = enc->finish();
+        queue->submit(cmd.get());
+        queue->waitIdle();
+    }
+
+    m_usedSlotsPerLod = {0, 0, 0, 0};
+
+    LOG_INFO("BrickedVolume") << "Y1c-full progressive begin: " << w << "x" << h << "x" << d
+        << " -> page " << m_pageGrid.x << "x" << m_pageGrid.y << "x" << m_pageGrid.z
+        << ", atlas " << m_atlasVoxelsL0.x << "x" << m_atlasVoxelsL0.y << "x" << m_atlasVoxelsL0.z
+        << ", slab " << (ctx.slabBytes >> 20) << " MB, ring "
+        << ((ctx.ring.size() * sizeof(uint16_t)) >> 20) << " MB";
+    return ctx;
+}
+
+// Pack + upload every brick in row bz. Called by pushSlice once the row's
+// expected slice count is met. Reads from ctx.ring, writes to
+// ctx.slabStaging, copies staging -> atlas at dstOffset.z = bz * bs0.z.
+static bool packAndUploadRow(BrickedVolume::ProgressiveContext& ctx,
+                             BrickedVolume& self,
+                             uint32_t bz,
+                             std::array<uint32_t, 4>& usedSlotsPerLod,
+                             rhi::RHITexture* atlasTex) {
+    const uint32_t w = ctx.w, h = ctx.h, d = ctx.d;
+    const glm::uvec3 bs0(ctx.brickInteriorL0 + 2u * ctx.brickHaloL0);
+    const uint32_t voxelsY_lv = ctx.atlasVoxelsL0.y;
+    const uint32_t voxelsX_lv = ctx.atlasVoxelsL0.x;
+    const uint32_t paddedRowLv = ctx.paddedRowLv;
+    const uint32_t slabDepthVox = ctx.slabDepthVox;
+    const uint16_t emptyValueHalf = ctx.emptyValueHalf;
+
+    uint8_t* stagingBytes = static_cast<uint8_t*>(ctx.slabStaging->map());
+    if (!stagingBytes) {
+        LOG_ERROR("BrickedVolume") << "progressive slab map failed at row " << bz;
+        return false;
+    }
+    // Fill empty for the whole slab (row) first
+    for (uint32_t z = 0; z < slabDepthVox; ++z) {
+        for (uint32_t y = 0; y < voxelsY_lv; ++y) {
+            uint16_t* row = reinterpret_cast<uint16_t*>(
+                stagingBytes + (static_cast<uint64_t>(z) * voxelsY_lv + y) * paddedRowLv);
+            std::fill(row, row + voxelsX_lv, emptyValueHalf);
+        }
+    }
+
+    const bool shrink = !(ctx.atlasGrid == ctx.pageGrid) ? false : true;
+    // Emit each brick's slot origin in atlas Z relative to the slab start
+    for (uint32_t by = 0; by < ctx.pageGrid.y; ++by) {
+        for (uint32_t bx = 0; bx < ctx.pageGrid.x; ++bx) {
+            const uint32_t pageIdx = (bz * ctx.pageGrid.y + by) * ctx.pageGrid.x + bx;
+
+            // Empty-brick test on the actual slice data now in ring
+            if (isInteriorEmptyProgressive(ctx.ring, bx, by, bz, w, h, d, emptyValueHalf)) {
+                continue;
+            }
+            ctx.pageOccupancy[pageIdx >> 3] |= static_cast<uint8_t>(1u << (pageIdx & 7));
+            ++ctx.nonEmptyCount;
+
+            // Slot assignment: shrink layout enforced when atlasGrid == pageGrid
+            // (the common progressive case). Fallback to uniform counter if the
+            // caller passed a different atlasGrid.
+            uint32_t slot, sx, sy, sz;
+            if (shrink) {
+                slot = pageIdx;
+                sx = bx; sy = by; sz = bz;
+                ++usedSlotsPerLod[0];
+            } else {
+                slot = usedSlotsPerLod[0]++;
+                sx = slot % ctx.atlasGrid.x;
+                sy = (slot / ctx.atlasGrid.x) % ctx.atlasGrid.y;
+                sz = slot / (ctx.atlasGrid.x * ctx.atlasGrid.y);
+                // Slot's atlas Z must live inside this slab; else we've been
+                // handed a bad atlasGrid for progressive. Skip brick with
+                // warning (renders as empty).
+                if (sz != bz) {
+                    LOG_WARN("BrickedVolume") << "progressive: uniform slot layout "
+                        "assigned brick " << bx << "," << by << "," << bz << " to atlas Z " << sz
+                        << " -- brick will render empty (use shrink layout for progressive)";
+                    continue;
+                }
+            }
+            ctx.pageTable[pageIdx] = BrickedVolume::encodePage(slot, 0);
+
+            // Per-brick stored dims (shrink truncates last brick's outer halo)
+            glm::uvec3 storedThis = bs0;
+            if (shrink) {
+                if (ctx.pageGrid.x > 1 && bx == ctx.pageGrid.x - 1u)
+                    storedThis.x = ctx.brickInteriorLastL0.x + ctx.brickHaloL0.x;
+                if (ctx.pageGrid.y > 1 && by == ctx.pageGrid.y - 1u)
+                    storedThis.y = ctx.brickInteriorLastL0.y + ctx.brickHaloL0.y;
+                if (ctx.pageGrid.z > 1 && bz == ctx.pageGrid.z - 1u)
+                    storedThis.z = ctx.brickInteriorLastL0.z + ctx.brickHaloL0.z;
+            }
+
+            const uint32_t aOriginX     = sx * bs0.x;
+            const uint32_t aOriginY     = sy * bs0.y;
+            const uint32_t localOriginZ = 0u; // slab covers only row bz
+            const int srcX0 = static_cast<int>(bx * BrickedVolume::kBrickSize)
+                              - static_cast<int>(ctx.brickHaloL0.x);
+            const int srcY0 = static_cast<int>(by * BrickedVolume::kBrickSize)
+                              - static_cast<int>(ctx.brickHaloL0.y);
+            const int srcZ0 = static_cast<int>(bz * BrickedVolume::kBrickSize)
+                              - static_cast<int>(ctx.brickHaloL0.z);
+            for (uint32_t lz = 0; lz < storedThis.z; ++lz) {
+                for (uint32_t ly = 0; ly < storedThis.y; ++ly) {
+                    uint16_t* dstRow = reinterpret_cast<uint16_t*>(
+                        stagingBytes
+                        + (static_cast<uint64_t>(localOriginZ + lz) * voxelsY_lv
+                           + (aOriginY + ly)) * paddedRowLv
+                        + aOriginX * 2);
+                    const int srcZ = srcZ0 + static_cast<int>(lz);
+                    const int srcY = srcY0 + static_cast<int>(ly);
+                    for (uint32_t lx = 0; lx < storedThis.x; ++lx) {
+                        const int srcXcoord = srcX0 + static_cast<int>(lx);
+                        dstRow[lx] = readRingClamped(ctx.ring, w, h, d, srcXcoord, srcY, srcZ);
+                    }
+                }
+            }
+        }
+    }
+    ctx.slabStaging->unmap();
+
+    // Copy this slab to atlas at Z = bz * bs0.z. Depth = actual atlas Z
+    // covered by this brick row (could be < slabDepthVox for the last row
+    // if the last brick's stored Z is smaller than bs0.z, but for shrink
+    // layout that shrink is on the last brick only, and the copy extent
+    // is bounded by atlasVoxelsL0.z).
+    const uint32_t rowAtlasZStart = bz * bs0.z;
+    const uint32_t rowAtlasZEnd   = std::min(ctx.atlasVoxelsL0.z, rowAtlasZStart + slabDepthVox);
+    const uint32_t rowAtlasDepth  = rowAtlasZEnd - rowAtlasZStart;
+
+    auto enc = ctx.device->createCommandEncoder();
+    rhi::BufferTextureCopyInfo bc{};
+    bc.buffer = ctx.slabStaging.get();
+    bc.offset = 0;
+#ifdef __EMSCRIPTEN__
+    bc.bytesPerRow  = paddedRowLv;
+    bc.rowsPerImage = voxelsY_lv;
+#else
+    bc.bytesPerRow  = 0;
+    bc.rowsPerImage = 0;
+#endif
+    rhi::TextureCopyInfo tc{};
+    tc.texture  = atlasTex;
+    tc.mipLevel = 0;
+    tc.origin   = {0, 0, static_cast<int32_t>(rowAtlasZStart)};
+    tc.aspect   = 0;
+    enc->copyBufferToTexture(bc, tc,
+                             rhi::Extent3D{voxelsX_lv, voxelsY_lv, rowAtlasDepth});
+    auto cmd = enc->finish();
+    ctx.queue->submit(cmd.get());
+    ctx.queue->waitIdle();
+    (void)self;   // BrickedVolume ref currently unused (state lives in ctx + members mutated at end)
+    return true;
+}
+
+void BrickedVolume::pushSlice(ProgressiveContext& ctx, uint32_t z, const uint16_t* sliceHalf) {
+    if (ctx.failed || !sliceHalf || z >= ctx.d) return;
+
+    // Copy slice into ring at (z % kProgressiveRingSlices)
+    const size_t sliceCount = static_cast<size_t>(ctx.w) * ctx.h;
+    const size_t slot       = static_cast<size_t>(z) % kProgressiveRingSlices;
+    std::memcpy(ctx.ring.data() + slot * sliceCount, sliceHalf, sliceCount * sizeof(uint16_t));
+
+    // Bump row counters for every brick row this z contributes to
+    for (uint32_t bz = 0; bz < ctx.pageGrid.z; ++bz) {
+        if (ctx.rowDone[bz]) continue;
+        const int z_start_i = static_cast<int>(bz * kBrickSize) - static_cast<int>(ctx.brickHaloL0.z);
+        const int z_end_i   = static_cast<int>((bz + 1) * kBrickSize) + static_cast<int>(ctx.brickHaloL0.z);
+        const uint32_t z_start = static_cast<uint32_t>(std::max(0, z_start_i));
+        const uint32_t z_end   = std::min(ctx.d, static_cast<uint32_t>(std::max(0, z_end_i)));
+        if (z < z_start || z >= z_end) continue;
+        ++ctx.rowSliceCount[bz];
+        if (ctx.rowSliceCount[bz] < ctx.rowExpected[bz]) continue;
+
+        // Row bz complete -> pack + upload immediately (before the ring
+        // slots start getting overwritten by later slices in this row's
+        // neighbourhood).
+        if (!packAndUploadRow(ctx, *this, bz, m_usedSlotsPerLod, m_atlasTexes[0].get())) {
+            ctx.failed = true;
+            return;
+        }
+        ctx.rowDone[bz] = 1;
+    }
+}
+
+bool BrickedVolume::endProgressiveBuild(ProgressiveContext& ctx) {
+    if (ctx.failed || !ctx.device || !ctx.queue) {
+        ctx = ProgressiveContext{};
+        return false;
+    }
+    // Verify every row completed
+    for (uint32_t bz = 0; bz < ctx.pageGrid.z; ++bz) {
+        if (!ctx.rowDone[bz]) {
+            LOG_ERROR("BrickedVolume") << "endProgressiveBuild: row " << bz
+                << " incomplete (" << ctx.rowSliceCount[bz] << "/" << ctx.rowExpected[bz] << ")";
+            ctx = ProgressiveContext{};
+            return false;
+        }
+    }
+
+    // Transition atlas to ShaderReadOnly
+    {
+        auto enc = ctx.device->createCommandEncoder();
+        enc->transitionTextureLayout(m_atlasTexes[0].get(),
+                                     rhi::TextureLayout::TransferDst,
+                                     rhi::TextureLayout::ShaderReadOnly);
+        auto cmd = enc->finish();
+        ctx.queue->submit(cmd.get());
+        ctx.queue->waitIdle();
+    }
+
+    // Create texture view
+    rhi::TextureViewDesc vd{};
+    vd.format          = rhi::TextureFormat::R16Float;
+    vd.dimension       = rhi::TextureViewDimension::View3D;
+    vd.baseMipLevel    = 0;  vd.mipLevelCount   = 1;
+    vd.baseArrayLayer  = 0;  vd.arrayLayerCount = 1;
+    m_atlasViews[0] = m_atlasTexes[0]->createView(vd);
+    if (!m_atlasViews[0]) {
+        LOG_ERROR("BrickedVolume") << "endProgressiveBuild: atlas view create failed";
+        ctx = ProgressiveContext{};
+        return false;
+    }
+
+    // Upload page table (small buffer, storage-only so stage through
+    // CopySrc/MapWrite -- identical pattern to build())
+    m_pageOccupancy = std::move(ctx.pageOccupancy);
+    const uint32_t nonEmpty = ctx.nonEmptyCount;
+    const uint64_t pageBytes = static_cast<uint64_t>(ctx.totalPageEntries) * sizeof(uint32_t);
+    {
+        rhi::BufferDesc dstDesc{};
+        dstDesc.size  = pageBytes;
+        dstDesc.usage = rhi::BufferUsage::Storage | rhi::BufferUsage::CopyDst;
+        dstDesc.label = "VolumeBrickPageTable";
+        m_pageTable = ctx.device->createBuffer(dstDesc);
+        if (!m_pageTable) {
+            LOG_ERROR("BrickedVolume") << "endProgressiveBuild: page table buffer create failed";
+            ctx = ProgressiveContext{};
+            return false;
+        }
+
+        rhi::BufferDesc stagingDesc{};
+        stagingDesc.size  = pageBytes;
+        stagingDesc.usage = rhi::BufferUsage::CopySrc | rhi::BufferUsage::MapWrite;
+        stagingDesc.label = "PageTableStaging";
+        auto staging = ctx.device->createBuffer(stagingDesc);
+        if (!staging) {
+            LOG_ERROR("BrickedVolume") << "endProgressiveBuild: page table staging create failed";
+            ctx = ProgressiveContext{};
+            return false;
+        }
+        std::memcpy(staging->map(), ctx.pageTable.data(), pageBytes);
+        staging->unmap();
+
+        auto enc = ctx.device->createCommandEncoder();
+        enc->copyBufferToBuffer(staging.get(), 0, m_pageTable.get(), 0, pageBytes);
+        auto cmd = enc->finish();
+        ctx.queue->submit(cmd.get());
+        ctx.queue->waitIdle();
+
+        m_pageTableHost = std::move(ctx.pageTable);
+    }
+
+    LOG_INFO("BrickedVolume") << "Y1c-full progressive built " << ctx.w << "x" << ctx.h << "x" << ctx.d
+        << " -> page " << m_pageGrid.x << "x" << m_pageGrid.y << "x" << m_pageGrid.z
+        << " (" << nonEmpty << " non-empty), " << usedSlots() << " atlas slots";
+
+    // Destroy context (frees ring + slab staging)
+    ctx = ProgressiveContext{};
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // Disk paging Step 5.2: build from a memory-mapped Int16 / Uint16 source.
 // Avoids the half-data vector materialisation that doubles peak RAM during
 // the legacy build() ingest. Routes the persistent VoxelSource through the

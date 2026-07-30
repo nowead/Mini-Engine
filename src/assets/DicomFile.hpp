@@ -29,9 +29,17 @@
 
 #include "NiftiFile.hpp"   // Volume3D
 
+#include <cstdint>
+#include <functional>
 #include <string>
 
 namespace assets {
+
+// Y1c-full (2026-07-22) sink for progressive DICOM decode. Called once per
+// output z-slice with the already-packed uint16 half data (row-major,
+// x-fastest, length metaOut.w * metaOut.h). The pointer is valid only for
+// the duration of the call; the sink must copy anything it wants to keep.
+using DicomProgressiveSliceSink = std::function<void(uint32_t z, const uint16_t* sliceHalf)>;
 
 // Load all .dcm files in `dirPath` as one series. The output's spacing follows
 // PixelSpacing (xy) and the median slice-position delta (z). Returns false if the
@@ -48,5 +56,17 @@ bool loadDicomSeries(const std::string& dirPath, Volume3D& out);
 // float path (loadNifti + loadFromFloatData). Only intensityHalf is
 // populated; out.intensity stays empty.
 bool loadDicomSeriesHalf(const std::string& dirPath, Volume3D& out);
+
+// Y1c-full (2026-07-22) — progressive variant. Same parse pipeline as
+// loadDicomSeriesHalf but instead of accumulating each z slice into
+// out.intensityHalf, hands the slice to `sink` and drops it. metaOut is
+// filled with w/h/d/spacing before the sink starts firing (so the sink
+// can size downstream buffers) and dataMin/Max are updated at return
+// time. out.intensityHalf stays empty. Frees the source DICOM file after
+// its last frame is consumed so the wasm heap never holds both the
+// compressed source AND a full-volume half buffer simultaneously.
+bool loadDicomSeriesProgressive(const std::string& dirPath,
+                                Volume3D& metaOut,
+                                const DicomProgressiveSliceSink& sink);
 
 } // namespace assets

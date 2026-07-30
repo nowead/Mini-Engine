@@ -123,6 +123,25 @@ public:
                           float dataMin, float dataMax,
                           glm::uvec3 atlasGridOverride = glm::uvec3(0));
 
+    // Y1c-full (2026-07-22) -- progressive DICOM load entry. The caller
+    // opens with dimensions from Pass 1 metadata, feeds each z slice via
+    // pushProgressiveSlice (typically from loadDicomSeriesProgressive's
+    // sink), and commits with endProgressiveBuild(dataMin, dataMax) from
+    // the running min/max the DICOM decode tracked. Peak wasm heap during
+    // the load stays at (~66-slice ring + slab staging + GPU atlas +
+    // runtime) instead of Y1f's (full halfData + slab + GPU + runtime),
+    // targeting iPhone Safari 256 MB CT. Static mode only; falls back
+    // to loadFromFloatData / loadFromHalfData for volumes that need
+    // Streaming.
+    BrickedVolume::ProgressiveContext beginProgressiveBuild(
+        uint32_t w, uint32_t h, uint32_t d,
+        float dataMinGuess,
+        glm::uvec3 atlasGridOverride = glm::uvec3(0));
+    void pushProgressiveSlice(BrickedVolume::ProgressiveContext& ctx,
+                              uint32_t z, const uint16_t* sliceHalf);
+    bool endProgressiveBuild(BrickedVolume::ProgressiveContext& ctx,
+                             float dataMinActual, float dataMaxActual);
+
     // Disk paging Step 5.3: build the brick atlas straight from a memory-
     // mapped NIfTI int16 / uint16 source -- no float intermediate, no global
     // half buffer. The mmap region owned by `src` is moved into BrickedVolume

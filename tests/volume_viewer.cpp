@@ -252,23 +252,36 @@ private:
             }
             assets::Volume3D vol;
             if (!loaded) {
-                // Y1c-lite: DICOM path uses half-direct loader; NIfTI keeps
-                // the float path (memory pressure is not the issue on
-                // native, and NIfTI loader doesn't have a half variant).
-                loaded = m_isNifti
-                    ? assets::loadNifti(m_volPath, vol)
-                    : assets::loadDicomSeriesHalf(m_volPath, vol);
-                if (loaded) {
-                    if (!vol.intensityHalf.empty()) {
-                        // Y1e: move so build() can drop before GPU transfer.
-                        m_volume->loadFromHalfData(std::move(vol.intensityHalf),
-                                                    vol.w, vol.h, vol.d,
-                                                    vol.dataMin, vol.dataMax, atlasOverride);
-                    } else {
+                if (m_isNifti) {
+                    loaded = assets::loadNifti(m_volPath, vol);
+                    if (loaded) {
                         m_volume->loadFromFloatData(vol.intensity, vol.w, vol.h, vol.d, atlasOverride);
+                        vw = vol.w; vh = vol.h; vd = vol.d;
+                        sx = vol.spacingX; sy = vol.spacingY; sz = vol.spacingZ;
                     }
-                    vw = vol.w; vh = vol.h; vd = vol.d;
-                    sx = vol.spacingX; sy = vol.spacingY; sz = vol.spacingZ;
+                } else {
+                    // Y1c-full: DICOM streams via progressive API. Native
+                    // parity for the mobile path even though desktop RAM
+                    // isn't the constraint here.
+                    assets::Volume3D meta;
+                    rendering::BrickedVolume::ProgressiveContext ctx{};
+                    bool ctxInited = false;
+                    constexpr float dataMinGuess = -1000.0f;
+                    const bool ok = assets::loadDicomSeriesProgressive(m_volPath, meta,
+                        [&](uint32_t z, const uint16_t* sliceHalf) {
+                            if (!ctxInited) {
+                                ctx = m_volume->beginProgressiveBuild(meta.w, meta.h, meta.d,
+                                                                       dataMinGuess, atlasOverride);
+                                ctxInited = true;
+                            }
+                            if (!ctx.failed) m_volume->pushProgressiveSlice(ctx, z, sliceHalf);
+                        });
+                    if (ok && ctxInited &&
+                        m_volume->endProgressiveBuild(ctx, meta.dataMin, meta.dataMax)) {
+                        loaded = true;
+                        vw = meta.w; vh = meta.h; vd = meta.d;
+                        sx = meta.spacingX; sy = meta.spacingY; sz = meta.spacingZ;
+                    }
                 }
             }
             if (loaded) {
