@@ -27,6 +27,14 @@ Mini-Engine implements it:
 
 ---
 
+## Architecture decisions ([decisions/](decisions/))
+
+| Document | Decision |
+| --- | --- |
+| [ADR-2026-07-22_MOBILE_TARGET_TIERING.md](decisions/ADR-2026-07-22_MOBILE_TARGET_TIERING.md) | Per-tier volume-size targets: iPhone → ~256 MB (chest CT), iPad+ → ~1 GB (full chest/abdomen), desktop → multi-GB. iPhone whole-body CT deferred as future work; disk-paging architecture (Y2/v1-γ) not pursued now. |
+
+---
+
 ## Track plans ([plans/](plans/))
 
 | Document | Track |

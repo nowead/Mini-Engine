@@ -605,27 +605,35 @@ Option C · last-brick shrink · path-trace · empty-space skipping) 은 원 목
   - X3 append (Android/Intel iGPU — 기기 필요)
   - pt_spp4 Safari vs WKWebView 3× 격차 원인 조사
   - iPhone 256 MB 상한 확인 — Y1f 만으로 어디까지 밀리는지 미실측
-- ⏭ **다음 코드 세션 후보**:
-  1. **iPhone 256 MB 시도** — Y1f 만으로 256 MB (count 512) 도 되는지 실측.
-     halfData 128 MB + slab 58 MB + GPU 279 MB + runtime 250 = 715 MB 예상 →
-     아마 실패, 하지만 데이터가 Y1c-full 판단 근거.
-  2. **Y1c-full (intensity buffer 우회)** — Volume3D → BrickedVolume 직접
-     write. Peak 이 volume size 에 (거의) 비례 안 함. 256+ MB 임상 CT mobile
-     가능화. 3~4 세션. 계획서 스텁:
-     [Y1C_FULL_PROGRESSIVE_PLAN.md](plans/Y1C_FULL_PROGRESSIVE_PLAN.md)
-     (Y1f 실측 뒤 세부 확정).
-  3. **Y1g (mmap path chunked staging)** — `buildFromMmappedSource` 도 slab
-     화. 4 GB+ 임상 데이터 지원.
-  4. **Y2 (IndexedDB / OPFS)** — 상한 확장 X, UX. 이후 세션.
+- ⏭ **다음 코드 세션 후보** (ADR-2026-07-22 이후 재정렬):
+  1. **Y1c-full (intensity buffer 우회)** — Volume3D → BrickedVolume 직접
+     write. iPhone 티어를 256 MB 까지 밀어 표준 임상 CT 커버 종료. 3~4 세션.
+     계획서 스텁: [Y1C_FULL_PROGRESSIVE_PLAN.md](plans/Y1C_FULL_PROGRESSIVE_PLAN.md)
+     (Y1f 이후 세부 확정 예정).
+  2. **iPad + 저사양 데스크톱 baseline** — 옵션 1 티어링 (ADR) 실증.
+     512 MB / 1 GB 어느 티어까지 자연 커버되는지 empirical 확인. 1~2 세션.
+  3. **X4 v2 (모바일 티어 policy)** — atlas MB cap · LOD cap · K budget 을
+     티어별로. Y1c-full 이후 UX 폴리시. 1~2 세션.
+  4. **X3 append (Android/Intel iGPU)** — 여전히 기기 대기.
 
-  실질적으로 후보에서 뺀 것:
-  - **Multi-LOD 를 modality 로 채택** — v1-β 시점 LOD 경계 seam · 로딩 churn
-    문제가 미해결. 완화 (v1-γ dual-LOD blend + boundary force-L0) 를 선행해야
-    진짜 후보가 되므로 총 세션 수 대비 fidelity 열등. 500 MB+ 전신 CT 진입 시
-    재고.
-- **원 목표 도달도**: 머리 CT · 얇은 슬라이스 (~128 MB) ✅. **가슴/복부 CT
-  진입 (~192 MB) ✅ (Y1f 실증 2026-07-22)**. 완전 흉부 CT (~256 MB) 및 전신
-  CT (500 MB+) 는 Y1c-full 이상 필요.
+  **명시적으로 유예 · 폐기 (ADR-2026-07-22)**:
+  - **Y2 (IndexedDB / OPFS brick cache)** — iPhone 전신 CT 요구 시 재개.
+    현 티어링 결정에서는 미필요.
+  - **v1-γ LOD 경계 seam 완화** — 위와 같음. 디스크 페이징 아키텍처 진입 시
+    같이 검토.
+  - **iPhone 전신 CT 목표** — 임상 워크플로우 정합성 없음.
+    [ADR-2026-07-22_MOBILE_TARGET_TIERING.md](decisions/ADR-2026-07-22_MOBILE_TARGET_TIERING.md)
+    참조. 향후 사업/포트폴리오 니즈 발생 시 재고.
+  - **Y1g (mmap chunked staging)** — 4 GB+ 데이터 요구 시. 현재 native
+    Step 5 로 충분.
+  - **Multi-LOD 를 modality 로 채택** — v1-γ 선행 필요 + fidelity 열등.
+- **원 목표 도달도 (티어링 관점, ADR-2026-07-22)**:
+  - **iPhone 티어**: 머리 CT · 얇은 슬라이스 · 표준 흉부 CT (~192 MB) ✅ ·
+    표준 임상 CT (~256 MB) 는 Y1c-full 완료 시 도달 예상.
+  - **iPad Pro / 저사양 데스크톱 티어**: 완전 흉부/복부 CT (~512 MB) —
+    empirical 확인 (Desktop Chrome 512 MB 성공, iPad 실측 대기).
+  - **데스크톱 티어**: 전신 CT (500 MB - multi-GB) — native mmap 경로로
+    이미 달성 (Disk paging Step 5).
 
 **다음 세션 진입점**: 이 재정비 섹션. 인프라 세부는 §2 마일스톤 참조. 사용자
 인터페이스 / 빌드 / 조작은 [VIEWERS.md](VIEWERS.md). 코드 진입은
