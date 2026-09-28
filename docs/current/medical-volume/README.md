@@ -2,6 +2,12 @@
 
 Documents for Mini-Engine's medical volume renderer track (2026-05-29~).
 
+Current snapshot: progressive DICOM brick fill and the 2026-07-22 iPhone
+512³ synthetic CT load experiment are implemented and recorded. Start with
+[VIEWERS.md](VIEWERS.md) to run the viewers, or [the project status](../README.md)
+for remaining work. Plans and dated baselines below describe their own revision;
+device support and performance claims have not all been revalidated today.
+
 ---
 
 ## Start here

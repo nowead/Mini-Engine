@@ -3,10 +3,10 @@
 // ============================================================================
 // Application-layer DICOM series loader (NOT engine core).
 //
-// Reads a directory of .dcm files (one slice per file), parses uncompressed
-// CT/MR pixel data, applies RescaleSlope/Intercept (HU for CT), sorts slices
-// by ImagePositionPatient, and assembles them into the generic Volume3D
-// consumed by the engine (loadFromFloatData).
+// Reads a directory of .dcm files (including multi-frame images), decodes
+// supported CT/MR pixel data, applies RescaleSlope/Intercept (HU for CT),
+// sorts slices by ImagePositionPatient, and emits float/half Volume3D data
+// or progressive half slices for the renderer.
 //
 // Supported transfer syntaxes:
 //   - Explicit VR Little Endian ("1.2.840.10008.1.2.1")
@@ -14,6 +14,7 @@
 //   - RLE Lossless ("1.2.840.10008.1.2.5") -- DICOM PackBits, in-tree decoder
 //   - JPEG 2000 Lossless ("1.2.840.10008.1.2.4.90") -- via OpenJPEG
 //   - JPEG 2000 Lossy ("1.2.840.10008.1.2.4.91") -- via OpenJPEG
+//   - JPEG Baseline / Extended / Lossless P14 / SV1 -- via libjpeg-turbo
 //
 // The file meta header (group 0002) is ALWAYS Explicit VR LE per the DICOM
 // standard regardless of the dataset transfer syntax, so the parser switches
@@ -22,7 +23,7 @@
 // becomes encapsulated (one item per frame).
 //
 // Out of scope (return false + LOG_ERROR):
-//   - JPEG Baseline / Lossless / JPEG-LS transfer syntaxes
+//   - JPEG-LS transfer syntaxes
 //   - Big Endian transfer syntaxes
 //   - Pixel data wider than 16-bit
 // ============================================================================
@@ -42,7 +43,8 @@ namespace assets {
 using DicomProgressiveSliceSink = std::function<void(uint32_t z, const uint16_t* sliceHalf)>;
 
 // Load all .dcm files in `dirPath` as one series. The output's spacing follows
-// PixelSpacing (xy) and the median slice-position delta (z). Returns false if the
+// PixelSpacing (xy) and the first sorted pair's delta (z), falling back to
+// SliceThickness when the first pair is coincident. Returns false if the
 // directory is missing / empty / mixed series / unsupported transfer syntax.
 bool loadDicomSeries(const std::string& dirPath, Volume3D& out);
 

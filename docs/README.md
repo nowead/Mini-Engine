@@ -1,69 +1,33 @@
-# Mini-Engine Documentation
+# Mini-Engine 문서
 
-## 구조
+처음 방문했다면 [프로젝트 소개](../README.md) → [아키텍처](ARCHITECTURE.md) → [실행](guides/BUILD_GUIDE.md) 순서로 읽어보세요.
 
-```text
-docs/
-├── README.md          ← 이 파일 (전체 네비게이션)
-├── SUMMARY.md         ← 프로젝트 요약
-├── EVOLUTION.md       ← 프로젝트 전체 흐름 (거시적 히스토리)
-│
-├── current/           ← 현재 진행 중인 작업
-│   └── README.md      ← 진행 상황 인덱스
-│
-├── roadmap/           ← 거시적 방향 / 비전
-│   ├── CAREER_ROADMAP.md
-│   ├── SHOWCASE_ROADMAP.md
-│   └── OPTIMIZATION_AND_HARDWARE_ABSTRACTION.md
-│
-├── guides/            ← 시점 무관 참조 문서
-│   ├── BUILD_GUIDE.md
-│   └── webgpu/
-│       ├── WASM_EMDAWNWEBGPU_MIGRATION.md
-│       ├── features/
-│       └── troubleshooting/
-│
-└── archive/           ← 완료된 과거 작업 기록
-    ├── refactoring/
-    │   ├── monolith-to-layered/
-    │   ├── layered-to-rhi/
-    │   ├── aaa-upgrade/
-    │   ├── webgpu-backend/
-    │   ├── webgpu-deferred/
-    │   └── webgpu-showcase/
-    ├── changelogs/
-    ├── debugging/
-    └── game_logic/
-```
+| 목적 | 문서 |
+| --- | --- |
+| 프로젝트가 무엇인지 파악하기 | [README](../README.md), [현재 구현 요약](SUMMARY.md) |
+| 구조와 설계 판단 살펴보기 | [아키텍처](ARCHITECTURE.md) |
+| 빌드하고 실행하기 | [빌드 가이드](guides/BUILD_GUIDE.md) |
+| CT/MRI 데이터 열기 | [볼륨 뷰어 사용법](current/medical-volume/VIEWERS.md) |
+| 자동 테스트·수동 검증하기 | [테스트 가이드](../tests/README.md) |
+| 이번 정리에서 확인한 결과 보기 | [로컬 검증 기록](VALIDATION.md) |
+| 측정 결과와 한계 확인하기 | [볼륨 트랙 인덱스](current/medical-volume/README.md), [측정 기록](current/medical-volume/baselines/) |
+| 현재 상태와 남은 작업 보기 | [현재 작업](current/README.md) |
+| 데이터·에셋 출처 확인하기 | [의존성·에셋 안내](ASSETS.md) |
 
----
+## 문서의 역할
 
-## 현재 진행 중
+- **README / SUMMARY / ARCHITECTURE / guides**: 현재 사용자가 읽는 소개와 참조 문서입니다.
+- **current/**: 진행 상태, 설계 결정, 계획, 날짜별 측정 기록입니다. 측정 기록의 수치는 해당 장치·빌드·데이터 조건에 한정됩니다.
+- **roadmap/**: 장기 방향과 아이디어입니다. 구현 완료 목록이 아닙니다.
+- **archive/**: 이전 구조, 마이그레이션, 디버깅 이력입니다. 예전 실행 명령과 기능 상태가 남아 있습니다.
 
-→ **[current/README.md](current/README.md)**
+## 더 깊이 읽기
 
-- [ENGINE_ROADMAP.md](current/engine-roadmap/ENGINE_ROADMAP.md) — 엔진 성숙도 관점의 다음 단계 계획서. 첫 작업: glTF 2.0 ingest + PBR 머티리얼 파이프라인(AB 통합, cgltf 채택).
+- [볼륨 렌더링 입문과 코드 연결](current/medical-volume/learning/VOLUME_RENDERING_PRIMER.md)
+- [모바일 장치별 목표 결정](current/medical-volume/decisions/ADR-2026-07-22_MOBILE_TARGET_TIERING.md)
+- [엔진 성숙도 로드맵](current/engine-roadmap/ENGINE_ROADMAP.md)
+- [프로젝트 진화 기록](EVOLUTION.md) — 작성 시점까지의 역사
+- [RHI 기술 가이드](archive/refactoring/layered-to-rhi/RHI_TECHNICAL_GUIDE.md) — 초기 설계의 상세 기록
+- [변경·디버깅 이력](archive/changelogs/)
 
----
-
-## 거시적 방향
-
-- [SHOWCASE_ROADMAP.md](roadmap/SHOWCASE_ROADMAP.md) — 쇼케이스 데모 로드맵
-- [CAREER_ROADMAP.md](roadmap/CAREER_ROADMAP.md) — 커리어 방향
-- [OPTIMIZATION_AND_HARDWARE_ABSTRACTION.md](roadmap/OPTIMIZATION_AND_HARDWARE_ABSTRACTION.md) — 최적화 및 하드웨어 추상화 비전
-
-## 프로젝트 히스토리
-
-- [EVOLUTION.md](EVOLUTION.md) — 프로젝트 전체 진화 과정
-
-## 빌드 & 참조
-
-- [BUILD_GUIDE.md](guides/BUILD_GUIDE.md) — 빌드 가이드
-- [guides/webgpu/](guides/webgpu/) — WebGPU/WASM 관련 가이드
-
-## 과거 작업 기록
-
-- [archive/refactoring/monolith-to-layered/](archive/refactoring/monolith-to-layered/) — 1세대 모노리스 분리
-- [archive/refactoring/layered-to-rhi/](archive/refactoring/layered-to-rhi/) — 2세대 RHI 마이그레이션
-- [archive/refactoring/webgpu-backend/](archive/refactoring/webgpu-backend/) — WebGPU 백엔드 구축
-- [archive/changelogs/](archive/changelogs/) — 변경 이력
+문서 변경 시 현재 기능은 코드와 대조하고, 성능 주장은 조건이 있는 측정 기록으로 연결합니다. 날짜가 있는 과거 기록은 새 측정값으로 덮어쓰지 않습니다.

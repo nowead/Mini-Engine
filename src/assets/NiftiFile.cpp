@@ -176,8 +176,12 @@ bool loadNiftiAsMmappedSource(const std::string& path, MmappedNiftiSource& out) 
         rawMin = *mnIt;
         rawMax = *mxIt;
     }
-    const float dataMin = sclSlope * static_cast<float>(rawMin) + sclInter;
-    const float dataMax = sclSlope * static_cast<float>(rawMax) + sclInter;
+    const float scaledRawMin = sclSlope * static_cast<float>(rawMin) + sclInter;
+    const float scaledRawMax = sclSlope * static_cast<float>(rawMax) + sclInter;
+    // Negative slopes reverse the raw ordering, but physical min/max must
+    // match loadNifti's decoded range (used for window/level defaults).
+    const float dataMin = std::min(scaledRawMin, scaledRawMax);
+    const float dataMax = std::max(scaledRawMin, scaledRawMax);
 
     out.mmap       = std::move(mapping);
     out.dataOffset = dataStart;

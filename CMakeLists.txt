@@ -18,7 +18,10 @@ endif()
 # =============================================================================
 option(RHI_BACKEND_VULKAN "Enable Vulkan RHI backend" ON)
 option(RHI_BACKEND_WEBGPU "Enable WebGPU RHI backend" OFF)
-option(BUILD_TESTS "Build test executables" ON)
+option(BUILD_TESTS "Build interactive demos and the native volume viewer" ON)
+if(NOT EMSCRIPTEN)
+    include(CTest) # BUILD_TESTING controls non-interactive regression tests.
+endif()
 
 if(EMSCRIPTEN)
     set(RHI_BACKEND_WEBGPU ON CACHE BOOL "" FORCE)
@@ -46,15 +49,12 @@ if(NOT EMSCRIPTEN)
     find_package(Stb REQUIRED)
     find_package(tinyobjloader REQUIRED)
     find_package(imgui CONFIG REQUIRED)
-    # OpenJPEG for DICOM JPEG 2000 transfer syntax decoding (volume_viewer only).
-    # WASM build skips this for now -- compressed DICOM in the browser is a
-    # follow-up track (see DICOM_COMPRESSED_PLAN.md). The vcpkg port exposes the
-    # OpenJPEG::openjp2 target via OpenJPEGConfig.cmake.
+    # OpenJPEG for DICOM JPEG 2000 decoding. Native uses vcpkg; the WASM
+    # branch below builds the same decoder through FetchContent.
     find_package(OpenJPEG CONFIG REQUIRED)
     # libjpeg-turbo for DICOM JPEG Baseline / Extended / Lossless transfer
     # syntaxes (DICOM_JPEG_LEGACY_PLAN). vcpkg's `libjpeg-turbo` port exposes
-    # the standard CMake JPEG::JPEG target via FindJPEG. WASM build defers
-    # this to a follow-up track for the same reason as OpenJPEG.
+    # the standard CMake JPEG::JPEG target via FindJPEG. WASM builds from source.
     find_package(JPEG REQUIRED)
 
     # cgltf vcpkg port is header-only and ships no CMake config — exposed via
@@ -834,7 +834,11 @@ else()
         $<$<BOOL:${RHI_BACKEND_WEBGPU}>:RHI_BACKEND_WEBGPU=1>
     )
 
-    set_target_properties(MiniEngine PROPERTIES SUFFIX ".html")
+    # Keep public artifacts beside index.html; OpenJPEG sets a global output
+    # directory for its codec tools that must not redirect our applications.
+    set_target_properties(MiniEngine PROPERTIES
+        SUFFIX ".html"
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 
     # Copy WGSL shaders for WebGPU
     set(MINIENGINE_SHADER_DIR ${CMAKE_CURRENT_BINARY_DIR}/shaders)
@@ -1052,6 +1056,9 @@ endif()
 # =============================================================================
 # Demo/Test Executables (Optional)
 # =============================================================================
+# BrickedVolume owns a MmappedFile even when used by the scene showcase.
+target_sources(MiniEngine PRIVATE src/utils/MmappedFile.cpp)
+
 if(BUILD_TESTS)
     # Helper function for common test configuration
     function(configure_rhi_test TARGET)
@@ -1072,7 +1079,9 @@ if(BUILD_TESTS)
             )
         else()
             target_link_libraries(${TARGET} PRIVATE rhi::factory glm::glm)
-            set_target_properties(${TARGET} PROPERTIES SUFFIX ".html")
+            set_target_properties(${TARGET} PROPERTIES
+                SUFFIX ".html"
+                RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
             target_link_options(${TARGET} PRIVATE
                 "SHELL:--use-port=${EMDAWNWEBGPU_PORT}"
                 "SHELL:-s USE_GLFW=3"
@@ -1092,18 +1101,6 @@ if(BUILD_TESTS)
             )
         endif()
     endfunction()
-
-    # Roadmap D2: ThreadPool correctness test (pure std, native-only, no Vulkan/GLFW)
-    if(NOT EMSCRIPTEN)
-        add_executable(threadpool_test
-            tests/threadpool_test.cpp
-            src/utils/ThreadPool.cpp
-            src/utils/ThreadPool.hpp
-        )
-        target_include_directories(threadpool_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-        find_package(Threads REQUIRED)
-        target_link_libraries(threadpool_test PRIVATE Threads::Threads)
-    endif()
 
     # RHI Smoke Test (interactive, run manually with: make demo-smoke)
     add_executable(rhi_smoke_test
@@ -1434,4 +1431,8 @@ if(BUILD_TESTS)
     message(STATUS "Run with: make pbr_demo && make run OR make demo-dual-light")
 else()
     message(STATUS "Demo executables disabled (BUILD_TESTS=OFF)")
+endif()
+
+if(NOT EMSCRIPTEN AND BUILD_TESTING)
+    add_subdirectory(tests)
 endif()

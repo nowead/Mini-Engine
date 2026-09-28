@@ -1,322 +1,145 @@
 # Mini-Engine
 
-> PBR & GPU-Driven Rendering Engine with Multi-Backend RHI Architecture
+> Learning rendering by implementing techniques and building them into an engine.
 
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
-![Vulkan](https://img.shields.io/badge/Vulkan-1.3-red.svg)
+![Vulkan](https://img.shields.io/badge/Vulkan-Native-red.svg)
 ![WebGPU](https://img.shields.io/badge/WebGPU-WASM-orange.svg)
 ![CMake](https://img.shields.io/badge/CMake-3.28+-green.svg)
-![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Web-lightgrey.svg)
+
+Mini-Engine began with Vulkan tutorial code and has grown into a C++20 rendering engine through a continuing cycle of **learning, implementation, integration, and measurement**.
+
+The purpose of this project is to understand rendering techniques by implementing them, then making them work as part of an evolving engine. Each addition brings questions about resource ownership, pass dependencies, data layout, portability, and performance. The code and development notes document how those questions shaped the engine, including bugs, tradeoffs, and experiments that did not improve performance.
+
+Today, the project includes Vulkan and WebGPU backends, a PBR scene showcase, and CT/MRI volume viewers. These applications put the accumulated rendering features to use and provide new problems to learn from.
+
+[Build Guide](docs/guides/BUILD_GUIDE.md) · [Architecture](docs/ARCHITECTURE.md) · [Volume Viewer](docs/current/medical-volume/VIEWERS.md) · [Tests](tests/README.md) · [Documentation](docs/README.md)
+
+*Detailed guides and development notes are primarily in Korean.*
 
 <p align="center">
-  <img src="docs/images/PBR+IBL.png" width="48%" alt="PBR Material Showcase with IBL" />
-  <img src="docs/images/mini-engine.png" width="48%" alt="GPU-Driven Rendering" />
-</p>
-<p align="center">
-  <em>PBR Material Showcase with HDR IBL (left) &nbsp;|&nbsp; GPU-Driven Rendering with 10K+ Objects (right)</em>
+  <img src="docs/images/PBR+IBL.png" width="48%" alt="PBR material showcase with image-based lighting" />
+  <img src="docs/images/mini-engine.png" width="48%" alt="Multi-object rendering scene in Mini-Engine" />
 </p>
 
----
+*Showcase screenshots from the engine's development. See the [viewer guide](docs/current/medical-volume/VIEWERS.md) for the current volume rendering applications.*
 
 ## Korean Summary
 
-**프로젝트 목표**: PBR 렌더링과 GPU-Driven 최적화를 갖춘 프로덕션 수준의 렌더링 엔진 개발
+Vulkan 튜토리얼에서 출발해 다양한 렌더링 기법을 직접 구현하고, 이를 엔진의 기능으로 통합하며 발전시켜 온 학습 프로젝트입니다. **기법을 이해하고 구현한 뒤, 기존 기능과 함께 동작하도록 구조를 다듬고 검증하는 과정**에 의의를 둡니다. 현재는 Vulkan/WebGPU 공통 RHI 위에 PBR·GPU 기반 렌더링과 CT/MRI 볼륨 시각화까지 확장했으며, 그 과정의 설계 판단·디버깅·성능 측정을 기록하고 있습니다.
 
-**핵심 성과**:
+## From Tutorial to Engine
 
-- **Cook-Torrance PBR**: GGX Distribution, Smith Geometry, Fresnel-Schlick 기반 물리 기반 렌더링
-- **Image Based Lighting (IBL)**: HDR 환경맵 기반 Irradiance/Prefiltered Specular/BRDF LUT
-- **GPU-Driven Rendering**: SSBO 기반 오브젝트 데이터 + Compute Shader Frustum Culling + Indirect Draw
-- **RHI 멀티 백엔드**: Vulkan 1.3 (Desktop) + WebGPU (Web/WASM)
-- **GPU 프로파일링**: vkCmdWriteTimestamp 기반 per-pass GPU 타이밍
-- 10,000+ 오브젝트 실시간 렌더링 지원
+| Step | What I explored | How it became part of the engine |
+| --- | --- | --- |
+| Vulkan foundations | Devices, swapchains, buffers, textures, synchronization, and the render loop | Refactored the tutorial's single application into components with explicit resource ownership |
+| Graphics abstraction | Separating rendering intent from API-specific operations | Introduced an RHI and implemented a WebGPU backend to exercise the same interfaces in the browser |
+| Rendering techniques | PBR, IBL, shadows, deferred rendering, and post-processing | Integrated techniques into shared render passes, material handling, and resource management |
+| Performance and integration | GPU culling, indirect drawing, profiling, glTF assets, and parallel command recording | Added engine facilities and measured their behavior in scenes with interacting features |
+| Volume rendering | Ray marching, scattering, accumulation, denoising, and large-volume storage | Reused the rendering core in CT/MRI viewers, then extended it with brick streaming and progressive uploads |
 
-**현재 기능**: Cook-Torrance PBR, IBL, GPU Frustum Culling, Indirect Draw, Shadow Mapping, GPU Profiling, ImGui UI
+The [architecture evolution record](docs/EVOLUTION.md) follows the earlier refactoring work. The [engine roadmap](docs/current/engine-roadmap/ENGINE_ROADMAP.md), [volume rendering notes](docs/current/medical-volume/README.md), and [debugging changelogs](docs/archive/changelogs/) continue that story.
 
-**상세 문서**: [docs/refactoring/layered-to-rhi/](docs/refactoring/layered-to-rhi/) 폴더 참고
+## Current Features
 
----
+| Area | Implementation | Code entry point |
+| --- | --- | --- |
+| Graphics abstraction | Device, buffer, texture, pipeline, and command encoder interfaces with Vulkan/WebGPU implementations | [RHI](src/rhi/) |
+| Scene rendering | Deferred G-buffer, Cook–Torrance PBR, IBL, shadows, SSAO, Bloom, ACES, FXAA/TAA | [Renderer](src/rendering/Renderer.cpp) |
+| GPU work management | Compute frustum culling, indirect draw, Render Graph, GPU timestamps | [Render Graph](src/rendering/graph/), [shaders](shaders/) |
+| Asset pipeline | glTF 2.0/glb parsing, PBR materials and texture uploads | [AssetImporter](src/assets/AssetImporter.cpp) |
+| Volume rendering | Ray marching, transfer functions, window/level, gradient shading, empty-space skipping | [VolumeRenderer](src/rendering/VolumeRenderer.cpp) |
+| Volumetric scattering | Path tracing, progressive accumulation, A-trous denoising | [Volume shaders](shaders/volume_pathtrace.wgsl) |
+| Large-volume storage | Brick atlas and page table, LRU/LOD streaming, native NIfTI mmap, progressive DICOM upload | [BrickedVolume](src/rendering/BrickedVolume.cpp), [loaders](src/assets/) |
+| Browser viewer | DICOM file/folder selection, touch controls, memory/frame statistics, mobile defaults | [WASM viewer](tests/volume_viewer_wasm.cpp), [HTML UI](tests/volume_viewer_shell.html) |
 
-## Highlights
+The backends share upper-level rendering code, with differences in capabilities and implementation. Bindless textures and parallel shadow command recording are Vulkan-specific. See the [architecture guide](docs/ARCHITECTURE.md) for the backend comparison.
 
-- **Cook-Torrance PBR** — GGX/Smith/Fresnel-Schlick BRDF with metallic/roughness workflow
-- **Image Based Lighting** — HDR environment maps, irradiance convolution, prefiltered specular, BRDF LUT
-- **GPU-Driven Rendering** — SSBO + compute shader frustum culling + indirect draw (100K+ objects)
-- **Multi-Backend RHI** — Vulkan 1.3 (Desktop) + WebGPU (Web/WASM), fully API-agnostic upper layers
-- **Shadow Mapping** — Directional PCF shadows with configurable bias/strength
-- **GPU Profiling** — Per-pass timestamp queries with EMA smoothing
-- **WASM Post-Process Pipeline** — HDR render target (RGBA16Float) → ACES Tonemap → FXAA → swapchain (WebGPU only)
+## Experiments and Lessons
 
----
+Measurements help decide how a technique should fit into the engine. These examples are tied to the configurations in their original records; they are not universal performance guarantees or new measurements from this documentation update.
 
-## Architecture
+| Question | Approach | Recorded outcome |
+| --- | --- | --- |
+| Does parallel command recording help this scene? | Record shadow cascades on workers and measure CPU recording time | No recording-time benefit in the tested instanced scene: recording was not the bottleneck. [Record](docs/current/engine-roadmap/ENGINE_ROADMAP.md) |
+| Can large NIfTI loads avoid full float/half intermediates? | Convert directly from an int16/uint16 mmap source during brick packing | Observed peak working set **6.57 → 2.30 GB** for a 1024³ synthetic volume on Windows 11 / RTX 4070, sampled every four seconds. [Record](docs/current/medical-volume/baselines/BASELINE_2026-06-10_DISK_PAGING_STEP5.md) |
+| Can mobile DICOM loading reduce its memory peak? | Decode slices into a ring buffer and upload completed brick rows through staging slabs | A **512³ synthetic CT volume, equivalent to 256 MiB of dense 16-bit data**, loaded in the recorded iPhone Safari setup. Peak-memory reductions are estimates; device limits vary. [Record](docs/current/medical-volume/baselines/BASELINE_2026-07-22_Y1C_FULL.md) |
+| How much storage does brick padding waste on thin volumes? | Adapt brick shape per axis and shrink the last brick | Atlas overhead was recorded at **approximately 6% or less** relative to dense storage across four public DICOM samples. [Record](docs/current/medical-volume/baselines/BASELINE_2026-07-09_LAST_BRICK_SHRINK.md) |
 
-```text
-┌──────────────────────────────────────────────────────────┐
-│  Application    │  Window (GLFW)  │  Input  │  Main Loop │
-├──────────────────────────────────────────────────────────┤
-│  High-Level (API-Agnostic)                               │
-│  Renderer · ResourceManager · SceneManager · ImGui UI    │
-├──────────────────────────────────────────────────────────┤
-│  RHI (Render Hardware Interface)                         │
-│  Device · Swapchain · Pipeline · Buffer · Texture · ...  │
-│  Pure abstract interfaces — no API-specific code         │
-├──────────────────────────────────────────────────────────┤
-│  Backends                                                │
-│  Vulkan 1.3 (VMA, Timeline Semaphores, Async Compute)    │
-│  WebGPU (Emscripten, SPIR-V → WGSL conversion)           │
-└──────────────────────────────────────────────────────────┘
-```
-
-**Principles**: API abstraction via RHI interfaces / RAII resource management / Dependency injection / Backend selection via `RHIFactory`
-
----
-
-## Features
-
-### Cook-Torrance PBR Pipeline
-
-- **Physically Based Rendering**: GGX Distribution, Smith Geometry, Fresnel-Schlick BRDF
-- **Metallic/Roughness Workflow**: Per-object material parameters via SSBO
-- **ACES Filmic Tone Mapping**: Configurable exposure with sRGB output
-- **Image Based Lighting (IBL)**: HDR environment maps with irradiance convolution, prefiltered specular, and BRDF LUT via compute shaders
-
-### GPU-Driven Rendering
-
-- **SSBO Object Data**: 128-byte `ObjectData` struct (world matrix, AABB, material) replaces per-instance vertex attributes
-- **Compute Shader Frustum Culling**: Per-object AABB vs 6 frustum plane test (workgroup size 64)
-- **Indirect Draw**: Single `drawIndexedIndirect` call renders 100K+ objects
-- **Visible Indices Buffer**: Atomic-based compaction for culled object indirection
-
-### Multi-Backend RHI
-
-**Vulkan Backend (Desktop)**:
-- Vulkan 1.3-based graphics pipeline with VMA integration
-- Memory aliasing, transient resources, lazily allocated memory
-- Timeline semaphores and async compute queue
-- Slang shader compilation to SPIR-V
-
-**WebGPU Backend (Web)**:
-- Browser WebGPU API integration via Emscripten
-- Runtime SPIR-V to WGSL shader conversion
-- Complete RHI parity with Vulkan backend
-
-### Shadow Mapping & GPU Profiling
-
-- **Directional Light Shadows**: Orthographic projection, PCF filtering, configurable bias/strength
-- **Per-Pass Timing**: `vkCmdWriteTimestamp` for Frustum Cull, Shadow Pass, Main Pass
-- **Stress Test UI**: ImGui logarithmic slider (16 → 100K objects) with preset buttons
-
----
-
-## Feature Status
-
-| Feature | Status | Description |
-|---------|--------|-------------|
-| **Cook-Torrance PBR** | Completed | Physically-based rendering with metallic/roughness workflow |
-| **Image Based Lighting** | Completed | HDR environment maps, irradiance convolution, prefiltered specular |
-| **GPU-Driven Rendering** | Completed | SSBO-based per-object data, compute shader culling, indirect draw |
-| **GPU Frustum Culling** | Completed | Compute shader AABB-plane test with atomic indirect draw |
-| **Shadow Mapping** | Completed | Directional light PCF shadows with configurable bias/strength |
-| **GPU Profiling** | Completed | Per-pass timestamp queries (Culling, Shadow, Main Pass) |
-| **Memory Aliasing** | Completed | Transient resources, lazily allocated memory |
-| **Async Compute** | Completed | Timeline semaphores, dedicated compute queue |
-| **Vulkan Backend** | Completed | Full RHI implementation (Desktop) |
-| **WebGPU Backend** | Completed | Full RHI implementation (Web/WASM) |
-| **ImGui UI** | Completed | Real-time parameter adjustment + stress testing |
-| **HDR Tonemap (WASM)** | Completed | RGBA16Float HDR render target + ACES Filmic tonemapping |
-| **FXAA (WASM)** | Completed | Fast Approximate Anti-Aliasing post-process pass (WebGPU) |
-| **Deferred Resize (WASM)** | Completed | Asyncify-safe swapchain resize for browser viewport changes |
-
----
+Public medical-data loading results are documented separately in the [real-data validation record](docs/current/medical-volume/baselines/BASELINE_2026-07-08_REAL_MRI.md). The notes also track unresolved LOD seams, missing bricks, and memory limits.
 
 ## Quick Start
 
-### Prerequisites
+### Run Tests Without a GPU
 
-| Component | Version | Required For |
-|-----------|---------|--------------|
-| Vulkan SDK | 1.3+ (with slangc) | Desktop builds |
-| CMake | 3.28+ | All builds |
-| C++ Compiler | C++20 (GCC 12+, Clang 15+, MSVC 19.30+) | All builds |
-| vcpkg | Latest | Dependency management |
-| Emscripten SDK | 3.1.71+ | Web builds (optional) |
+Requires CMake 3.28+ and a C++20 compiler. This configuration needs no Vulkan SDK, medical dataset, or external test framework.
 
-### Build & Run
-
-```bash
-# Desktop (Vulkan)
-export VCPKG_ROOT=/path/to/vcpkg
-export VULKAN_SDK=/path/to/vulkansdk
-git clone https://github.com/nowead/Mini-Engine.git
-cd Mini-Engine
-make build
-./build/vulkanGLFW
-
-# Web (WebGPU + WASM)
-make setup-emscripten   # one-time Emscripten SDK install
-make wasm
-make serve-wasm         # http://localhost:8000 (Chrome/Edge 113+)
-
-# Demos
-make demo-pbr           # PBR Material Showcase
-make demo-instancing    # GPU Instancing Demo
+```sh
+cmake -S tests -B build-tests -DCMAKE_BUILD_TYPE=Release
+cmake --build build-tests --config Release
+ctest --test-dir build-tests -C Release --output-on-failure
 ```
 
-**Notes**:
-- Desktop development doesn't need Emscripten — only install for web deployment
-- Browser Requirements: Chrome 113+, Edge 113+, or other WebGPU-compatible browsers
+This runs the thread pool and NIfTI/raw loader tests. See the [testing guide](tests/README.md) for DICOM regression tests and manual rendering checks.
 
-### Controls
+### Windows / Vulkan
 
-| Input | Action |
-|-------|--------|
-| Mouse Drag | Rotate camera |
-| Scroll | Zoom in/out |
-| WASD | Move camera |
-| ESC | Exit |
+Requires CMake 3.28+, Ninja, a compiler with C++20 module support, the Vulkan SDK (including `vulkan.cppm` and `glslc`), Python 3, and vcpkg. The local development setup uses Clang 21 with the Visual Studio 2022 toolchain.
 
----
+Set `VCPKG_ROOT` to your vcpkg installation and use a developer terminal with the compiler and SDK configured. The first configure downloads and builds the vcpkg dependencies.
+
+```powershell
+cmake -S . -B build-native -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+cmake --build build-native --target MiniEngine volume_viewer
+.\build-native\MiniEngine.exe
+.\build-native\volume_viewer.exe
+```
+
+The viewer starts with a procedural volume when no input is supplied. To generate and open a small synthetic CT volume:
+
+```powershell
+python scripts/make_synthetic_nii.py build-native/synthetic_ct.nii 96 96 48
+.\build-native\volume_viewer.exe build-native/synthetic_ct.nii
+```
+
+### WebGPU / WebAssembly
+
+The Windows script uses Emscripten at `$env:USERPROFILE\emsdk` by default. SDK setup and Linux/macOS commands are in the [build guide](docs/guides/BUILD_GUIDE.md).
+
+```powershell
+.\scripts\wasm.ps1 build -Target MiniEngine
+.\scripts\wasm.ps1 serve -Target volume_viewer_wasm
+```
+
+Open `http://localhost:8000/volume_viewer_wasm.html` for the volume viewer or `/MiniEngine.html` for the scene showcase. A browser and GPU with WebGPU support are required; use HTTPS when accessing from another device. The initial WASM build downloads dependencies and public DICOM samples.
 
 ## Project Structure
 
 ```text
 src/
-├── main.cpp                # Entry point
-├── Application.cpp/hpp     # Window management, main loop, stress test control
-│
-├── rendering/              # High-Level Rendering (Layer 2)
-│   ├── Renderer.cpp/hpp        # Main renderer: PBR, GPU culling, indirect draw
-│   ├── RendererBridge.cpp/hpp  # RHI device management
-│   ├── ShadowRenderer.cpp/hpp  # Directional shadow mapping with PCF
-│   ├── SkyboxRenderer.cpp/hpp  # HDR skybox rendering
-│   ├── IBLManager.cpp/hpp      # IBL pipeline (irradiance, prefilter, BRDF LUT)
-│   └── InstancedRenderData.hpp # ObjectData struct (128-byte SSBO layout)
-│
-├── rhi/                    # RHI Abstraction Layer (Layer 3)
-│   ├── include/rhi/            # Pure abstract interfaces (15 abstractions)
-│   └── src/RHIFactory.cpp      # Backend factory
-│
-├── rhi-vulkan/             # Vulkan Backend (Layer 4)
-│   └── src/VulkanRHI*.cpp      # 15 Vulkan RHI classes + VMA
-│
-├── rhi-webgpu/             # WebGPU Backend (Layer 4)
-│   └── src/WebGPURHI*.cpp      # 15 WebGPU RHI classes
-│
-├── scene/                  # Scene Management (Layer 2)
-│   ├── SceneManager.cpp/hpp
-│   ├── Mesh.cpp/hpp
-│   └── Camera.cpp/hpp
-│
-├── resources/              # Resource Management (Layer 2)
-│   └── ResourceManager.cpp/hpp
-│
-├── effects/                # Visual Effects (Layer 2)
-│   ├── ParticleSystem.cpp/hpp
-│   └── ParticleRenderer.cpp/hpp
-│
-├── ui/                     # UI System (Layer 2)
-│   ├── ImGuiManager.cpp/hpp
-│   └── ImGuiVulkanBackend.cpp/hpp
-│
-└── utils/                  # Utilities
-    ├── GpuProfiler.cpp/hpp     # Vulkan timestamp-based GPU profiler
-    └── Logger.hpp
-
-shaders/                    # GLSL + WGSL dual shaders
-├── building.{vert,frag}.glsl   # PBR + IBL + SSBO
-├── frustum_cull.comp.glsl      # GPU frustum culling
-├── shadow.{vert,frag}.glsl     # Shadow pass
-├── skybox.{vert,frag}.glsl     # Skybox
-├── equirect_to_cubemap.comp.glsl / irradiance_map / prefilter_env / brdf_lut  # IBL compute
-├── tonemap.{vert,frag}.glsl    # Vulkan ACES tonemap (fullscreen triangle)
-├── tonemap.wgsl                # WASM ACES tonemap + gamma (fullscreen triangle)
-├── fxaa.wgsl                   # WASM FXAA 3.11 anti-aliasing
-└── particle.{vert,frag}.glsl   # Particle effects
+  assets/       glTF, NIfTI, DICOM, and raw loaders
+  rendering/    Scene/volume renderers, brick storage, Render Graph
+  rhi/          Shared interfaces + Vulkan and WebGPU backends
+  scene/        Cameras, meshes, scene management
+  resources/    Texture and resource management
+  ui/           Native ImGui integration
+  utils/        Thread pool, file mapping, profiling
+  wasm/         JavaScript bindings for the showcase
+shaders/        GLSL / WGSL sources
+tests/          Regression tests, interactive demos/viewers, HTML shells
+scripts/        Build, serving, and synthetic-data tools
+docs/           Architecture, guides, decisions, measurements, development notes
 ```
 
----
+## Scope and Ongoing Work
 
-## Dependencies
+- This is an ongoing learning and rendering research project. Its medical viewers are experimental and have not been validated for clinical diagnosis or as a complete DICOM/PACS implementation.
+- DICOM support focuses on single-series, 16-bit grayscale CT/MR. JPEG-LS, big-endian data, and general patient-coordinate reconstruction remain outside the supported scope. NIfTI supports little-endian, single-file `.nii`; `.nii.gz` is not read directly.
+- Progressive DICOM upload currently uses the **Static atlas path**. Streaming/LOD uses a separate path and can exhibit missing bricks or seams.
+- Further work includes measurements on iPad and integrated GPUs, mobile memory policies, and large-volume paging in the browser. See [current work and roadmaps](docs/current/README.md).
 
-### Desktop Build (vcpkg)
+## Dependencies and Assets
 
-- **GLFW** — Window and input management
-- **GLM** — Mathematics library (matrices, vectors)
-- **stb** — Image loading
-- **tinyobjloader** — OBJ file parsing
-- **ImGui** — UI system
-- **Vulkan SDK** — Vulkan headers and validation layers
-- **VulkanMemoryAllocator** — GPU memory management
+The project uses GLFW, GLM, Vulkan Memory Allocator, Dear ImGui, cgltf, stb, tinyobjloader, OpenJPEG, and libjpeg-turbo. Native dependencies are listed in [vcpkg.json](vcpkg.json); WASM dependencies are configured in [CMakeLists.txt](CMakeLists.txt).
 
-### Web Build (Emscripten)
-
-- **Emscripten SDK** — WebAssembly compiler toolchain
-- **Browser WebGPU API** — Native browser GPU access (Chrome 113+, Edge 113+)
-
-```bash
-cmake --preset linux-default  # auto-installs vcpkg deps
-make setup-emscripten         # auto-installs Emscripten SDK
-```
-
----
-
-## Documentation
-
-| Document | Description |
-|----------|-------------|
-| [docs/README.md](docs/README.md) | Documentation hub |
-| [docs/SUMMARY.md](docs/SUMMARY.md) | Project overview and backend status |
-| [RHI Architecture](docs/refactoring/layered-to-rhi/ARCHITECTURE.md) | Complete 4-layer architecture guide |
-| [RHI API Reference](docs/refactoring/layered-to-rhi/RHI_TECHNICAL_GUIDE.md) | RHI technical guide |
-| [WebGPU Backend](docs/refactoring/webgpu-backend/SUMMARY.md) | WebGPU implementation summary |
-| [RHI Migration](docs/refactoring/layered-to-rhi/RHI_MIGRATION_PRD.md) | Complete migration plan and progress |
-| [Troubleshooting](docs/TROUBLESHOOTING.md) | Common issues & fixes |
-
----
-
-## Development
-
-### Build System (Makefile)
-
-```bash
-# Desktop builds
-make build              # Build desktop version (Vulkan)
-make clean              # Clean build artifacts
-
-# Web builds
-make setup-emscripten   # One-click Emscripten SDK setup
-make wasm               # Build WebAssembly version
-make serve-wasm         # Serve WASM locally (port 8000)
-make clean-wasm         # Clean WASM build artifacts
-
-# Demos
-make demo-pbr           # PBR Material Showcase
-make demo-instancing    # GPU Instancing Demo
-
-# Utilities
-make help               # Show all available targets
-```
-
-### Development History
-
-- **Phase 1-8**: RHI architecture design, implementation, and legacy cleanup (100% RHI-native)
-- **Phase 9**: WebGPU backend — 15 RHI classes, Emscripten WASM, full web deployment
-- **Phase 10**: PBR pipeline — Cook-Torrance BRDF, IBL (irradiance/prefilter/BRDF LUT), HDR environment maps
-- **Phase 11**: GPU-Driven rendering — SSBO, compute shader frustum culling, indirect draw (100K+ objects)
-- **Phase 12**: Memory aliasing (transient resources, lazy allocation), async compute (timeline semaphores)
-- **Phase 13**: GPU profiling (`vkCmdWriteTimestamp`), stress test UI, documentation
-- **Phase 14**: WASM post-process pipeline — HDR render target (RGBA16Float) → ACES Tonemap → FXAA → swapchain; deferred resize for Asyncify safety
-
----
-
-## License
-
-This project is created for educational purposes.
-Free to use for learning — please provide attribution when using.
-
----
-
-**PBR & GPU-Driven Rendering Engine — Vulkan 1.3 + WebGPU + Modern C++20**
-
-[Back to Top](#mini-engine)
+A project-wide distribution license has not yet been added. Sources and attribution status for external libraries, models, environment maps, and sample data are documented in [Dependencies and Assets](docs/ASSETS.md).

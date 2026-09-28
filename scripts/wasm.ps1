@@ -52,7 +52,7 @@ function Invoke-Emsdk([string]$CmdArgs) {
     }
 
     # Write a temporary batch file — avoids PowerShell→cmd quote escaping issues.
-    $tmpBat = [System.IO.Path]::GetTempFileName() -replace '\.tmp$', '.bat'
+    $tmpBat = Join-Path ([System.IO.Path]::GetTempPath()) ("mini-engine-" + [guid]::NewGuid().ToString('N') + '.bat')
     try {
         $nmakeDir = Find-NMakeDir
         $lines = [System.Collections.Generic.List[string]]::new()
@@ -81,7 +81,10 @@ function Invoke-Emsdk([string]$CmdArgs) {
             ($lines -join "`r`n"),
             [System.Text.Encoding]::ASCII
         )
-        cmd /c $tmpBat
+        # Merge stderr inside cmd: Windows PowerShell otherwise converts normal
+        # CMake/compiler warnings into terminating NativeCommandError records
+        # under ErrorActionPreference=Stop. cmd still preserves the build exit code.
+        cmd /d /c "call `"$tmpBat`" 2>&1"
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     } finally {
         Remove-Item $tmpBat -ErrorAction SilentlyContinue

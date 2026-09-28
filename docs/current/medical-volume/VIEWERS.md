@@ -1,313 +1,83 @@
-# Mini-Engine — 의료 볼륨 뷰어 사용 가이드
+# CT/MRI 볼륨 뷰어 사용법
 
-**최신화**: 2026-06-02 (M3-3 v0 + M4 v1 반영)
+두 뷰어는 `VolumeRenderer`와 `BrickedVolume`, 대응하는 GLSL/WGSL 셰이더를 공유합니다. Native는 ImGui, 브라우저는 HTML 패널을 사용합니다. 장면 쇼케이스인 `MiniEngine`과 별도 실행 타깃입니다.
 
-의료 볼륨 트랙의 산출물 두 실행파일에 대한 조작·기능·기술 레퍼런스. 코드는
-[`tests/volume_viewer.cpp`](../../../tests/volume_viewer.cpp) (네이티브),
-[`tests/volume_viewer_wasm.cpp`](../../../tests/volume_viewer_wasm.cpp) (브라우저).
+## 빌드와 첫 실행
 
----
-
-## 1. 두 실행파일
-
-| 실행파일 | 백엔드 | 위치 | UI |
-| --- | --- | --- | --- |
-| `volume_viewer.exe` | Vulkan (네이티브) | `build-windows\volume_viewer.exe` | ImGui 패널 |
-| `volume_viewer_wasm.html` | WebGPU (브라우저) | `build_wasm\volume_viewer_wasm.html` | HTML 컨트롤 패널 |
-
-두 실행파일은 같은 엔진 코어(`VolumeRenderer` + 같은 셰이더 세트의 GLSL/WGSL
-쌍)를 공유한다. 입력 데이터 · 렌더 결과 · 컨트롤이 1:1 대응되도록 설계했다.
-
-참고: 메인 `MiniEngine.exe` / `MiniEngine.html`은 deferred + PBR + IBL 쇼케이스로
-볼륨은 부수적으로만 합성한다. **임상 볼륨 작업은 이 두 뷰어가 진입점**이다.
-
----
-
-## 2. 빌드 · 실행
-
-### 네이티브 (Windows / Vulkan)
+도구 설치·최초 configure는 [빌드 가이드](../../guides/BUILD_GUIDE.md)를 참고하세요. 다음 native 예시는 Release로 구성한 `build-native`를 사용합니다.
 
 ```powershell
-cmake --build build-windows --target volume_viewer --config Release
-# 산출물: build-windows\volume_viewer.exe
+cmake --build build-native --target volume_viewer
+.\build-native\volume_viewer.exe
 ```
 
-실행 예:
+인자 없이 실행하면 절차적 볼륨을 보여줍니다. 합성 CT, NIfTI 파일, DICOM 시리즈 또는 raw 파일을 열 수 있습니다.
 
 ```powershell
-# 인자 없음 → 절차적 합성 볼륨 128³로 부팅
-.\build-windows\volume_viewer.exe
-
-# NIfTI 한 파일 (헤더에 dims + spacing 포함)
-.\build-windows\volume_viewer.exe path\to\study.nii
-
-# DICOM 시리즈 (디렉토리 = 한 시리즈, 슬라이스당 .dcm 하나)
-.\build-windows\volume_viewer.exe path\to\dicom_dir
-
-# raw headerless (W H D bytesPerVoxel)
-.\build-windows\volume_viewer.exe vol.raw 256 256 128 2
+python scripts/make_synthetic_nii.py build-native/synthetic_ct.nii 96 96 48
+.\build-native\volume_viewer.exe build-native/synthetic_ct.nii
+.\build-native\volume_viewer.exe path\to\series
+.\build-native\volume_viewer.exe path\to\volume.raw 256 256 128 2
 ```
 
-### WASM (브라우저 / WebGPU)
+브라우저 버전은 타깃을 명시합니다.
 
 ```powershell
-$env:EMSDK_QUIET="1"
-.\scripts\wasm.ps1 build
-# 산출물: build_wasm\volume_viewer_wasm.{html,js,wasm,data} + index.html (랜딩)
-
-# CMakeLists.txt를 건드렸다면 캐시 무효화 필요 (CLAUDE.md §7 함정)
-Remove-Item -Recurse -Force build_wasm
-.\scripts\wasm.ps1 build
+.\scripts\wasm.ps1 serve -Target volume_viewer_wasm
 ```
 
-서빙:
+`http://localhost:8000/volume_viewer_wasm.html`로 접속합니다. 현재 빌드에는 공개 MR, JPEG 2000 CT, JPEG Lossless 샘플과 합성 NIfTI가 포함됩니다. 기본 로드는 공개 MR 샘플을 우선 시도합니다.
 
-```powershell
-make serve-wasm   # scripts\serve_nocache.py 사용 (브라우저 캐시 우회)
-```
+## 입력 데이터
 
-브라우저에서 `index.html` 또는 직접 `volume_viewer_wasm.html`로 접근. 데이터는
-빌드 시 `--preload-file`로 패키징된 합성 NIfTI(`/synthetic_ct.nii`)가 자동 로드.
-
----
-
-## 3. 입력 데이터
-
-| 포맷 | 네이티브 | WASM | 비고 |
-| --- | --- | --- | --- |
-| **NIfTI (.nii)** | ✅ (mmap) | ✅ (preload 1개) | 헤더에 dims·spacing·intensity 단위. 우선 권장 포맷. 네이티브는 `utils::MmappedFile`로 본문을 OS 페이지 캐시에 위임 (큰 파일 ingest의 transient 버퍼 제거) |
-| **DICOM 시리즈 (디렉토리)** | ✅ | ✅ (preload, JPEG 2000 + JPEG Lossless sample) | int16 CT/MR. Transfer syntax: Explicit VR LE, Implicit VR LE(임상 PACS 기본), RLE Lossless, JPEG 2000 Lossless/Lossy(openjpeg), **JPEG Baseline/Extended/Lossless P14·SV1(libjpeg-turbo, 네이티브 + WASM)**. 실 임상 코퍼스 검증: HU CT, 고해상도 MR, multi-frame MR, enhanced CT(Explicit) · pydicom RT(Implicit dispatch) · pydicom 693_J2KI(JPEG 2000 lossy, **네이티브 + WASM 브라우저**) · pydicom MR_small_RLE(비트 동일성) · pydicom JPGExtended(12-bit DCT, precision=12) · pydicom JPEG-LL(16-bit lossless, precision=16, 단일-frame multi-fragment 병합, **네이티브 + WASM 브라우저 검증**). 8-bit JPEG(베이스라인/lossless SV1) 디코더는 통과하지만 엔진의 `bitsAllocated != 16` 정책에서 차단됨(별개 워크). WASM 빌드는 OpenJPEG + libjpeg-turbo 둘 다 FetchContent로 컴파일 + 693_J2KI / JPEG-LL을 자동 다운로드 + preload |
-| **raw headerless** | ✅ | ❌ | dims·bpv를 CLI로 명시 |
-| **절차적 합성** | ✅ (인자 없음) | ❌ | 128³ 노이즈 볼륨, 첫 부팅용 |
-
-### 합성 데이터 생성
-
-테스트용 NIfTI / DICOM 생성기 (CT/MR 둘 다, sphere/brain phantom):
-
-```powershell
-# CT 합성 sphere (기본)
-python scripts\make_synthetic_nii.py    out\synthetic_ct.nii  96 96 48
-python scripts\make_synthetic_dicom.py  out\dicom_series\     96 96 48
-
-# MR 합성 sphere (T1 강도값)
-python scripts\make_synthetic_nii.py    out\synthetic_mr.nii  96 96 48 --modality mr
-
-# MR 뇌 phantom (4-shell: 외부 CSF / GM / WM / 중심 CSF) — T1 preset으로 보기 좋음
-python scripts\make_synthetic_nii.py    out\mr_brain.nii      128 128 128 --modality mr --shape brain
-```
-
-공개 임상 코퍼스 다운로드:
-
-```powershell
-python scripts\fetch_sample_ct.py out\dicom_ct_corpus   # pydicom CT 슬라이스
-python scripts\fetch_sample_mr.py out\dicom_mr_corpus   # pydicom MR_small.dcm
-```
-
-### Transfer function preset
-
-| Preset | 적합 데이터 | 효과 |
+| 입력 | Native | 브라우저 |
 | --- | --- | --- |
-| Custom | — | 2색 그래디언트, UI 슬라이더 |
-| Cloud | 안개 / 절차적 노이즈 | 부드러운 흰색 |
-| Fire | 폭발 / 에너지 효과 | 검정→빨강→흰 |
-| CT - Bone | CT (뼈 윈도우) | 뼈 강조 |
-| CT - Soft Tissue | CT (연조직 윈도우) | 장기·근육 |
-| **MR - T1** | MR T1-weighted | WM 밝게, CSF 어둡게 (전형 brain T1) |
-| **MR - T2** | MR T2-weighted | 물(CSF) 밝게, WM 어둡게 |
+| NIfTI-1 `.nii` | CLI 파일 경로. int16/uint16 mmap streaming 경로와 일반 decode fallback | 빌드에 포함한 합성 샘플 |
+| DICOM | 한 시리즈의 `.dcm` 파일이 든 디렉토리 | `Pick DICOM files` / `Pick DICOM folder`, 번들 샘플, 같은 origin의 시리즈 fetch |
+| raw | CLI에서 너비·높이·깊이·bytesPerVoxel(1/2) 지정 | 별도 업로드 UI 없음 |
+| 절차적 볼륨 | 인자 없는 기본 화면 | 번들 샘플 중심 |
 
-MR 데이터 로드 시 `MR - T1` 또는 `MR - T2` 전환으로 즉시 임상 콘트라스트 표시.
-Window center/width는 데이터 범위 자동 감지(데이터 min/max).
+DICOM은 단일 시리즈의 16-bit grayscale CT/MR 중심입니다. Explicit/Implicit VR LE, RLE, JPEG 2000, JPEG Baseline/Extended/Lossless P14·SV1 디코드 경로가 있습니다. JPEG 디코더의 8-bit 처리 능력과 로더의 `BitsAllocated == 16` 입력 제한은 별개입니다. JPEG-LS와 big-endian은 지원하지 않습니다.
 
----
+NIfTI는 little-endian 단일 파일의 uint8/int8/int16/uint16/int32/uint32/float32를 읽습니다. `.nii.gz`, `.hdr/.img`는 직접 지원하지 않습니다. 현재 spacing과 제한된 슬라이스 정렬을 사용하므로 임의의 oblique orientation·환자 좌표를 완전히 재구성하는 뷰어로 간주하면 안 됩니다.
 
-## 4. 조작
+## 조작과 화면 확인
 
-### 마우스
-
-| 입력 | 동작 |
+| 입력/패널 | 동작 |
 | --- | --- |
-| 좌클릭 드래그 | 카메라 궤도 회전 (orbit) |
-| 휠 스크롤 | 줌 (camera distance) |
+| 왼쪽 드래그 / 모바일 한 손가락 드래그 | 카메라 회전 |
+| 휠 / 모바일 pinch | 확대·축소 |
+| Transfer function | Custom, Cloud, Fire, CT Bone/Soft Tissue, MR T1/T2 |
+| Window / level | 표시할 강도 구간 조절. CT의 HU와 MR의 신호 강도는 구분 |
+| Gradient shading / soft shadows | 볼륨 음영 설정. 추가 샘플링 비용 발생 |
+| Lambert / Path-traced | 빠른 ray march와 산란 기반 path trace 전환 |
+| SPP / anisotropy / bounces | Path-trace 품질·산란 설정 |
+| A-trous / accumulation cap / reset | 공간 필터와 누적 제어 |
+| Stats / Copy stats (브라우저) | 차원, atlas 메모리, 모드, CPU frame time 등의 기록 |
 
-ImGui / HTML 패널 위에서는 호버 시 자동으로 카메라 입력이 차단된다.
+정지한 카메라에서 PT 결과가 누적됩니다. 카메라·window·preset·렌더 모드 등의 변경은 누적을 초기화합니다. 모바일은 장치/브라우저 분류에 따라 기본 품질 설정이 낮아질 수 있습니다.
 
-### 컨트롤 패널 (양 뷰어 공통)
+## 재현용 데이터
 
-| 그룹 | 컨트롤 | 단위 / 범위 | 의미 |
-| --- | --- | --- | --- |
-| **데이터** | TF preset 콤보 | 5종: Custom / Cloud / Fire / CT-Bone / CT-Soft Tissue | 밀도→(rgb,α) LUT. CT-Bone이 기본 |
-| **Window / Level** | Full / Bone / Soft / Lung 버튼 | 임상 프리셋 | HU 윈도우 즉시 설정 (center/width) |
-| | Win center | HU (데이터 범위) | 윈도우 중심값 |
-| | Win width | HU | 윈도우 폭. 좁을수록 콘트라스트↑ |
-| **Transfer function** | Density | 0~5 | 밀도 스케일 (불투명도에 곱) |
-| | Extinction | 0.1~30 | Beer-Lambert 감쇠 계수 |
-| | Threshold | 0~0.5 | 이 밀도 미만은 완전 투명 (배경 컷오프) |
-| | Color mix (Custom 전용) | 0~5 | 저↔고밀도 색 보간 곡선 |
-| | Low / High color (Custom 전용) | RGB | Custom TF 양 끝 색 |
-| **Shading** | Gradient shading 토글 | on/off | 밀도 기울기 = 법선, Lambert 음영 (M2-1) |
-| | Ambient / Diffuse | 0~1 / 0~1.5 | 음영 광량 |
-| | Soft shadows 토글 | on/off | 광원 방향 보조 레이 (M2-2). 비용 큼 |
-| | Shadow strength | 0~4 | 그림자 감쇠 강도 |
-| **Render mode (M4)** | Mode 콤보 | Lambert / Path-traced | 라이팅 방식 |
-| | SPP (PT 전용) | 1~32 | 프레임당 sample-per-pixel |
-| | Aniso g (PT 전용) | -0.9~0.9 | Henyey-Greenstein 위상함수 (>0=전방산란) |
-| | Bounces (PT 전용) | 0~4 | 최대 산란 횟수 |
-| | A-trous denoise (PT 전용) | on/off | 5x5 cross-bilateral spatial filter (M4 v2 P2.2) |
-| **Performance** | Empty-space skip 토글 | on/off | 컴퓨트 occupancy 그리드 활용 (M3-1) |
-| | FPS 표시 (네이티브만) | — | 1초 평균 |
-
-### Path-trace 모드의 누적 (M4 v1)
-
-PT 모드 진입 시 자동으로 progressive 누적이 시작된다. **카메라 정지** 상태에서
-프레임이 쌓일수록 노이즈가 사라진다. 다음 입력이 들어오면 누적이 자동 reset
-된다:
-
-- 카메라 회전 / 줌 (matrix 비교)
-- Window center · width · TF preset · 렌더 모드 변경
-- SPP · anisotropy · bounces 변경
-- 화면 리사이즈 (재시작)
-
----
-
-## 5. 구현된 기능 ↔ 마일스톤 대응
-
-| 기능 | 마일스톤 | 출처 |
-| --- | --- | --- |
-| 16비트 강도 저장(R16Float) + Hounsfield 보존 | M1 | `loadFromFloatData` |
-| Window / level 슬라이더 + 임상 4 프리셋 | M1 | UBO `window` |
-| NIfTI 로더 + 물리 spacing 비율 (mmap 본문) | M1 / Disk paging | `assets::loadNifti` + `utils::MmappedFile` |
-| DICOM Explicit VR LE 로더(NumberOfFrames + 중첩 SQ skip) | M1 | `assets::loadDicomSeries` |
-| **DICOM Implicit VR LE (임상 PACS 기본)** | DICOM Implicit VR | `assets::loadDicomSeries` + tag VR dictionary |
-| **DICOM RLE Lossless + JPEG 2000 (lossless/lossy)** | DICOM compressed | `assets::loadDicomSeries` + OpenJPEG vcpkg |
-| **DICOM JPEG Baseline/Extended/Lossless P14·SV1 (네이티브 + WASM)** | DICOM compressed | `assets::loadDicomSeries` + libjpeg-turbo (vcpkg 네이티브 / FetchContent WASM) |
-| Gradient 음영 (Lambert) | M2-1 | `volume_march`의 `ubo.light.w` |
-| 볼류메트릭 소프트 섀도우 | M2-2 | `volume_march`의 `ubo.shadow` |
-| 컴퓨트 occupancy 그리드 + empty-space skip | M3-1 | `volume_occupancy.comp` |
-| **Brick atlas + page table 간접 참조** | **M3-3 v0** | `BrickedVolume` |
-| **LRU streaming + memory-budget atlas auto-size** | **M3-3 v1-α** | `BrickedVolume::updateStreaming` |
-| **Multi-LOD brick + per-LOD atlas + 셰이더 LOD 디코드** | **M3-3 v1-β** | `BrickedVolume` per-LOD slot + `sampleVolume` LOD 분기 |
-| **On-the-fly box-filter mip (disk paging Step 3)** | M3-3 v1-β / Disk paging | `packBrickToStaging` lod 파라미터 |
-| Path-traced 볼륨 산란 (Woodcock + HG + NEE) | M4 v0 | `volume_pathtrace` |
-| **Progressive 누적 (ping-pong, 자동 reset)** | **M4 v1** | `volume_pathtrace_display` + ping-pong 텍스처 |
-| **Path-trace 환경광 IBL (miss-ray top-bottom 그래디언트 sky)** | **M4 v2 P1** | `VolumeUBO::envTop/envBot` + `sampleEnvironment` |
-| **A-trous spatial denoiser (5x5 cross-bilateral, color guide)** | **M4 v2 P2.2** | `volume_pathtrace_denoise` |
-
----
-
-## 6. 기술 스택 요약
-
-### 엔진 측
-
-- **언어**: C++20 (Concepts · Modules 부분 활용 · smart pointer 소유권)
-- **RHI 추상화**: `src/rhi/include/rhi/` — 한 인터페이스, 두 백엔드 (Vulkan +
-  WebGPU). 모든 그래픽 호출이 RHI를 통과.
-- **데이터 경로**:
-  - NIfTI: `utils::MmappedFile`로 본문 mmap → 헤더만 인터프리트
-  - DICOM: `assets::loadDicomSeries` — Explicit/Implicit VR LE dispatch +
-    RLE/JPEG 2000/JPEG Baseline·Extended·Lossless 디코드 → 직접
-    uncompressed pixel layout
-  - 둘 다 → `Volume3D{intensity, w, h, d, spacing*}` 공용 구조체
-  - → `VolumeRenderer::loadFromFloatData()` → R16Float 변환
-  - → `BrickedVolume::build()` — 빈 brick 제거 + 4개 atlas (L0..L3) +
-    page table((lod<<30)|slot 인코드) 업로드
-  - Streaming: 매 프레임 `updateStreaming`이 거리-임계 기반 LOD selection +
-    LOD fallback + K=64 brick CPU 박스 필터 pack
-  - → 셰이더가 `sampleVolume(uvw)` 헬퍼로 page-lookup → 적절 LOD atlas 샘플
-
-### 셰이더 세트 (양 백엔드 쌍)
-
-| 셰이더 | GLSL (Vulkan) | WGSL (WebGPU) |
-| --- | --- | --- |
-| 레이마칭 | `volume_march.frag.glsl` | `volume_march.wgsl` |
-| Path tracer | `volume_pathtrace.frag.glsl` | `volume_pathtrace.wgsl` |
-| PT display | `volume_pathtrace_display.frag.glsl` | `volume_pathtrace_display.wgsl` |
-| PT denoise (A-trous) | `volume_pathtrace_denoise.frag.glsl` | `volume_pathtrace_denoise.wgsl` |
-| Occupancy 컴퓨트 | `volume_occupancy.comp.glsl` | `volume_occupancy.comp.wgsl` |
-
-각 쌍은 같은 UBO 레이아웃과 의미를 공유 (CLAUDE.md §8: 두 사본 항상 동기화).
-
-### Brick atlas 핵심 수치 (M3-3 v0 + v1-α)
-
-- Brick size: 64³ interior + 1-voxel halo 양면 = 66³ stored
-- **atlas 크기 자동 산정 (v1-α)**: `axisGuess = ceil(cbrt(nonEmpty))` 시작점,
-  pageGrid axis별 clamp, `kAutoAtlasBudgetBytes = 512MB` 안에 맞도록 longest
-  axis shrink. 사용자가 `--atlas-cap N`으로 명시 override 가능
-- Page table: `u32` per virtual brick, `0xFFFFFFFF` = "air" (sentinel)
-- 압축률 예: 1024³ default (304 non-empty) → atlas (7,7,7) = 343 slots = 188MB
-  (1 GB → 81.6% 절감)
-
-### 모드: Static vs Streaming (v1-α)
-
-| 케이스 | 모드 결정 | 동작 |
-| --- | --- | --- |
-| nonEmpty ≤ atlas slots | **Static** | 로드 시 atlas 통째 packing, 매 프레임 무비용 |
-| nonEmpty > atlas slots | **Streaming** | atlas 비어있게 시작 + WARN 로그, 매 프레임 visible brick K=8개씩 paging |
-
-Streaming 모드 진입 시 콘솔에 권장 atlasGrid + 메모리 추정 WARN 출력 — visible
-set이 atlas 초과하면 시각 hole 발생함을 안내.
-
-### Streaming 동작 (v1-α)
-
-매 프레임 viewer가 `updateBrickStreaming(view, proj, frameIdx)` 호출:
-
-1. CPU frustum culling (page grid 단위) → visible brick list
-2. visible 중 resident인 slot 의 `lastFrameUsed` bump
-3. visible 중 missing 최대 K=8개 → empty slot 또는 LRU evict로 자리 확보 →
-   CPU에서 brick 추출 후 `copyBufferToTexture`
-4. page table buffer push (전체 mirror)
-
-**핵심 정책**: 같은 프레임에 bumped된 slot (현재 보고 있는 brick)은 **절대
-evict하지 않음**. 가시 brick 보호로 churn 방지.
-
-### CLI 플래그: `--atlas-cap N`
-
-`(N, N, N)` 으로 atlasGrid 강제. 주 용도:
-
-- Streaming 동작 stress test (default volume에서 streaming 트리거)
-- 메모리 한계 환경에서 explicit 사이즈 설정
-- 권장 — 일반 사용에서는 auto-size 신뢰
-
-예:
+NIfTI 생성기는 Python 표준 라이브러리만 사용합니다.
 
 ```powershell
-.\volume_viewer.exe test_1024.nii --atlas-cap 2   # 8 slots = 4.4 MB, Streaming
-.\volume_viewer.exe test_1024.nii --atlas-cap 14  # 2744 slots, dense 1024³를 Static으로
+python scripts/make_synthetic_nii.py build-native/mr_brain.nii 128 128 128 --modality mr --shape brain
 ```
 
-### Path tracer (M4)
+DICOM 생성기는 `numpy`, `pydicom`이 설치된 환경에서 사용합니다. 작은 합성 시리즈로 먼저 확인하세요.
 
-- Woodcock(delta) free-flight 트래킹
-- Henyey-Greenstein 위상함수 (anisotropy g 슬라이더)
-- 단일 광원 next-event estimation (NEE)
-- v1 누적: RGBA16Float ping-pong 텍스처, running mean `(prev*N + cur)/(N+1)`,
-  Reinhard tonemap은 두 번째 패스 (평균 이후, **non-linear는 반드시 평균 뒤**)
+```powershell
+python scripts/make_synthetic_dicom.py build_wasm/synth_ct 96 96 48
+```
 
-### 외부 의존
+서버 fetch를 이용하려면 `build_wasm`을 서버의 루트로 서빙하고 패널의 경로·파일 수를 생성한 시리즈와 맞춥니다. 모바일 원격 접속은 HTTPS 환경이 필요합니다. 공개 샘플 모음은 `python scripts/fetch_test_dicom.py`로 준비할 수 있으며 이 명령은 네트워크를 사용합니다.
 
-- `glm` (수학)
-- `glfw` (창 + 입력, 네이티브 + Emscripten 양쪽)
-- `vk-bootstrap` + `vulkan-hpp` (Vulkan 네이티브)
-- `emdawnwebgpu` (WebGPU, Emscripten)
-- `Dear ImGui` (네이티브 패널만)
-- `stb_image` (텍스처 디코딩)
-- `cgltf` (glTF, 메인 쇼케이스용)
+## 메모리 모드와 한계
 
----
+- **Static**: atlas에 전체 데이터를 배치합니다. Progressive DICOM은 이 경로에서 슬라이스 ring buffer와 staging slab을 사용해 전체 중간 버퍼를 줄입니다.
+- **Streaming**: atlas 예산과 LRU/LOD에 따라 일부 브릭을 업로드합니다. Native의 `--atlas-cap N`은 작은 예산으로 동작을 관찰하는 옵션입니다. DICOM progressive Static과 같은 메모리 특성을 기대하면 안 됩니다.
+- LOD seam·stale LOD·missing brick은 남아 있는 과제입니다. PT 화면이 보인다는 사실만으로 임의 데이터에 대한 진단 정확성이 검증되지는 않습니다.
+- HUD의 atlas 값은 GPU 저장소 지표이고 CPU frame time은 end-to-end GPU 시간이나 FPS와 같지 않습니다. WASM heap·브라우저 프로세스 메모리도 따로 측정해야 합니다.
 
-## 7. 자주 만나는 함정 (CLAUDE.md §9 발췌)
-
-| 증상 | 원인 | 해결 |
-| --- | --- | --- |
-| WASM 빌드가 몇 초 만에 끝나고 변경이 반영 안 됨 | `wasm.ps1`이 CMake 캐시 재사용 | `Remove-Item -Recurse -Force build_wasm` 후 재빌드 |
-| WASM 콘솔 `Cannot have multiple async operations in flight` | ASYNCIFY 재진입 (JS→wasm 호출이 emscripten_sleep 중 들어옴) | `Module._wasmBusy` 게이트 필요. 기존 path들은 이미 처리됨 |
-| 1×1 텍스처 업로드가 WebGPU validation 실패 | bytesPerRow 256정렬 미준수 | 모든 row를 256B 배수로 패딩 (Dawn은 1×1에도 강제) |
-| `BufferTextureCopyInfo::bytesPerRow` 값 혼란 | Vulkan은 텍셀, WebGPU는 바이트로 해석 | `#ifdef __EMSCRIPTEN__`로 분기 (CLAUDE.md §9) |
-
----
-
-## 8. 관련 문서
-
-- [MEDICAL_VOLUME_ROADMAP.md](MEDICAL_VOLUME_ROADMAP.md) — 마일스톤 전체 로드맵
-- [ENGINE_ROADMAP.md](../engine-roadmap/ENGINE_ROADMAP.md) — 별도 엔진 성숙도 트랙
-- [BUILD_GUIDE.md](../../guides/BUILD_GUIDE.md) — 전체 빌드 가이드
-- [CLAUDE.md](../../../CLAUDE.md) — 프로젝트 규약·함정 모음
+[아키텍처](../../ARCHITECTURE.md) · [테스트 절차](../../../tests/README.md) · [측정 기록 모음](README.md) · [의존성·데이터 출처](../../ASSETS.md)

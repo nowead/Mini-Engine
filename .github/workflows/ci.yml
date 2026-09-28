@@ -1,0 +1,29 @@
+name: CPU tests and documentation
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cpu-tests:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure CPU tests (no GPU SDK or downloads)
+        run: cmake -S tests -B build-tests -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build-tests --config Release --parallel 2
+      - name: Test
+        run: ctest --test-dir build-tests -C Release --output-on-failure
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Check documentation links
+        run: python scripts/check_docs.py

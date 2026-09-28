@@ -1,408 +1,120 @@
-# Build Guide
+# 빌드·실행 가이드
 
-Detailed instructions for building Mini-Engine on Linux, macOS, and Windows.
+저장소 루트에서 명령을 실행합니다. 빠른 검증은 [CPU 테스트](../../tests/README.md)부터 시작할 수 있습니다. 이 경로에는 GPU SDK가 필요하지 않습니다.
 
----
+## Native Vulkan 준비
 
-## Table of Contents
+| 도구 | 요구 사항 |
+| --- | --- |
+| CMake | 3.28 이상 |
+| 컴파일러 | C++20과 CMake의 C++ 모듈 빌드를 지원하는 도구 체인. 이 저장소는 `vulkan.cppm`을 컴파일함 |
+| 빌드 도구 | Ninja 권장 |
+| Vulkan SDK | Vulkan 1.3 기반 코드, `vulkan.cppm`, `glslc` 필요. 로컬 검증 SDK: 1.4.321.1 |
+| vcpkg | [manifest](../../vcpkg.json)의 라이브러리 설치에 사용 |
+| Python | Python 3, 에셋 생성·다운로드·서빙 스크립트에 사용 |
 
-- [Prerequisites](#prerequisites)
-- [Platform-Specific Setup](#platform-specific-setup)
-  - [Linux](#linux)
-  - [macOS](#macos)
-- [Building the Project](#building-the-project)
-- [Running the Application](#running-the-application)
-- [Build Options](#build-options)
+Windows에서는 Visual Studio C++ 도구와 Windows SDK가 설정된 개발자 터미널을 사용합니다. 로컬 검증 컴파일러는 Clang 21.1.1입니다. `VCPKG_ROOT`와 `VULKAN_SDK`를 본인의 설치 경로로 설정하고 CMake, Ninja, 컴파일러를 PATH에 추가하세요.
 
----
+### Windows / PowerShell
 
-## Prerequisites
-
-### Required Software
-
-1. **Vulkan SDK** 1.3 or higher
-   - Download from [LunarG](https://vulkan.lunarg.com/)
-   - **Important**: Must include the `slangc` shader compiler
-   - Add Vulkan SDK to your system PATH
-
-2. **CMake** 3.28 or higher
-   - Download from [cmake.org](https://cmake.org/download/)
-
-3. **C++20 Compatible Compiler**
-   - **Linux**: GCC 11+ or Clang 14+
-   - **macOS**: Xcode 14+ (includes Clang 14+)
-   - **Windows**: Visual Studio 2022+ or Clang 14+
-
-4. **vcpkg** Package Manager
-   - Required for dependency management (GLFW, GLM, stb, tinyobjloader)
-
-### Dependencies (Managed via vcpkg)
-
-- **GLFW3**: Cross-platform window and input management
-- **GLM**: OpenGL Mathematics library for 3D math
-- **stb**: Image loading (stb_image.h)
-- **tinyobjloader**: Wavefront OBJ file parsing
-
----
-
-## Platform-Specific Setup
-
-### Linux
-
-#### 1. Install System Dependencies
-
-**Ubuntu/Debian:**
-```bash
-sudo apt update
-sudo apt install build-essential cmake git
-sudo apt install vulkan-tools libvulkan-dev
-sudo apt install libglfw3-dev  # optional, vcpkg will provide if not installed
+```powershell
+cmake -S . -B build-native -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+cmake --build build-native --target MiniEngine volume_viewer
+.\build-native\MiniEngine.exe
+.\build-native\volume_viewer.exe
 ```
 
-**Fedora/RHEL:**
-```bash
-sudo dnf groupinstall "Development Tools"
-sudo dnf install cmake git
-sudo dnf install vulkan-tools vulkan-loader-devel
+최초 configure는 vcpkg 의존성을 다운로드·빌드합니다. 이미 구성한 디렉토리에서는 `cmake --build <디렉토리> --target <타깃>`으로 증분 빌드할 수 있습니다.
+
+### Linux / macOS
+
+아래는 같은 CMake 구성을 사용하는 경로입니다. 최신 코드의 플랫폼별 실행 검증 여부는 [검증 기록](../VALIDATION.md)을 참고하세요. macOS는 MoltenVK와 C++ 모듈 지원 컴파일러 구성이 별도로 필요합니다.
+
+```sh
+cmake -S . -B build-native -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CXX_COMPILER=clang++ \
+  -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+cmake --build build-native --target MiniEngine volume_viewer
+./build-native/MiniEngine
+./build-native/volume_viewer
 ```
 
-#### 2. Verify Vulkan Installation
-```bash
-vulkaninfo  # Should display Vulkan capabilities
-```
+### 기존 presets와 Makefile
 
-#### 3. Install vcpkg
-```bash
-git clone https://github.com/Microsoft/vcpkg.git ~/vcpkg
-~/vcpkg/bootstrap-vcpkg.sh
-```
+[CMakePresets.json](../../CMakePresets.json)과 [Makefile](../../Makefile)은 기존 개발 환경의 경로를 포함합니다. 새 환경에서는 위의 직접 configure 명령을 우선 사용하세요. preset을 재사용하려면 컴파일러·vcpkg·SDK·Ninja 경로를 확인하고 필요한 cache 변수를 덮어써야 합니다.
 
-#### 4. Set Environment Variables
-Add to `~/.bashrc` or `~/.zshrc`:
-```bash
-export VCPKG_ROOT=~/vcpkg
-export VULKAN_SDK=/path/to/vulkan/sdk  # if not in system PATH
-export LD_LIBRARY_PATH=$VULKAN_SDK/lib:$LD_LIBRARY_PATH
-```
+Ninja는 단일 구성 generator입니다. `--config Release`만 붙여도 Debug 캐시가 Release로 바뀌지는 않습니다. 최적화 빌드는 configure 시 `-DCMAKE_BUILD_TYPE=Release`를 지정합니다.
 
-Reload shell:
-```bash
-source ~/.bashrc  # or source ~/.zshrc
-```
+## 타깃과 옵션
 
----
+| 타깃 | 설명 |
+| --- | --- |
+| `MiniEngine` | PBR/deferred 장면 쇼케이스 |
+| `volume_viewer` | Native CT/MRI 뷰어 (`BUILD_TESTS=ON`) |
+| `volume_viewer_wasm` | 브라우저 CT/MRI 뷰어 (Emscripten 구성) |
+| `building_shaders` | Native GLSL→SPIR-V 셰이더 빌드 |
+| `rhi_smoke_test`, `instancing_test`, `pbr_demo`, `dual_light_demo` | 창/브라우저를 여는 수동 데모 |
+| `showcase_demo` | Native 수동 쇼케이스 |
+| `threadpool_test`, `volume_loader_test`, `dicom_loader_test` | Native CPU 회귀 테스트 |
 
-### macOS
+| 옵션 | 의미 |
+| --- | --- |
+| `BUILD_TESTS=ON` | 기존 이름 유지: 대화형 데모와 native 뷰어를 생성 |
+| `BUILD_TESTING=ON` | Native 자동 테스트를 생성하고 CTest에 등록 |
+| `MINIENGINE_TEST_DICOM=ON` | DICOM 회귀 테스트. 루트 빌드는 기본 ON, 독립 tests 빌드는 기본 OFF |
+| `RHI_BACKEND_VULKAN` / `RHI_BACKEND_WEBGPU` | Native 기본 Vulkan. Emscripten은 WebGPU ON / Vulkan OFF로 설정 |
 
-#### 1. Install Xcode and Command Line Tools
-```bash
-xcode-select --install
-```
+뷰어와 데모를 제외하려면 `BUILD_TESTS=OFF`, 자동 테스트도 제외하려면 `BUILD_TESTING=OFF`를 함께 지정합니다.
 
-#### 2. Install Homebrew (if not installed)
-```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-```
+## WebGPU / WASM
 
-#### 3. Install CMake
-```bash
-brew install cmake
-```
-
-#### 4. Install Vulkan SDK
-- Download from [LunarG - macOS](https://vulkan.lunarg.com/sdk/home)
-- Install the .dmg package
-- The SDK includes MoltenVK for Vulkan-to-Metal translation
-
-#### 5. Install vcpkg
-```bash
-git clone https://github.com/Microsoft/vcpkg.git ~/vcpkg
-~/vcpkg/bootstrap-vcpkg.sh
-```
-
-#### 6. Set Environment Variables
-Add to `~/.zshrc` or `~/.bash_profile`:
-```bash
-export VCPKG_ROOT=~/vcpkg
-export VULKAN_SDK=~/VulkanSDK/1.3.xxx/macOS  # adjust version
-export DYLD_LIBRARY_PATH=$VULKAN_SDK/lib:$DYLD_LIBRARY_PATH
-export PATH=$VULKAN_SDK/bin:$PATH
-```
-
-Reload shell:
-```bash
-source ~/.zshrc
-```
-
-#### 7. Verify Vulkan Installation
-```bash
-vulkaninfo
-```
-
-**Note**: On macOS, Vulkan runs through MoltenVK, which translates Vulkan calls to Metal.
-
----
+프로젝트 스크립트의 기준 Emscripten 버전은 **4.0.10**입니다. WASM은 vcpkg 대신 CMake FetchContent와 번들 emdawnwebgpu remote port를 사용합니다. 최초 빌드에는 네트워크가 필요합니다. 볼륨 뷰어는 공개 DICOM 샘플도 다운로드해 `.data`에 패키징합니다.
 
 ### Windows
 
-#### 1. Install Visual Studio 2022
-- Download from [Visual Studio](https://visualstudio.microsoft.com/)
-- Select "Desktop development with C++" workload
-- Ensure C++20 support is included
+Visual Studio 2022의 NMake와 Emscripten이 필요합니다. SDK가 없다면 설치할 위치를 정한 뒤 다음 setup 명령을 한 번 실행합니다.
 
-#### 2. Install CMake
-- Download from [cmake.org](https://cmake.org/download/)
-- During installation, select "Add CMake to system PATH"
-
-#### 3. Install Vulkan SDK
-- Download from [LunarG - Windows](https://vulkan.lunarg.com/sdk/home)
-- Run the installer
-- Ensure "Add to PATH" is selected during installation
-
-#### 4. Install vcpkg
-Open PowerShell or Command Prompt:
 ```powershell
-cd C:\
-git clone https://github.com/Microsoft/vcpkg.git
-cd vcpkg
-.\bootstrap-vcpkg.bat
+.\scripts\wasm.ps1 setup
+.\scripts\wasm.ps1 build -Target MiniEngine
+.\scripts\wasm.ps1 build -Target volume_viewer_wasm
+.\scripts\wasm.ps1 serve -Target volume_viewer_wasm
 ```
 
-#### 5. Set Environment Variables
-**Using PowerShell (recommended):**
-```powershell
-[Environment]::SetEnvironmentVariable("VCPKG_ROOT", "C:\vcpkg", "User")
-[Environment]::SetEnvironmentVariable("VULKAN_SDK", "C:\VulkanSDK\1.3.xxx", "User")
+기본 SDK 위치는 `$env:USERPROFILE\emsdk`입니다. 다른 위치는 `-EmsdkDir <경로>`로 지정합니다. `build`의 기본 타깃은 `MiniEngine`이므로 **볼륨 뷰어는 `-Target volume_viewer_wasm`을 명시**합니다.
+
+### Linux / macOS
+
+Emscripten 환경을 활성화한 셸에서:
+
+```sh
+source "$HOME/emsdk/emsdk_env.sh"
+emcmake cmake -S . -B build_wasm -G "Unix Makefiles" \
+  -DCMAKE_TOOLCHAIN_FILE=cmake/EmscriptenToolchain.cmake \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build build_wasm --target MiniEngine volume_viewer_wasm
+cd build_wasm
+python3 ../scripts/serve_nocache.py 8000
 ```
 
-**Or manually via System Properties:**
-1. Search for "Environment Variables" in Windows search
-2. Add user variables:
-   - `VCPKG_ROOT` = `C:\vcpkg`
-   - `VULKAN_SDK` = `C:\VulkanSDK\1.3.xxx` (adjust version)
+### 산출물과 접속
 
-#### 6. Verify Installation
-```powershell
-vulkaninfo  # Should display Vulkan capabilities
-```
+- `build_wasm/MiniEngine.{html,js,wasm,data}` — 장면 쇼케이스
+- `build_wasm/volume_viewer_wasm.{html,js,wasm,data}` — 볼륨 뷰어
+- `build_wasm/index.html` — 데모 목록. 각 링크의 타깃을 빌드해야 열 수 있음
 
----
+`http://localhost:8000/volume_viewer_wasm.html` 또는 `/MiniEngine.html`로 접속합니다. WebGPU 사용 가능 여부는 장치·GPU·브라우저에 따라 다릅니다. 원격 장치는 HTTPS에서 실행하세요. 특정 브라우저의 최소 버전을 전체 지원 보장으로 사용하지 않습니다.
 
-## Building the Project
+## 자주 막히는 지점
 
-### Step 1: Clone the Repository
+| 증상 | 확인할 점 |
+| --- | --- |
+| `vulkan.cppm`/모듈 검사 실패 | Vulkan SDK 헤더와 컴파일러의 모듈 지원, Ninja 버전 확인 |
+| 라이브러리 또는 shader 파일 없음 | vcpkg configure 완료 여부, 실행 타깃의 shader 의존성 확인. 저장소 루트에서 실행 |
+| CMake 변경이 WASM에 반영되지 않음 | `wasm.ps1`은 캐시가 있으면 configure를 생략. `-BuildDir build_wasm_fresh`로 새 디렉토리에 구성 가능 |
+| WASM 빌드 실패 | 스크립트는 컴파일러의 실제 종료 코드를 반환. 로그의 첫 error를 확인하고, 이전 바이너리의 존재만으로 성공 판정하지 않기 |
+| 브라우저에서 예전 화면이 보임 | `serve_nocache.py`로 빌드 출력 디렉토리를 서빙 |
+| `.html`은 있지만 볼륨을 못 읽음 | `.js`, `.wasm`, `.data`도 같은 디렉토리에서 서빙되는지 확인 |
 
-```bash
-git clone https://github.com/your-username/vulkan-fdf.git
-cd vulkan-fdf
-```
-
-### Step 2: Install vcpkg Dependencies (First-Time Setup)
-
-**Linux/macOS:**
-```bash
-$VCPKG_ROOT/vcpkg install glfw3 glm stb tinyobjloader
-```
-
-**Windows:**
-```powershell
-C:\vcpkg\vcpkg.exe install glfw3 glm stb tinyobjloader
-```
-
-**Note**: This step is only needed once. vcpkg will cache the dependencies.
-
-### Step 3: Configure CMake
-
-**Method 1: Using Makefile (Linux/macOS only)**
-```bash
-make configure
-```
-
-**Method 2: Using CMake directly (All platforms)**
-
-**Linux/macOS:**
-```bash
-cmake --preset=default
-```
-
-**Windows:**
-```powershell
-cmake --preset=default
-```
-
-### Step 4: Build
-
-**Method 1: Using Makefile (Linux/macOS only)**
-```bash
-make build
-```
-
-**Method 2: Using CMake directly (All platforms)**
-
-**Linux/macOS:**
-```bash
-cmake --build build --config Release
-```
-
-**Windows:**
-```powershell
-cmake --build build --config Release
-```
-
-### Step 5: Verify Shader Compilation
-
-The build process automatically compiles Slang shaders to SPIR-V. Check for:
-```
-shaders/slang.spv  # Generated during build
-```
-
-If shader compilation fails, see [Troubleshooting](TROUBLESHOOTING.md#shader-compilation-fails).
-
----
-
-## Running the Application
-
-### Linux/macOS
-
-```bash
-./build/vulkanGLFW
-```
-
-Or using Makefile:
-```bash
-make run
-```
-
-### Windows
-
-**Using Command Prompt:**
-```powershell
-.\build\Release\vulkanGLFW.exe
-```
-
-**Or double-click** `vulkanGLFW.exe` in the `build\Release\` folder.
-
----
-
-## Build Options
-
-### Debug Build
-
-**Linux/macOS:**
-```bash
-cmake --preset=default -DCMAKE_BUILD_TYPE=Debug
-cmake --build build
-```
-
-**Windows:**
-```powershell
-cmake --preset=default
-cmake --build build --config Debug
-```
-
-### Enable Vulkan Validation Layers
-
-Edit [src/Application.cpp](../src/Application.cpp):
-```cpp
-static constexpr bool ENABLE_VALIDATION = true;  // Change to true
-```
-
-Then rebuild:
-```bash
-make build  # or cmake --build build
-```
-
-### Clean Build
-
-**Using Makefile (Linux/macOS):**
-```bash
-make clean
-```
-
-**Using CMake (All platforms):**
-```bash
-rm -rf build  # Linux/macOS
-# or
-rmdir /s build  # Windows
-```
-
-Then reconfigure and rebuild.
-
----
-
-## Makefile Commands (Linux/macOS)
-
-Quick reference for Makefile targets:
-
-| Command | Description |
-|---------|-------------|
-| `make` | Configure + Build + Run (one command) |
-| `make configure` | Configure CMake |
-| `make build` | Build the project |
-| `make run` | Run the application |
-| `make clean` | Clean build artifacts |
-
----
-
-## WebAssembly (WASM) Build
-
-Mini-Engine supports WebGPU/WASM builds via Emscripten. The WASM build uses the WebGPU backend instead of Vulkan.
-
-### Prerequisites
-
-1. **Emscripten SDK** (version **3.1.50** required)
-   - Newer versions (3.1.60+) have a `wasm-ld` bug on macOS arm64 causing `section too large` linker errors
-   - Emscripten 5.0.0+ deprecated `USE_WEBGPU=1` and is not compatible
-
-```bash
-# Install Emscripten SDK
-git clone https://github.com/emscripten-core/emsdk.git ~/emsdk
-cd ~/emsdk
-./emsdk install 3.1.50
-./emsdk activate 3.1.50
-source ./emsdk_env.sh
-```
-
-### Building for WASM
-
-```bash
-# Using Makefile
-make build-wasm
-
-# Or using CMake directly
-mkdir -p build_wasm && cd build_wasm
-emcmake cmake .. -DCMAKE_TOOLCHAIN_FILE=../cmake/EmscriptenToolchain.cmake
-emmake make -j$(nproc)
-```
-
-### Running the WASM Build
-
-```bash
-# Start a local HTTP server (WebGPU requires HTTPS or localhost)
-make serve-instancing
-# Open http://localhost:8000/instancing_test.html in Chrome 113+
-```
-
-### Platform Notes
-
-| Platform | Emscripten Version | Status |
-|----------|-------------------|--------|
-| Linux x86_64 | 3.1.50 - 3.1.74 | Working |
-| macOS arm64 (Apple Silicon) | **3.1.50 only** | Working |
-| macOS arm64 | 3.1.60+ | `section too large` linker bug |
-| Any | 5.0.0+ | `USE_WEBGPU=1` deprecated |
-
-For WASM build issues, see [WASM Troubleshooting Guide](WASM_TROUBLESHOOTING.md).
-
----
-
-## Next Steps
-
-- **Build succeeded?** See [README.md](../README.md) for usage
-- **Build failed?** Check [Troubleshooting Guide](TROUBLESHOOTING.md)
-- **WASM build issues?** Check [WASM Troubleshooting Guide](WASM_TROUBLESHOOTING.md)
-- **Want to modify code?** See [Refactoring Documentation](refactoring/monolith-to-layered/)
-
----
-
-*Last Updated: 2026-02-03*
+[뷰어 사용법](../current/medical-volume/VIEWERS.md) · [테스트](../../tests/README.md) · [검증 기록](../VALIDATION.md)
