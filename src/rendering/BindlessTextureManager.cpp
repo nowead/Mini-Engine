@@ -5,6 +5,7 @@
 #include <rhi/vulkan/VulkanRHITexture.hpp>
 #include <rhi/vulkan/VulkanRHISampler.hpp>
 #include <vulkan/vulkan.h>
+#include <algorithm>
 #include <iostream>
 
 namespace rendering {
@@ -22,6 +23,24 @@ BindlessTextureManager::BindlessTextureManager(rhi::RHIDevice* device)
         return;
     }
 
+    // Clamp the array to the device's update-after-bind limits, which count every
+    // sampler in the pipeline layout (MoltenVK on Apple Silicon reports 1024).
+    VkPhysicalDeviceDescriptorIndexingProperties indexingProps{};
+    indexingProps.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES;
+    VkPhysicalDeviceProperties2 props2{};
+    props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    props2.pNext = &indexingProps;
+    vkGetPhysicalDeviceProperties2(static_cast<VkPhysicalDevice>(*vd->getVkPhysicalDevice()), &props2);
+    uint32_t deviceLimit = std::min({indexingProps.maxPerStageDescriptorUpdateAfterBindSamplers,
+                                     indexingProps.maxDescriptorSetUpdateAfterBindSamplers,
+                                     indexingProps.maxPerStageUpdateAfterBindResources});
+    if (deviceLimit <= RESERVED_SAMPLER_SLOTS) {
+        std::cout << "[BindlessTextureManager] Update-after-bind sampler limit too low ("
+                  << deviceLimit << ") — bindless disabled\n";
+        return;
+    }
+    m_capacity = std::min(MAX_TEXTURES, deviceLimit - RESERVED_SAMPLER_SLOTS);
+
     VkDevice vkDev = static_cast<VkDevice>(*vd->getVkDevice());
     if (!createPool(vkDev) || !createLayout(vkDev) || !allocateSet(vkDev)) {
         std::cerr << "[BindlessTextureManager] Initialization failed\n";
@@ -29,7 +48,7 @@ BindlessTextureManager::BindlessTextureManager(rhi::RHIDevice* device)
     }
 
     m_available = true;
-    std::cout << "[BindlessTextureManager] Ready — " << MAX_TEXTURES << " slots\n";
+    std::cout << "[BindlessTextureManager] Ready — " << m_capacity << " slots\n";
 }
 
 BindlessTextureManager::~BindlessTextureManager() {
@@ -55,7 +74,7 @@ bool BindlessTextureManager::createPool(void* rawVkDevice) {
 
     VkDescriptorPoolSize poolSize{};
     poolSize.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = MAX_TEXTURES;
+    poolSize.descriptorCount = m_capacity;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -80,7 +99,7 @@ bool BindlessTextureManager::createLayout(void* rawVkDevice) {
     VkDescriptorSetLayoutBinding binding{};
     binding.binding         = 0;
     binding.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    binding.descriptorCount = MAX_TEXTURES;
+    binding.descriptorCount = m_capacity;
     binding.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
 
     // PARTIALLY_BOUND: slots without a registered texture are not accessed
@@ -131,8 +150,8 @@ bool BindlessTextureManager::allocateSet(void* rawVkDevice) {
 uint32_t BindlessTextureManager::registerTexture(rhi::RHITextureView* view,
                                                   rhi::RHISampler*     sampler) {
     if (!m_available) return INVALID_INDEX;
-    if (m_nextIndex >= MAX_TEXTURES) {
-        std::cerr << "[BindlessTextureManager] Texture slot limit reached (" << MAX_TEXTURES << ")\n";
+    if (m_nextIndex >= m_capacity) {
+        std::cerr << "[BindlessTextureManager] Texture slot limit reached (" << m_capacity << ")\n";
         return INVALID_INDEX;
     }
 

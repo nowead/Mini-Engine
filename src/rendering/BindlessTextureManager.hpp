@@ -31,8 +31,10 @@ namespace rendering {
  */
 class BindlessTextureManager {
 public:
-    static constexpr uint32_t MAX_TEXTURES  = 4096;
+    static constexpr uint32_t MAX_TEXTURES  = 4096;  // Upper bound; see getCapacity()
     static constexpr uint32_t INVALID_INDEX = 0xFFFFFFFFu;
+    // Headroom for the other samplers in pipeline layouts that include this set
+    static constexpr uint32_t RESERVED_SAMPLER_SLOTS = 16;
 
     explicit BindlessTextureManager(rhi::RHIDevice* device);
     ~BindlessTextureManager();
@@ -57,6 +59,9 @@ public:
     /** Number of textures currently registered in the bindless array. */
     uint32_t getRegisteredCount() const { return m_nextIndex; }
 
+    /** Slot count actually allocated: MAX_TEXTURES clamped to the device limits. */
+    uint32_t getCapacity() const { return m_capacity; }
+
     /** Native handles needed by GBufferPass pipeline layout and command buffer. */
     VkDescriptorSetLayout getVkDescriptorSetLayout() const { return m_setLayout; }
     VkDescriptorSet       getVkDescriptorSet()       const { return m_descriptorSet; }
@@ -72,6 +77,7 @@ private:
     VkDescriptorSet       m_descriptorSet = nullptr;
 
     uint32_t m_nextIndex = 0;
+    uint32_t m_capacity  = 0;
     bool     m_available = false;
 };
 

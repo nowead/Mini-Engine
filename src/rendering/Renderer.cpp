@@ -281,7 +281,7 @@ Renderer::BindlessMetrics Renderer::getBindlessMetrics() const {
     if (bindlessTextureManager) {
         m.bindlessAvailable  = bindlessTextureManager->isAvailable();
         m.registeredTextures = bindlessTextureManager->getRegisteredCount();
-        m.maxTextures        = rendering::BindlessTextureManager::MAX_TEXTURES;
+        m.maxTextures        = bindlessTextureManager->getCapacity();
     }
 
     // VMA allocation stats
@@ -505,7 +505,8 @@ bool Renderer::buildShowcaseSubMesh(const assets::ImportedAsset& asset,
     //   roughnessAOPad.b = baseColor   (legacy slot, shared with buildings)
     //   textureIndices.x = normal, .y = MR, .z = emissive, .w = occlusion (AO)
     // A material shared by multiple sub-meshes re-registers its views (a few
-    // extra bindless slots out of 4096) — acceptable for the assets we ingest.
+    // extra bindless slots out of getCapacity(), 1008 on Apple Silicon) —
+    // acceptable for the assets we ingest.
     if (bindlessTextureManager && bindlessTextureManager->isAvailable()) {
         if (!showcaseMaterialSampler) {
             rhi::SamplerDesc sd{};
