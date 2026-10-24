@@ -61,7 +61,7 @@ GLSL/WGSL은 직접 유지하는 소스 쌍입니다. 런타임 SPIR-V→WGSL �
 
 ## 설계의 검증 범위
 
-자동 테스트는 스레드 풀과 CPU 데이터 로딩을 다룹니다. GPU 이미지 정확성, 동기화, 모바일 수명·메모리 한계는 별도 수동 검증과 측정 기록이 필요합니다. Linux/macOS용 구성은 저장소에 있지만, 이번 정리에서 모든 플랫폼을 다시 검증한 것은 아닙니다.
+자동 테스트는 스레드 풀, CPU 데이터 로딩, AABB/frustum 컬링을 다루고, smoke run(`make smoke`)이 Vulkan validation 오류를 검사합니다. GPU 이미지 정확성, 동기화, 모바일 수명·메모리 한계는 별도 수동 검증과 측정 기록이 필요합니다. Linux/macOS용 구성은 저장소에 있지만, 이번 정리에서 모든 플랫폼을 다시 검증한 것은 아닙니다.
 
 - [테스트와 수동 검증](../tests/README.md)
 - [볼륨 렌더링 개념과 코드 설명](current/medical-volume/learning/VOLUME_RENDERING_PRIMER.md)

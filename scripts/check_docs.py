@@ -18,6 +18,7 @@ PUBLIC_DOCS = (
     "docs/ASSETS.md",
     "docs/VALIDATION.md",
     "docs/guides/BUILD_GUIDE.md",
+    "docs/guides/CODE_MAP.md",
     "docs/current/README.md",
     "docs/current/medical-volume/README.md",
     "docs/current/medical-volume/VIEWERS.md",

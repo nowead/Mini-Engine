@@ -6,6 +6,7 @@
 | --- | --- |
 | 프로젝트가 무엇인지 파악하기 | [README](../README.md), [현재 구현 요약](SUMMARY.md) |
 | 구조와 설계 판단 살펴보기 | [아키텍처](ARCHITECTURE.md) |
+| 폴더 역할과 새 코드 추가 위치 찾기 | [코드 지도](guides/CODE_MAP.md) |
 | 빌드하고 실행하기 | [빌드 가이드](guides/BUILD_GUIDE.md) |
 | CT/MRI 데이터 열기 | [볼륨 뷰어 사용법](current/medical-volume/VIEWERS.md) |
 | 자동 테스트·수동 검증하기 | [테스트 가이드](../tests/README.md) |
