@@ -4,13 +4,14 @@ cmake_minimum_required(VERSION 3.28)
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     project(MiniEngineTests LANGUAGES CXX)
     enable_testing()
-    set(_dicom_default OFF)
+    set(_native_default OFF)
 else()
-    set(_dicom_default ON)
+    set(_native_default ON)
 endif()
 
 get_filename_component(ENGINE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
-option(MINIENGINE_TEST_DICOM "Test DICOM loading (requires GLM, OpenJPEG, libjpeg-turbo 3.x)" ${_dicom_default})
+option(MINIENGINE_TEST_DICOM "Test DICOM loading (requires GLM, OpenJPEG, libjpeg-turbo 3.x)" ${_native_default})
+option(MINIENGINE_TEST_SCENE "Test AABB/frustum culling (requires GLM)" ${_native_default})
 find_package(Threads REQUIRED)
 
 function(configure_cpu_test target)
@@ -32,6 +33,15 @@ add_executable(volume_loader_test volume_loader_test.cpp
     "${ENGINE_ROOT}/src/assets/VolumeFile.cpp"
     "${ENGINE_ROOT}/src/utils/MmappedFile.cpp")
 configure_cpu_test(volume_loader_test)
+
+if(MINIENGINE_TEST_SCENE)
+    if(NOT TARGET glm::glm)
+        find_package(glm CONFIG REQUIRED)
+    endif()
+    add_executable(scene_culling_test scene_culling_test.cpp)
+    target_link_libraries(scene_culling_test PRIVATE glm::glm)
+    configure_cpu_test(scene_culling_test)
+endif()
 
 if(MINIENGINE_TEST_DICOM)
     if(NOT TARGET glm::glm)
