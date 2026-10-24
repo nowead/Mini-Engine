@@ -12,10 +12,23 @@
 #include "RHIQueue.hpp"
 #include "RHISync.hpp"
 #include "RHICapabilities.hpp"
+#include <atomic>
+#include <cstdint>
 #include <memory>
 #include <string>
 
 namespace rhi {
+
+/**
+ * @brief Process-wide count of errors reported by the backend's validation layer
+ *
+ * Incremented by backend debug callbacks. `MiniEngine --frames N` turns a
+ * nonzero count into a nonzero exit code so automated runs can detect errors.
+ */
+inline std::atomic<uint32_t>& validationErrorCount() {
+    static std::atomic<uint32_t> count{0};
+    return count;
+}
 
 /**
  * @brief Device creation descriptor

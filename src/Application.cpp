@@ -260,8 +260,12 @@ void Application::wasm_setPointLightCount(int n) {
 
 void Application::mainLoop() {
     // Native: Traditional game loop
+    uint32_t frameCount = 0;
     while (!glfwWindowShouldClose(window)) {
         mainLoopFrame();
+        if (maxFrames != 0 && ++frameCount >= maxFrames) {
+            break;
+        }
     }
     renderer->waitIdle();
 }

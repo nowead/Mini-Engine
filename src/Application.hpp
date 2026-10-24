@@ -45,6 +45,11 @@ public:
      */
     void run();
 
+    /**
+     * @brief Stop the native main loop after N frames (0 = run until the window closes)
+     */
+    void setMaxFrames(uint32_t frames) { maxFrames = frames; }
+
 #ifdef __EMSCRIPTEN__
     void wasm_setDebugView(int v)        { if (renderer) renderer->setDebugView(v); }
     void wasm_setBloomStrength(float s)   { if (renderer) renderer->setBloomStrength(s); }
@@ -120,6 +125,7 @@ private:
 
     // Frame timing for main loop
     std::chrono::high_resolution_clock::time_point lastFrameTime;
+    uint32_t maxFrames = 0;                      // 0 = unlimited (native only)
 
 #ifdef __EMSCRIPTEN__
     // Deferred resize: store pending resize event and apply at the start of the next frame.
