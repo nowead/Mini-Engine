@@ -129,7 +129,10 @@ else()
         GIT_TAG v2.5.0
         GIT_SHALLOW TRUE
     )
+    # OpenJPEG 2.5.0 declares cmake_minimum_required(2.8.2), which CMake 4 rejects.
+    set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
     FetchContent_MakeAvailable(openjpeg)
+    unset(CMAKE_POLICY_VERSION_MINIMUM)
     # The openjp2 target exposes its own include directories via OpenJPEG's
     # CMakeLists.txt -- we just need to make sure consumers depend on the
     # generated opj_config.h. CMake forbids exposing raw build-tree paths
@@ -1378,6 +1381,17 @@ if(BUILD_TESTS)
         src/rendering/BindlessTextureManager.cpp
         src/rendering/BindlessTextureManager.hpp
         src/rendering/InstancedRenderData.hpp
+        # Renderer.cpp depends on these (same set as the native MiniEngine target)
+        src/utils/ThreadPool.cpp
+        src/utils/ThreadPool.hpp
+        src/utils/MmappedFile.cpp
+        src/utils/MmappedFile.hpp
+        src/rendering/VolumeRenderer.cpp
+        src/rendering/VolumeRenderer.hpp
+        src/rendering/BrickedVolume.cpp
+        src/rendering/BrickedVolume.hpp
+        src/assets/VolumeFile.cpp
+        src/assets/VolumeFile.hpp
     )
 
     configure_rhi_test(showcase_demo)
