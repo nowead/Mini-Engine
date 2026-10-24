@@ -1,4 +1,4 @@
-name: CPU tests and documentation
+name: CPU tests, shaders and documentation
 
 on:
   push:
@@ -27,3 +27,14 @@ jobs:
           python-version: '3.x'
       - name: Check documentation links
         run: python scripts/check_docs.py
+
+  shaders:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install glslc
+        run: sudo apt-get update && sudo apt-get install -y glslc
+      - name: Install naga (same release as local docs)
+        run: cargo install naga-cli --version "~26" --locked
+      - name: Validate WGSL and GLSL
+        run: python3 scripts/check_shaders.py

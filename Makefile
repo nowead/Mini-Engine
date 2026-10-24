@@ -71,7 +71,7 @@ COLOR_BLUE := \033[0;34m
 COLOR_YELLOW := \033[0;33m
 COLOR_RESET := \033[0m
 
-.PHONY: all build run run-only clean re help info demo-smoke demo-instancing demo-pbr demo-dual-light demo-showcase release wasm configure-wasm build-wasm serve-wasm clean-wasm setup-emscripten shaders
+.PHONY: all build run run-only clean re help info demo-smoke demo-instancing demo-pbr demo-dual-light demo-showcase test test-native check-shaders check-docs check smoke release wasm configure-wasm build-wasm serve-wasm clean-wasm setup-emscripten shaders
 
 # Default target
 all: build
@@ -165,6 +165,46 @@ demo-showcase: build
 	@echo "$(COLOR_YELLOW)Running Portfolio Showcase Demo (Phase 1~4)...$(COLOR_RESET)"
 	@$(ENV_SETUP) && cd $(CURDIR) && $(DEMO_PREFIX)showcase_demo$(EXE_EXT)
 
+# =============================================================================
+# Verification (unattended — the exit code is the verdict)
+# =============================================================================
+ifeq ($(DETECTED_OS),Windows)
+    PYTHON := python
+else
+    PYTHON := python3
+endif
+SMOKE_FRAMES ?= 120
+
+# CPU regression tests: standalone configure, no Vulkan SDK / vcpkg / GPU needed
+test:
+	@echo "$(COLOR_YELLOW)Running CPU tests...$(COLOR_RESET)"
+	@$(ENV_SETUP) && cmake -S tests -B build-tests -DCMAKE_BUILD_TYPE=Release
+	@$(ENV_SETUP) && cmake --build build-tests --config Release
+	@$(ENV_SETUP) && ctest --test-dir build-tests -C Release --output-on-failure
+
+# All CTest tests in the native build (adds DICOM + scene culling; needs vcpkg deps)
+NATIVE_TESTS := threadpool_test volume_loader_test dicom_loader_test scene_culling_test
+test-native: configure
+	@$(ENV_SETUP) && cmake --build $(BUILD_DIR) --target $(NATIVE_TESTS)
+	@$(ENV_SETUP) && ctest --test-dir $(BUILD_DIR) --output-on-failure
+
+# Validate WGSL (naga) and GLSL (glslc) without building the engine
+check-shaders:
+	@$(ENV_SETUP) && $(PYTHON) scripts/check_shaders.py
+
+# Check local links in the maintained documentation
+check-docs:
+	@$(PYTHON) scripts/check_docs.py
+
+# All checks that need no window
+check: test check-shaders check-docs
+
+# Render SMOKE_FRAMES frames, exit, fail on any Vulkan validation error (opens a window)
+smoke: configure
+	@$(ENV_SETUP) && cmake --build $(BUILD_DIR) --target MiniEngine
+	@echo "$(COLOR_YELLOW)Running MiniEngine smoke run ($(SMOKE_FRAMES) frames)...$(COLOR_RESET)"
+	@$(ENV_SETUP) && ./$(EXECUTABLE) --frames $(SMOKE_FRAMES)
+
 # Display help
 help:
 	@echo "$(COLOR_BLUE)========================================$(COLOR_RESET)"
@@ -184,6 +224,14 @@ help:
 	@echo "  $(COLOR_GREEN)make demo-pbr$(COLOR_RESET)           - Run PBR Material Showcase (5x5 spheres)"
 	@echo "  $(COLOR_GREEN)make demo-dual-light$(COLOR_RESET)    - Run Dual Point Light PBR Demo"
 	@echo "  $(COLOR_GREEN)make demo-showcase$(COLOR_RESET)     - Run Portfolio Showcase (Phase 1~4, deferred + 24 point lights)"
+	@echo ""
+	@echo "$(COLOR_BLUE)Verification:$(COLOR_RESET)"
+	@echo "  $(COLOR_GREEN)make test$(COLOR_RESET)               - CPU regression tests (no GPU)"
+	@echo "  $(COLOR_GREEN)make test-native$(COLOR_RESET)        - All CTest tests in the native build (DICOM, culling)"
+	@echo "  $(COLOR_GREEN)make check-shaders$(COLOR_RESET)      - Validate WGSL (naga) + GLSL (glslc)"
+	@echo "  $(COLOR_GREEN)make check-docs$(COLOR_RESET)         - Check documentation links"
+	@echo "  $(COLOR_GREEN)make check$(COLOR_RESET)              - All of the above"
+	@echo "  $(COLOR_GREEN)make smoke$(COLOR_RESET)              - Build, render N frames, fail on validation errors"
 	@echo ""
 	@echo "$(COLOR_BLUE)Maintenance:$(COLOR_RESET)"
 	@echo "  $(COLOR_GREEN)make clean$(COLOR_RESET)              - Remove all build artifacts"
